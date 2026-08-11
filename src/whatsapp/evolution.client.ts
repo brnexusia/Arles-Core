@@ -25,6 +25,77 @@ export class EvolutionClient {
     };
   }
 
+  async requestJson(path: string, options: RequestInit = {}): Promise<any> {
+    const response = await fetch(`${env.evolutionBaseUrl}${path}`, {
+      ...options,
+      headers: { ...this.headers(), ...(options.headers || {}) }
+    });
+    const text = await response.text().catch(() => '');
+    let data: any = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    }
+    if (!response.ok) {
+      const error: any = new Error(data?.message || data?.error || text || `Evolution ${response.status}`);
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+    return data;
+  }
+
+  extractQr(data: any): string | null {
+    const candidates = [
+      data?.qrcode?.base64,
+      data?.qrCode?.base64,
+      data?.base64,
+      typeof data?.qrcode === 'string' ? data.qrcode : null,
+      typeof data?.qrCode === 'string' ? data.qrCode : null
+    ];
+    return candidates.find(value => typeof value === 'string' && value.length > 20) || null;
+  }
+
+  async connectionState(instanceName: string): Promise<any> {
+    return this.requestJson(`/instance/connectionState/${encodeURIComponent(instanceName)}`, { method: 'GET' });
+  }
+
+  async createInstance(instanceName: string, webhookUrl = ''): Promise<any> {
+    const body: any = { instanceName, qrcode: true, integration: 'WHATSAPP-BAILEYS' };
+    if (webhookUrl) {
+      body.webhook = {
+        enabled: true,
+        url: webhookUrl,
+        byEvents: false,
+        base64: false,
+        events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']
+      };
+    }
+    return this.requestJson('/instance/create', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async setWebhook(instanceName: string, webhookUrl: string): Promise<any> {
+    return this.requestJson(`/webhook/set/${encodeURIComponent(instanceName)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        webhook: {
+          enabled: true,
+          url: webhookUrl,
+          byEvents: false,
+          base64: false,
+          events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']
+        }
+      })
+    });
+  }
+
+  async connectInstance(instanceName: string): Promise<any> {
+    return this.requestJson(`/instance/connect/${encodeURIComponent(instanceName)}`, { method: 'GET' });
+  }
+
+  async logoutInstance(instanceName: string): Promise<any> {
+    return this.requestJson(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: 'DELETE' });
+  }
+
   async sendText(input: { instanceName: string; to: string; text: string }): Promise<void> {
     const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendTextPath, input.instanceName);
     const response = await fetch(endpoint, {

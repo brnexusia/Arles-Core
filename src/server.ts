@@ -6,6 +6,7 @@ import { arlesEngine } from './core/engine.js';
 import { deliveryPostSaleService } from './post-sale/delivery-post-sale.service.js';
 import { getMediaByToken, updatePaymentStatus } from './verticals/delivery/repository.js';
 import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
+import { registerPanelRoutes } from './panel/panel.routes.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
@@ -22,7 +23,7 @@ function authorized(request: { headers: Record<string, unknown> }): boolean {
 app.get('/health', async () => {
   await checkDb();
   await redis.ping();
-  return { ok: true, service: 'arles-engine', version: '1.0.0' };
+  return { ok: true, service: 'arles-engine', version: '1.1.0' };
 });
 
 app.get('/media/:token', async (request, reply) => {
@@ -135,6 +136,8 @@ app.post('/internal/conversations/resume', async (request, reply) => {
   await resumeConversation(companyId, phone);
   return reply.send({ ok: true });
 });
+
+await registerPanelRoutes(app);
 
 startFollowupWorker();
 

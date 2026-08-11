@@ -223,6 +223,12 @@ export class DeliveryHandler implements VerticalHandler {
       });
     }
 
+    // Controle do painel: quando o lojista desativa o atendimento automático,
+    // nenhuma resposta da IA é enviada até ele reativar.
+    if (store.ai_enabled === false) {
+      return null;
+    }
+
     let draft = session.draft ?? emptyDraft();
     const hadDraft = Boolean(session.draft?.items?.length);
 

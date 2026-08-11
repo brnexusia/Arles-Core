@@ -293,12 +293,28 @@ export async function registerReview(input: {
   phone: string;
   rating: number;
 }): Promise<void> {
-  await db.query(
-    `insert into delivery_reviews (company_id, order_id, customer_name, phone_number, rating)
-     values ($1, $2, $3, $4, $5)
-     on conflict do nothing`,
-    [input.companyId, input.orderId || null, input.customerName || null, input.phone, input.rating]
-  );
+  const client = await db.connect();
+  try {
+    await client.query('begin');
+    await client.query(
+      `insert into delivery_reviews (company_id, order_id, customer_name, phone_number, rating)
+       values ($1, $2, $3, $4, $5)
+       on conflict do nothing`,
+      [input.companyId, input.orderId || null, input.customerName || null, input.phone, input.rating]
+    );
+    await client.query(
+      `update customers
+       set last_rating = $3, last_review_at = now(), updated_at = now()
+       where company_id = $1 and phone_number = $2`,
+      [input.companyId, input.phone, input.rating]
+    );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateOrderStatus(input: {

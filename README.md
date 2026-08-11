@@ -1,3 +1,9 @@
+
+## v1.1 — Painel
+
+A v1.1 adiciona a API interna do painel e a migração operacional Supabase -> PostgreSQL.
+Consulte `docs/PANEL_INTEGRATION.md`.
+
 # Arles Core — Delivery v1.0
 
 Motor em **Node.js + TypeScript + PostgreSQL + Redis** que substitui o workflow principal do n8n do Arles Delivery.

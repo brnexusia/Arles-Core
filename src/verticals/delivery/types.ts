@@ -57,6 +57,7 @@ export interface DeliveryStore {
   payment_methods: string | null;
   pix_key: string | null;
   ai_rules: string | null;
+  ai_enabled?: boolean;
 }
 
 export interface DeliveryCustomer {
