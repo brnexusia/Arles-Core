@@ -1,28 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '../config/env.js';
 import { redis } from '../infrastructure/redis.js';
+import {
+  cleanMenuResult,
+  countMenuProducts,
+  mergeMenuResults,
+  type MenuResult
+} from './menu-analysis.normalize.js';
 
-export type MenuVariation = {
-  name: string;
-  price: number;
-};
-
-export type MenuProduct = {
-  name: string;
-  description: string;
-  price: number | null;
-  available: boolean;
-  variations: MenuVariation[];
-};
-
-export type MenuCategory = {
-  name: string;
-  products: MenuProduct[];
-};
-
-export type MenuResult = {
-  categories: MenuCategory[];
-};
+export { cleanMenuResult, mergeMenuResults } from './menu-analysis.normalize.js';
+export type { MenuVariation, MenuProduct, MenuCategory, MenuResult } from './menu-analysis.normalize.js';
 
 export type MenuInputImage = {
   data: string;
@@ -108,124 +95,6 @@ Nesse caso, em cada sabor use price = o menor preço/base e variations = todos o
 Exemplo: {"name":"Calabresa","price":25,"variations":[{"name":"M","price":25},{"name":"G","price":30},{"name":"GG","price":40}]}.
 Se houver acréscimo específico visível em um sabor (ex.: +R$5), aplique o acréscimo de forma coerente aos tamanhos afetados; não ignore esse texto.
 Para bebidas com volumes e preços diferentes, use produtos/variações de forma que nenhum preço visível seja perdido.`;
-
-function norm(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function numberOrNull(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
-}
-
-export function cleanMenuResult(input: unknown): MenuResult {
-  const categories: MenuCategory[] = [];
-  const rawCategories = Array.isArray((input as any)?.categories)
-    ? (input as any).categories
-    : [];
-
-  for (const rawCat of rawCategories) {
-    const categoryName = String(rawCat?.name ?? '').trim();
-    if (!categoryName) continue;
-
-    const products: MenuProduct[] = [];
-    const rawProducts = Array.isArray(rawCat?.products) ? rawCat.products : [];
-
-    for (const raw of rawProducts) {
-      const name = String(raw?.name ?? '').trim();
-      if (!name) continue;
-
-      const variations: MenuVariation[] = [];
-      const seenVariations = new Set<string>();
-      for (const variation of Array.isArray(raw?.variations) ? raw.variations : []) {
-        const variationName = String(variation?.name ?? '').trim();
-        const variationPrice = numberOrNull(variation?.price);
-        const key = norm(variationName);
-        if (!variationName || variationPrice === null || seenVariations.has(key)) continue;
-        seenVariations.add(key);
-        variations.push({ name: variationName, price: variationPrice });
-      }
-
-      let price = numberOrNull(raw?.price);
-      if (price === null && variations.length) {
-        price = Math.min(...variations.map(v => v.price));
-      }
-
-      products.push({
-        name,
-        description: String(raw?.description ?? '').trim(),
-        price,
-        available: raw?.available !== false,
-        variations
-      });
-    }
-
-    if (products.length) categories.push({ name: categoryName, products });
-  }
-
-  return dedupeMenu({ categories });
-}
-
-function dedupeMenu(menu: MenuResult): MenuResult {
-  const categories = new Map<string, MenuCategory>();
-
-  for (const category of menu.categories) {
-    const categoryKey = norm(category.name) || 'geral';
-    let target = categories.get(categoryKey);
-    if (!target) {
-      target = { name: category.name, products: [] };
-      categories.set(categoryKey, target);
-    }
-
-    const productMap = new Map(target.products.map(p => [norm(p.name), p]));
-    for (const product of category.products) {
-      const productKey = norm(product.name);
-      if (!productKey) continue;
-      const existing = productMap.get(productKey);
-
-      if (!existing) {
-        const copy = { ...product, variations: [...product.variations] };
-        target.products.push(copy);
-        productMap.set(productKey, copy);
-        continue;
-      }
-
-      if (product.description.length > existing.description.length) {
-        existing.description = product.description;
-      }
-      if (product.price !== null) existing.price = product.price;
-      existing.available = existing.available && product.available;
-
-      const variationMap = new Map(existing.variations.map(v => [norm(v.name), v]));
-      for (const variation of product.variations) {
-        const key = norm(variation.name);
-        const found = variationMap.get(key);
-        if (found) found.price = variation.price;
-        else {
-          const copy = { ...variation };
-          existing.variations.push(copy);
-          variationMap.set(key, copy);
-        }
-      }
-    }
-  }
-
-  return { categories: [...categories.values()].filter(c => c.products.length > 0) };
-}
-
-export function mergeMenuResults(...menus: MenuResult[]): MenuResult {
-  return dedupeMenu({ categories: menus.flatMap(menu => menu.categories) });
-}
-
-function countProducts(menu: MenuResult): number {
-  return menu.categories.reduce((sum, category) => sum + category.products.length, 0);
-}
 
 function rawBase64(data: string): string {
   return data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
@@ -331,9 +200,9 @@ async function analyze(images: MenuInputImage[]): Promise<MenuResult> {
   }
 
   const merged = audit ? mergeMenuResults(baseline, audit) : baseline;
-  const baselineCount = countProducts(baseline);
-  const auditCount = audit ? countProducts(audit) : 0;
-  const mergedCount = countProducts(merged);
+  const baselineCount = countMenuProducts(baseline);
+  const auditCount = audit ? countMenuProducts(audit) : 0;
+  const mergedCount = countMenuProducts(merged);
 
   console.log(
     `[MENU ANALYSIS] baseline=${baselineCount} audit=${auditCount} final=${mergedCount} categories=${merged.categories.length}`

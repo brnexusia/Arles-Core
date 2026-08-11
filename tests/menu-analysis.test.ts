@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanMenuResult, mergeMenuResults } from '../src/menu/menu-analysis.service.js';
+import { cleanMenuResult, mergeMenuResults } from '../src/menu/menu-analysis.normalize.js';
 
 describe('menu analysis normalization', () => {
   it('usa o menor valor de variação como preço base quando necessário', () => {
