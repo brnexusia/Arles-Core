@@ -216,19 +216,34 @@ async function run(): Promise<void> {
       combinedText: text
     });
 
-    if (!response) {
+    if (!response || !response.actions.length) {
       console.log('ARLES   > [sem resposta]\n');
       continue;
     }
 
-    await logOutgoing({
-      companyId: company.id,
-      phone: message.phone,
-      body: response
-    });
-
     console.log('');
-    console.log(`ARLES   > ${response.replace(/\n/g, '\n          ')}`);
+
+    for (const action of response.actions) {
+      if (action.type === 'text') {
+        await logOutgoing({
+          companyId: company.id,
+          phone: message.phone,
+          body: action.text
+        });
+        console.log(`ARLES   > ${action.text.replace(/\n/g, '\n          ')}`);
+      } else {
+        console.log(`ARLES   > [imagem] ${action.mediaUrl}`);
+      }
+    }
+
+    if (response.followupEligible) {
+      console.log('ARLES   > [follow-up elegível em 30 min]');
+    }
+
+    if (response.pauseSeconds) {
+      console.log(`ARLES   > [transbordo/pausa por ${response.pauseSeconds}s]`);
+    }
+
     console.log('');
   }
 

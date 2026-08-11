@@ -10,12 +10,19 @@ export type DeliveryState =
 export type DeliveryType = '' | 'delivery' | 'pickup';
 export type PaymentMethod = '' | 'pix' | 'cash' | 'card';
 
+export interface ProductVariation {
+  id: string;
+  name: string;
+  price_delta: number;
+}
+
 export interface DeliveryProduct {
   id: string;
   name: string;
   category: string;
   description: string;
   price: number;
+  variations?: ProductVariation[];
 }
 
 export interface DeliveryItem {
@@ -58,4 +65,19 @@ export interface DeliveryCustomer {
   phone_number: string;
   default_address: string | null;
   favorite_payment: string | null;
+}
+
+export interface MenuAsset {
+  id: string;
+  page_number: number;
+  asset_url: string;
+}
+
+export interface PendingPixOrder {
+  id: string;
+  client_name: string;
+  payment_status: string;
+  total_value: number;
+  status: string;
+  created_at: Date;
 }

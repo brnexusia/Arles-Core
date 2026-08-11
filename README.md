@@ -1,46 +1,6 @@
-# Arles Core — Delivery v0.1
+# Arles Core — Delivery v1.0
 
-Primeira base do **Arles Engine** em código puro.
-
-O objetivo desta versão não é desligar o n8n imediatamente. Ela cria o núcleo que vai substituir o workflow de forma controlada.
-
-## O que já existe
-
-- Webhook HTTP para Evolution API
-- Normalização de mensagens
-- Mapeamento `instância -> empresa -> vertical`
-- Multi-tenant por `company_id`
-- Deduplicação de mensagens no Redis
-- Buffer curto para mensagens enviadas em sequência
-- Lock por empresa + telefone
-- Estado da conversa persistido no PostgreSQL
-- Primeira vertical: `delivery`
-- Catálogo real como fonte de verdade
-- Preço sempre lido do PostgreSQL
-- Máquina de estados determinística do pedido
-- Confirmação determinística
-- INSERT de pedido
-- Upsert de cliente no mesmo fechamento
-- Proteção contra reconfirmar pedido já encerrado
-- Integração de texto com Evolution
-- IA usada somente para interpretação, não para decidir preço/INSERT
-- Healthcheck
-
-## Ainda NÃO ligar no WhatsApp de produção
-
-A v0.1 porta o coração do checkout de texto. Antes de substituir o n8n ainda vamos portar:
-
-1. cardápio visual/imagem;
-2. áudio;
-3. comprovante PIX;
-4. pausa para atendimento humano;
-5. follow-up;
-6. avaliações;
-7. mensagens automáticas de status;
-8. importação/migração dos dados atuais;
-9. autenticação do painel sem Supabase.
-
-Assim conseguimos comparar o Engine com o workflow atual sem arriscar o Delivery que já funciona.
+Motor em **Node.js + TypeScript + PostgreSQL + Redis** que substitui o workflow principal do n8n do Arles Delivery.
 
 ## Arquitetura
 
@@ -49,159 +9,301 @@ WhatsApp
    ↓
 Evolution API
    ↓
-POST /webhooks/evolution
-   ↓
 Arles Engine
    ├── Core
    ├── Redis
    ├── PostgreSQL
    ├── OpenAI
-   └── Vertical: Delivery
-          ↓
-Evolution API
-          ↓
-WhatsApp
+   └── verticals/
+         └── delivery/
 ```
 
-## Como subir na VPS
+O mesmo Core foi preparado para receber depois:
 
-### 1. Copie a pasta para a VPS
-
-Exemplo:
-
-```bash
-sudo mkdir -p /opt/arles
-sudo chown "$USER":"$USER" /opt/arles
-cd /opt/arles
+```text
+beauty
+barber
+pet
+tattoo
+studio
 ```
 
-Coloque os arquivos do projeto dentro dessa pasta.
+## Regra principal
 
-### 2. Crie o `.env`
+A IA serve para **interpretar linguagem** e responder perguntas usando contexto real.
 
-```bash
-cp .env.example .env
-nano .env
-```
+O código controla:
 
-Preencha no mínimo:
+- empresa/tenant;
+- estado da conversa;
+- produto;
+- variação;
+- preço;
+- quantidade;
+- entrega/retirada;
+- pagamento;
+- confirmação;
+- criação do pedido;
+- comprovante Pix;
+- follow-up;
+- pausa humana;
+- avaliações;
+- pós-venda.
+
+## Delivery v1.0
+
+Incluído:
+
+- texto;
+- buffer de mensagens;
+- deduplicação;
+- áudio + transcrição;
+- análise de imagem;
+- cardápio visual como imagem;
+- cliente recorrente;
+- produtos e variações reais;
+- perguntas de preço/disponibilidade;
+- checkout de uma pergunta por vez;
+- linguagem natural/variações de resposta;
+- confirmação determinística;
+- proteção contra reconfirmar pedido antigo;
+- criação do pedido;
+- Pix;
+- comprovante ligado somente ao pedido correto;
+- mídia do comprovante servida pelo Engine;
+- pausa quando humano responde;
+- transbordo;
+- follow-up único de 30 min;
+- atualização automática de status;
+- avaliação 1–5;
+- pedido de marcação para avaliação 4–5;
+- migrations automáticas;
+- simulator/seed.
+
+## Variáveis do Easypanel
+
+Mantenha as que já existem e adicione:
 
 ```env
-POSTGRES_PASSWORD=UMA_SENHA_FORTE
-OPENAI_API_KEY=...
-EVOLUTION_BASE_URL=https://seu-evolution
-EVOLUTION_API_KEY=...
+PUBLIC_BASE_URL=https://SEU-DOMINIO-DO-ENGINE
+INTERNAL_API_KEY=UMA_CHAVE_LONGA_E_ALEATORIA
+
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
+
+EVOLUTION_SEND_MEDIA_PATH=/message/sendMedia/{instance}
+EVOLUTION_MEDIA_BASE64_PATH=/chat/getBase64FromMediaMessage/{instance}
+
+HUMAN_PAUSE_SECONDS=3600
+FOLLOWUP_DELAY_SECONDS=1800
+FOLLOWUP_WORKER_INTERVAL_MS=15000
+REVIEW_TTL_SECONDS=604800
+PIX_PROOF_MAX_AGE_HOURS=8
 ```
 
-### 3. Suba
+Continuam obrigatórias:
 
-```bash
-docker compose up -d --build
+```env
+DATABASE_URL=
+REDIS_URL=
+
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+
+EVOLUTION_BASE_URL=
+EVOLUTION_API_KEY=
+
+PORT=3000
+NODE_ENV=production
 ```
 
-### 4. Veja os containers
+## Deploy no Easypanel
 
-```bash
-docker compose ps
+1. Substitua/adicione os arquivos da v1.0 no repositório GitHub.
+2. Commit + Push.
+3. Configure as novas variáveis.
+4. Clique em **Implantar**.
+
+No startup:
+
+```text
+migrations
+↓
+003_delivery_runtime.sql
+↓
+servidor
+↓
+follow-up worker
 ```
 
-### 5. Teste o Engine
+Valide:
 
-```bash
-curl http://127.0.0.1:3000/health
+```text
+GET /health
 ```
 
 Esperado:
 
 ```json
-{"ok":true}
+{
+  "ok": true,
+  "service": "arles-engine",
+  "version": "1.0.0"
+}
 ```
 
-### 6. Cadastre uma empresa de teste
+## Migrations
 
-Entre no PostgreSQL:
+O Engine registra cada arquivo em `schema_migrations`.
+
+Nunca edite uma migration já aplicada. Para mudanças futuras, crie:
+
+```text
+004_nome.sql
+005_nome.sql
+...
+```
+
+## Seed e simulador
+
+Empresa demo:
 
 ```bash
-docker compose exec postgres psql -U arles -d arles
+npm run seed:delivery
+```
+
+Simulador:
+
+```bash
+npm run simulate:delivery
+```
+
+Comandos:
+
+```text
+/reset
+/fresh
+/orders
+/exit
+```
+
+## Pós-venda
+
+Quando o painel mudar um pedido, o backend do painel deve chamar:
+
+```text
+POST /events/order-status
+```
+
+ou o alias:
+
+```text
+POST /webhooks/arles-delivery-events
+```
+
+Headers:
+
+```text
+x-arles-key: SUA_INTERNAL_API_KEY
+content-type: application/json
+```
+
+Body:
+
+```json
+{
+  "company_id": "UUID",
+  "order_id": "UUID",
+  "status": "Em preparo"
+}
+```
+
+Status reconhecidos:
+
+```text
+Novos
+Em preparo
+Pronto
+Saiu para entrega
+Finalizados
+Cancelados
+```
+
+Ao chegar em `Finalizados`, o Engine envia a pergunta de avaliação e passa a interpretar a próxima resposta de nota.
+
+## Comprovante Pix
+
+Quando chega uma imagem:
+
+```text
+imagem
+↓
+há pedido Pix pendente do mesmo cliente?
+↓
+SIM
+↓
+imagem parece comprovante?
+↓
+SIM
+↓
+salva em media_files
+↓
+atualiza APENAS aquele order_id
+↓
+payment_status = pending_approval
+```
+
+O campo `payment_proof_url` recebe uma URL do próprio Engine.
+
+## Pagamento
+
+Para aprovar/rejeitar via backend/painel:
+
+```text
+POST /events/payment-status
 ```
 
 Exemplo:
 
-```sql
-insert into companies (
-  name,
-  slug,
-  vertical,
-  evolution_instance,
-  subscription_status,
-  access_active
-) values (
-  'Delivery Teste',
-  'delivery-teste',
-  'delivery',
-  'NOME_DA_INSTANCIA_EVOLUTION',
-  'active',
-  true
-);
+```json
+{
+  "company_id": "UUID",
+  "order_id": "UUID",
+  "payment_status": "approved"
+}
 ```
 
-Depois preencha `delivery_store_info` e `delivery_products`.
-
-## Webhook
-
-O endpoint é:
+Valores:
 
 ```text
-POST /webhooks/evolution
+pending
+pending_approval
+approved
+rejected
 ```
 
-Quando formos virar a chave, a Evolution apontará para algo como:
+## Pausa humana
+
+Se alguém da loja responde manualmente pelo WhatsApp:
 
 ```text
-https://engine.seudominio.com/webhooks/evolution
+fromMe
+↓
+não foi mensagem enviada pelo Arles
+↓
+pausa do bot por 1 hora
 ```
 
-O Engine responde `202` imediatamente e processa a mensagem em background dentro do processo.
-
-## Verticalização
-
-Hoje:
+Também existem endpoints internos:
 
 ```text
-src/verticals/delivery
+POST /internal/conversations/pause
+POST /internal/conversations/resume
 ```
 
-Depois:
+## Importante sobre o painel
 
-```text
-src/verticals/beauty
-src/verticals/barber
-src/verticals/pet
-src/verticals/tattoo
-src/verticals/studio
-```
+O **motor do Delivery** está em PostgreSQL próprio.
 
-Todos reutilizando:
+O frontend atual ainda precisa ser migrado do Supabase para uma API do Arles para que pedidos, clientes, cardápio, status e comprovantes passem a usar este novo banco em produção.
 
-```text
-src/core
-src/whatsapp
-src/ai
-src/infrastructure
-```
-
-## Regra principal do Arles Core
-
-A IA interpreta linguagem.
-
-O código controla:
-
-- estado;
-- catálogo;
-- preço;
-- disponibilidade;
-- confirmação;
-- banco;
-- operações.
-
-A IA nunca é a fonte de verdade de um produto ou preço.
+Essa migração do painel é separada do motor do WhatsApp.
