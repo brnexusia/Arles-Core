@@ -1,6 +1,6 @@
 {
   "name": "arles-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "node dist/src/scripts/migrate.js"
+    "migrate": "node dist/src/scripts/migrate.js",
+    "seed:delivery": "node dist/src/scripts/seed-delivery.js",
+    "simulate:delivery": "node dist/src/scripts/simulate-delivery.js"
   },
   "engines": {
     "node": ">=22"

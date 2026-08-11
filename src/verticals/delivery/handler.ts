@@ -187,9 +187,16 @@ export class DeliveryHandler implements VerticalHandler {
     const stage = stageForDraft(draft);
 
     if (stage === 'waiting_name') {
-      const name =
-        extractName(combinedText) ||
-        (isRealName(intent.customer_name) ? intent.customer_name.trim() : '');
+      const aiName = isRealName(intent.customer_name)
+        ? intent.customer_name.trim()
+        : '';
+
+      const directName =
+        stageBefore === 'waiting_name'
+          ? extractName(combinedText)
+          : '';
+
+      const name = aiName || directName;
 
       if (name) draft.client_name = name;
     }
