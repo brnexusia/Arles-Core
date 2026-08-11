@@ -160,9 +160,15 @@ export async function registerPanelRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete('/internal/panel/products/:id', async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
-    const { id } = request.params as { id: string };
-    await panelService.deleteProduct(companyIdFrom(request), id);
-    return reply.send({ ok: true });
+    const companyId = companyIdFrom(request);
+    if (!companyId) return reply.code(400).send({ error: 'company_id obrigatório' });
+    try {
+      const { id } = request.params as { id: string };
+      await panelService.deleteProduct(companyId, id);
+      return reply.send({ ok: true });
+    } catch (error) {
+      return fail(reply, error);
+    }
   });
 
   app.post('/internal/panel/menu/analyze', async (request, reply) => {

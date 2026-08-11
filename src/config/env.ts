@@ -38,6 +38,7 @@ export const env = {
 
   publicBaseUrl: (process.env.PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
   internalApiKey: process.env.INTERNAL_API_KEY?.trim() ?? '',
+  authSessionDays: numberEnv('AUTH_SESSION_DAYS', 30),
 
   messageBufferMs: numberEnv('MESSAGE_BUFFER_MS', 350),
   messageLockMs: numberEnv('MESSAGE_LOCK_MS', 15000),

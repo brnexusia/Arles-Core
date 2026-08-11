@@ -96,7 +96,7 @@ export class PanelService {
     const result = await db.query(
       `select id::text, name, store_info_completed, whatsapp_completed,
               onboarding_completed, subscription_status, trial_started_at,
-              trial_ends_at, instagram, logo_url
+              trial_ends_at, instagram, logo_url, legacy_supabase_migrated
        from companies where id = $1 limit 1`,
       [companyId]
     );

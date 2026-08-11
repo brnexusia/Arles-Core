@@ -7,6 +7,8 @@ import { deliveryPostSaleService } from './post-sale/delivery-post-sale.service.
 import { getMediaByToken, updatePaymentStatus } from './verticals/delivery/repository.js';
 import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
 import { registerPanelRoutes } from './panel/panel.routes.js';
+import { registerAuthRoutes } from './auth/auth.routes.js';
+import { registerBillingRoutes } from './billing/billing.routes.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
@@ -23,7 +25,7 @@ function authorized(request: { headers: Record<string, unknown> }): boolean {
 app.get('/health', async () => {
   await checkDb();
   await redis.ping();
-  return { ok: true, service: 'arles-engine', version: '1.3.0' };
+  return { ok: true, service: 'arles-engine', version: '1.4.0' };
 });
 
 app.get('/media/:token', async (request, reply) => {
@@ -137,6 +139,8 @@ app.post('/internal/conversations/resume', async (request, reply) => {
   return reply.send({ ok: true });
 });
 
+await registerAuthRoutes(app);
+await registerBillingRoutes(app);
 await registerPanelRoutes(app);
 
 startFollowupWorker();
