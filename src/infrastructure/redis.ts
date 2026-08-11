@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 
@@ -56,6 +56,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+type BufferedTextMessage = {
+  id: string;
+  text: string;
+};
+
 export async function bufferTextMessage(input: {
   companyId: string;
   phone: string;
@@ -65,37 +70,48 @@ export async function bufferTextMessage(input: {
   if (env.messageBufferMs <= 0) return input.text;
 
   const key = `arles:buffer:${input.companyId}:${input.phone}`;
-  const payload = JSON.stringify({
+  const payload: BufferedTextMessage = {
     id: input.messageId,
     text: input.text
-  });
+  };
 
-  await redis.rpush(key, payload);
+  await redis.rpush(key, JSON.stringify(payload));
   await redis.expire(key, 10);
 
   await sleep(env.messageBufferMs);
 
-  const rows = await redis.lrange(key, 0, -1);
-  const parsed = rows
-    .map(row => {
+  const rows: string[] = await redis.lrange(key, 0, -1);
+
+  const parsed: BufferedTextMessage[] = rows
+    .map((row: string): BufferedTextMessage => {
       try {
-        return JSON.parse(row) as { id?: string; text?: string };
+        const value = JSON.parse(row) as Partial<BufferedTextMessage>;
+        return {
+          id: String(value.id ?? ''),
+          text: String(value.text ?? '')
+        };
       } catch {
-        return { id: '', text: row };
+        return {
+          id: '',
+          text: row
+        };
       }
     })
-    .filter(item => String(item.text ?? '').trim());
+    .filter((item: BufferedTextMessage) => item.text.trim().length > 0);
 
   if (!parsed.length) return null;
 
   const last = parsed[parsed.length - 1];
-  if (String(last?.id ?? '') !== input.messageId) return null;
+
+  if (!last || last.id !== input.messageId) {
+    return null;
+  }
 
   await redis.del(key);
 
   return parsed
-    .map(item => String(item.text ?? '').trim())
-    .filter(Boolean)
+    .map((item: BufferedTextMessage) => item.text.trim())
+    .filter((text: string) => text.length > 0)
     .join('\n');
 }
 
@@ -106,7 +122,10 @@ export async function markRecentConfirmedOrder(
 ): Promise<void> {
   await redis.set(
     `arles:recent-confirmed:${companyId}:${phone}`,
-    JSON.stringify({ orderId, createdAt: new Date().toISOString() }),
+    JSON.stringify({
+      orderId,
+      createdAt: new Date().toISOString()
+    }),
     'EX',
     env.recentConfirmedTtlSeconds
   );
@@ -116,10 +135,17 @@ export async function getRecentConfirmedOrder(
   companyId: string,
   phone: string
 ): Promise<{ orderId: string; createdAt: string } | null> {
-  const raw = await redis.get(`arles:recent-confirmed:${companyId}:${phone}`);
+  const raw = await redis.get(
+    `arles:recent-confirmed:${companyId}:${phone}`
+  );
+
   if (!raw) return null;
+
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw) as {
+      orderId: string;
+      createdAt: string;
+    };
   } catch {
     return null;
   }
