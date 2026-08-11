@@ -11,6 +11,11 @@ import {
 describe('delivery helpers', () => {
   it('reconhece confirmação explícita', () => {
     expect(isConfirmation('sim')).toBe(true);
+    expect(isConfirmation('simm')).toBe(true);
+    expect(isConfirmation('siim')).toBe(true);
+    expect(isConfirmation('sssimm')).toBe(true);
+    expect(isConfirmation('sim!')).toBe(true);
+    expect(isConfirmation('claro')).toBe(true);
     expect(isConfirmation('pode confirmar')).toBe(true);
     expect(isConfirmation('obrigado')).toBe(false);
   });

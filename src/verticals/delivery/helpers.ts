@@ -73,9 +73,14 @@ export function detectPayment(value: string): PaymentMethod {
 }
 
 export function isConfirmation(value: string): boolean {
-  const s = norm(value);
+  const s = norm(value)
+    .replace(/[.!?,;:]+$/g, '')
+    .trim();
 
-  return /^(sim|confirmo|sim confirmo|pode confirmar|pode fechar|fechado|pode ser|isso|isso mesmo|correto|ta certo|ok|pode mandar|manda ver|pode finalizar)[.! ]*$/.test(
+  // Variações naturais de "sim": simm, siim, siiim, sssim etc.
+  if (/^s+i+m+$/.test(s)) return true;
+
+  return /^(confirmo|claro|com certeza|pode|pode sim|sim pode|sim confirmo|pode confirmar|pode fechar|fechado|pode ser|isso|isso mesmo|correto|ta certo|ok|okay|pode mandar|manda ver|pode finalizar|bora)$/.test(
     s
   );
 }
