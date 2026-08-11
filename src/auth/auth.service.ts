@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { db } from '../infrastructure/db.js';
 import { redis } from '../infrastructure/redis.js';
 import { env } from '../config/env.js';
@@ -38,6 +38,77 @@ function tokenHash(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
+type SignedSessionPayload = {
+  v: 1;
+  uid: string;
+  exp: number;
+  nonce: string;
+};
+
+function sessionSecret(): string {
+  const secret = env.authSessionSecret || env.internalApiKey;
+  if (!secret) throw new Error('AUTH_SESSION_SECRET_MISSING');
+  return secret;
+}
+
+function base64urlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+function signSessionPayload(encodedPayload: string): string {
+  return createHmac('sha256', sessionSecret())
+    .update(encodedPayload, 'utf8')
+    .digest('base64url');
+}
+
+function createSignedSessionToken(userId: string, expiresAt: Date): string {
+  const payload: SignedSessionPayload = {
+    v: 1,
+    uid: userId,
+    exp: Math.floor(expiresAt.getTime() / 1000),
+    nonce: randomBytes(16).toString('base64url')
+  };
+
+  const encoded = base64urlJson(payload);
+  return `${encoded}.${signSessionPayload(encoded)}`;
+}
+
+function parseSignedSessionToken(token: string): SignedSessionPayload | null {
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+
+  const [encoded, signature] = parts;
+  if (!encoded || !signature) return null;
+
+  const expected = signSessionPayload(encoded);
+
+  const a = Buffer.from(signature, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(encoded, 'base64url').toString('utf8')
+    ) as Partial<SignedSessionPayload>;
+
+    if (
+      parsed.v !== 1 ||
+      typeof parsed.uid !== 'string' ||
+      !parsed.uid ||
+      typeof parsed.exp !== 'number' ||
+      !Number.isFinite(parsed.exp) ||
+      typeof parsed.nonce !== 'string'
+    ) {
+      return null;
+    }
+
+    return parsed as SignedSessionPayload;
+  } catch {
+    return null;
+  }
+}
+
 function validEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
@@ -45,11 +116,17 @@ function validEmail(email: string): boolean {
 
 export class AuthService {
   private async createSession(userId: string): Promise<string> {
-    const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(
       Date.now() + env.authSessionDays * 24 * 60 * 60 * 1000
     );
 
+    // Sessão assinada: a validação não depende de uma segunda leitura
+    // imediata do PostgreSQL. Isso elimina o problema em que login criava
+    // a sessão, mas /internal/auth/session não conseguia encontrá-la.
+    const token = createSignedSessionToken(userId, expiresAt);
+
+    // Mantemos registro no banco para auditoria e limpeza, mas ele não é
+    // mais a fonte de verdade da validade criptográfica da sessão.
     await db.query(
       `insert into auth_sessions(user_id, token_hash, expires_at)
        values($1,$2,$3)`,
@@ -248,34 +325,53 @@ export class AuthService {
 
   async session(token: string): Promise<AuthUserView | null> {
     if (!token) return null;
+
+    const payload = parseSignedSessionToken(token);
+    if (!payload) return null;
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (payload.exp <= nowSeconds) return null;
+
     const hash = tokenHash(token);
 
-    const result = await db.query<{ user_id: string }>(
-      `select user_id::text
-       from auth_sessions
-       where token_hash = $1
-         and expires_at > now()
-       limit 1`,
-      [hash]
-    );
+    // Logout revoga a sessão no Redis imediatamente, sem depender do banco.
+    const revoked = await redis.get(`arles:auth:revoked:${hash}`);
+    if (revoked) return null;
 
-    const row = result.rows[0];
-    if (!row) return null;
-
+    // Best-effort para auditoria. Se o registro tiver sido limpo do banco,
+    // uma sessão criptograficamente válida continua funcionando.
     await db.query(
-      `update auth_sessions set last_seen_at = now() where token_hash = $1`,
+      `update auth_sessions
+       set last_seen_at = now()
+       where token_hash = $1`,
       [hash]
-    );
+    ).catch(() => undefined);
 
-    return this.userView(row.user_id);
+    return this.userView(payload.uid);
   }
 
   async logout(token: string): Promise<void> {
     if (!token) return;
+
+    const hash = tokenHash(token);
+    const payload = parseSignedSessionToken(token);
+
+    if (payload) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const ttl = Math.max(1, payload.exp - nowSeconds);
+
+      await redis.set(
+        `arles:auth:revoked:${hash}`,
+        '1',
+        'EX',
+        ttl
+      );
+    }
+
     await db.query(
       `delete from auth_sessions where token_hash = $1`,
-      [tokenHash(token)]
-    );
+      [hash]
+    ).catch(() => undefined);
   }
 
 }
