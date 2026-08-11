@@ -114,9 +114,10 @@ export class AuthService {
     const companyName = input.companyName.trim();
     const password = input.password;
 
+    if (!name || !companyName) throw new Error('FIELDS_REQUIRED');
     if (!validEmail(email)) throw new Error('EMAIL_INVALID');
     if (password.length < 6) throw new Error('PASSWORD_TOO_SHORT');
-    if (!name || !companyName || !phone) throw new Error('FIELDS_REQUIRED');
+    if (phone.length < 10 || phone.length > 15) throw new Error('PHONE_INVALID');
 
     const existing = await db.query(
       `select 1 from auth_users where email_normalized = $1 limit 1`,

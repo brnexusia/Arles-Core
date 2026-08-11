@@ -42,8 +42,23 @@ function authError(reply: FastifyReply, error: unknown) {
       code
     });
   }
-  if (['EMAIL_INVALID','PASSWORD_TOO_SHORT','FIELDS_REQUIRED'].includes(code)) {
-    return reply.code(400).send({ error: code, code });
+  if (code === 'EMAIL_INVALID') {
+    return reply.code(400).send({ error: 'Informe um e-mail válido.', code });
+  }
+  if (code === 'PHONE_INVALID') {
+    return reply.code(400).send({
+      error: 'Informe um WhatsApp válido com DDD.',
+      code
+    });
+  }
+  if (code === 'PASSWORD_TOO_SHORT') {
+    return reply.code(400).send({
+      error: 'A senha precisa ter pelo menos 6 caracteres.',
+      code
+    });
+  }
+  if (code === 'FIELDS_REQUIRED') {
+    return reply.code(400).send({ error: 'Preencha todos os campos obrigatórios.', code });
   }
 
   console.error('[Auth]', error);
