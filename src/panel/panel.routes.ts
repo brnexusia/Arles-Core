@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
 import { panelService } from './panel.service.js';
+import { menuAnalysisService } from '../menu/menu-analysis.service.js';
 
 function authorized(request: FastifyRequest): boolean {
   if (!env.internalApiKey) return false;
@@ -162,6 +163,28 @@ export async function registerPanelRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     await panelService.deleteProduct(companyIdFrom(request), id);
     return reply.send({ ok: true });
+  });
+
+  app.post('/internal/panel/menu/analyze', async (request, reply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    try {
+      const body = (request.body ?? {}) as any;
+      const companyId = companyIdFrom(request);
+      const images = Array.isArray(body.images) ? body.images : [];
+      const jobId = await menuAnalysisService.start(companyId, images);
+      return reply.code(202).send({ ok: true, job_id: jobId, status: 'processing' });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  app.get('/internal/panel/menu/analyze/:jobId', async (request, reply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    const companyId = companyIdFrom(request);
+    const { jobId } = request.params as { jobId: string };
+    const job = await menuAnalysisService.get(companyId, jobId);
+    if (!job) return reply.code(404).send({ error: 'Análise não encontrada ou expirada.' });
+    return reply.send({ ok: true, ...job });
   });
 
   app.post('/internal/panel/menu/import', async (request, reply) => {
