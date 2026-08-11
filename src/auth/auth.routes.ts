@@ -42,7 +42,7 @@ function authError(reply: FastifyReply, error: unknown) {
       code
     });
   }
-  if (['EMAIL_INVALID','PASSWORD_TOO_SHORT','FIELDS_REQUIRED','LEGACY_AUTH_INVALID','LEGACY_COMPANY_REQUIRED'].includes(code)) {
+  if (['EMAIL_INVALID','PASSWORD_TOO_SHORT','FIELDS_REQUIRED'].includes(code)) {
     return reply.code(400).send({ error: code, code });
   }
 
@@ -101,20 +101,5 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     await authService.logout(sessionToken(request));
     return reply.send({ ok: true });
-  });
-
-  app.post('/internal/auth/migrate-legacy', async (request, reply) => {
-    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
-    try {
-      const result = await authService.migrateLegacy((request.body ?? {}) as any);
-      return reply.send({
-        ok: true,
-        migrated: true,
-        session_token: result.sessionToken,
-        user: result.user
-      });
-    } catch (error) {
-      return authError(reply, error);
-    }
   });
 }
