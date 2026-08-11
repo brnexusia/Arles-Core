@@ -2,14 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { env } from '../config/env.js';
 import { redis } from '../infrastructure/redis.js';
 import {
+  applyPricingAudit,
   cleanMenuResult,
+  cleanPricingAudit,
   countMenuProducts,
   mergeMenuResults,
+  type MenuPricingAudit,
   type MenuResult
 } from './menu-analysis.normalize.js';
 
-export { cleanMenuResult, mergeMenuResults } from './menu-analysis.normalize.js';
-export type { MenuVariation, MenuProduct, MenuCategory, MenuResult } from './menu-analysis.normalize.js';
+export { applyPricingAudit, cleanMenuResult, cleanPricingAudit, collapseSizedCategories, mergeMenuResults } from './menu-analysis.normalize.js';
+export type { MenuVariation, MenuProduct, MenuCategory, MenuPricingAudit, MenuResult } from './menu-analysis.normalize.js';
 
 export type MenuInputImage = {
   data: string;
@@ -77,11 +80,96 @@ const schema = {
   }
 };
 
+
+const pricingAuditSchema = {
+  name: 'menu_pricing_audit',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: {
+      global_variation_groups: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            category_hint: { type: 'string' },
+            applies_to_all_products_in_category: { type: 'boolean' },
+            product_names: { type: 'array', items: { type: 'string' } },
+            variations: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  price: { type: 'number' }
+                },
+                required: ['name', 'price'],
+                additionalProperties: false
+              }
+            }
+          },
+          required: [
+            'name',
+            'category_hint',
+            'applies_to_all_products_in_category',
+            'product_names',
+            'variations'
+          ],
+          additionalProperties: false
+        }
+      },
+      surcharges: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            product_name: { type: 'string' },
+            amount: { type: 'number' }
+          },
+          required: ['product_name', 'amount'],
+          additionalProperties: false
+        }
+      },
+      standalone_products: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            category: { type: 'string' },
+            name: { type: 'string' },
+            description: { type: 'string' },
+            price: { type: ['number', 'null'] },
+            available: { type: 'boolean' },
+            variations: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  price: { type: 'number' }
+                },
+                required: ['name', 'price'],
+                additionalProperties: false
+              }
+            }
+          },
+          required: ['category', 'name', 'description', 'price', 'available', 'variations'],
+          additionalProperties: false
+        }
+      }
+    },
+    required: ['global_variation_groups', 'surcharges', 'standalone_products'],
+    additionalProperties: false
+  }
+};
+
 const extractionRules = `Você extrai cardápios brasileiros com máxima fidelidade.
 Leia TODA a imagem: topo, centro, rodapé, laterais, colunas, blocos pequenos, bebidas, adicionais e categorias doces.
 Todas as imagens recebidas pertencem ao MESMO cardápio; algumas são recortes ampliados e se sobrepõem.
 Não duplique itens por causa dos recortes.
-Cada produto deve ficar na categoria visual correta.
+Cada produto deve ficar na categoria SEMÂNTICA correta (ex.: Pizzas, Pizzas Doces, Bebidas).
+NUNCA use tamanho/volume como categoria: "Pizzas M", "Pizzas G" e "Pizzas GG" devem ser um produto em "Pizzas" com variações M/G/GG.
 Extraia nome, descrição/ingredientes, preço, disponibilidade e variações/tamanhos.
 Não invente informações que não estejam visíveis.
 Ignore telefone, endereço, Instagram, slogans e textos promocionais que não sejam produtos.
@@ -94,7 +182,8 @@ Quando o cardápio mostrar uma lista de sabores e, em outra área, uma tabela de
 Nesse caso, em cada sabor use price = o menor preço/base e variations = todos os tamanhos com seus preços ABSOLUTOS, incluindo o tamanho base.
 Exemplo: {"name":"Calabresa","price":25,"variations":[{"name":"M","price":25},{"name":"G","price":30},{"name":"GG","price":40}]}.
 Se houver acréscimo específico visível em um sabor (ex.: +R$5), aplique o acréscimo de forma coerente aos tamanhos afetados; não ignore esse texto.
-Para bebidas com volumes e preços diferentes, use produtos/variações de forma que nenhum preço visível seja perdido.`;
+Para bebidas com volumes e preços diferentes, use produtos/variações de forma que nenhum preço visível seja perdido.
+Faça uma varredura obrigatória do RODAPÉ: refrigerantes, sucos, águas e outros itens pequenos não podem ser omitidos.`;
 
 function rawBase64(data: string): string {
   return data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
@@ -178,34 +267,114 @@ async function callOpenAI(
   }
 }
 
+
+async function callPricingAudit(
+  images: MenuInputImage[],
+  baseline: MenuResult
+): Promise<MenuPricingAudit> {
+  if (!env.openaiApiKey) throw new Error('OPENAI_API_KEY não configurada no Arles Engine.');
+
+  const content: any[] = [
+    {
+      type: 'text',
+      text:
+        `Você é o AUDITOR DE PREÇOS E RODAPÉ de um cardápio brasileiro.\n` +
+        `Não refaça apenas a lista de produtos. Seu trabalho é descobrir estruturas que uma leitura comum costuma perder.\n\n` +
+        `LEITURA INICIAL:\n${JSON.stringify(baseline)}\n\n` +
+        `REGRAS OBRIGATÓRIAS:\n` +
+        `1. Procure tabelas globais de tamanho/preço separadas da lista de sabores, como M/G/GG à direita da arte.\n` +
+        `2. Quando os preços valem para todos os sabores de uma categoria, marque applies_to_all_products_in_category=true.\n` +
+        `3. Tamanho NÃO é categoria. M, G, GG, 1L, 2L etc. são variações.\n` +
+        `4. Procure especialmente RODAPÉ e laterais: refrigerantes, sucos, água, sobremesas, adicionais e combos.\n` +
+        `5. standalone_products deve conter itens independentes que podem ter sido omitidos na leitura inicial.\n` +
+        `6. Se houver um acréscimo explícito ligado a um sabor (ex.: Carne de Sol +R$5), coloque em surcharges.\n` +
+        `7. Não invente preço nem produto. Se um texto for só título/promocional, não crie produto.\n` +
+        `8. Para refrigerante com Lata/1L/2L, prefira UM produto com variações, salvo se a arte realmente mostrar marcas com preços próprios.`
+    }
+  ];
+
+  for (const [index, image] of images.entries()) {
+    content.push({ type: 'text', text: image.label || `Imagem ${index + 1}` });
+    const url = String(image.data).startsWith('data:')
+      ? String(image.data)
+      : `data:${image.mime};base64,${image.data}`;
+    content.push({ type: 'image_url', image_url: { url, detail: 'high' } });
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${env.openaiApiKey}`
+    },
+    body: JSON.stringify({
+      model: env.openaiModel,
+      messages: [{ role: 'user', content }],
+      response_format: { type: 'json_schema', json_schema: pricingAuditSchema },
+      temperature: 0,
+      max_tokens: 7000
+    }),
+    signal: AbortSignal.timeout(120_000)
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`OpenAI pricing audit ${response.status}: ${body.slice(0, 500)}`);
+  }
+
+  const json = await response.json() as any;
+  const text = String(json?.choices?.[0]?.message?.content ?? '').trim();
+  if (!text) throw new Error('A auditoria de preços não retornou resultado.');
+
+  try {
+    return cleanPricingAudit(JSON.parse(text));
+  } catch {
+    throw new Error('A auditoria de preços retornou um resultado inválido.');
+  }
+}
+
 async function analyze(images: MenuInputImage[]): Promise<MenuResult> {
   const originals = images.filter(image => image.isOriginal);
   const firstPassImages = originals.length ? originals : images.slice(0, 1);
 
   const baseline = await callOpenAI(
     firstPassImages,
-    'Faça uma leitura estrutural completa. Identifique todas as categorias, todos os sabores/produtos, todas as descrições e TODAS as regras globais de preço/tamanho visíveis.'
+    'Faça uma leitura estrutural completa. Identifique TODAS as categorias e produtos. Se M/G/GG aparecerem separados da lista de sabores, trate como variações, nunca como categorias.'
   );
 
   let audit: MenuResult | null = null;
   try {
     audit = await callOpenAI(
       images,
-      `Faça uma auditoria final usando a imagem completa e os recortes ampliados.\n` +
+      `Faça uma auditoria de COBERTURA usando a imagem completa e todos os recortes ampliados.\n` +
       `A primeira leitura foi:\n${JSON.stringify(baseline)}\n\n` +
-      'Devolva o cardápio COMPLETO corrigido. Procure itens do rodapé, bebidas, doces, adicionais e sabores omitidos. Verifique especialmente tabelas globais de tamanhos/preços e aplique-as aos produtos correspondentes. Não duplique itens dos recortes.'
+      `Devolva o cardápio COMPLETO corrigido. Faça checklist visual: topo, meio, rodapé, esquerda e direita. ` +
+      `Procure sabores omitidos, Pizzas Doces, refrigerantes, sucos, águas, adicionais e combos. ` +
+      `Tamanhos como M/G/GG e volumes como 1L/2L são VARIAÇÕES e não categorias.`
     );
   } catch (error) {
-    console.warn('[MENU ANALYSIS] auditoria falhou; usando leitura inicial', error);
+    console.warn('[MENU ANALYSIS] auditoria de cobertura falhou; usando leitura inicial', error);
   }
 
-  const merged = audit ? mergeMenuResults(baseline, audit) : baseline;
+  let merged = audit ? mergeMenuResults(baseline, audit) : baseline;
+
+  let pricingAudit: MenuPricingAudit | null = null;
+  try {
+    pricingAudit = await callPricingAudit(images, merged);
+    merged = applyPricingAudit(merged, pricingAudit);
+  } catch (error) {
+    console.warn('[MENU ANALYSIS] auditoria de preços/rodapé falhou; mantendo cobertura principal', error);
+  }
+
   const baselineCount = countMenuProducts(baseline);
   const auditCount = audit ? countMenuProducts(audit) : 0;
   const mergedCount = countMenuProducts(merged);
+  const pricingGroups = pricingAudit?.global_variation_groups.length ?? 0;
+  const recoveredStandalone = pricingAudit?.standalone_products.length ?? 0;
 
   console.log(
-    `[MENU ANALYSIS] baseline=${baselineCount} audit=${auditCount} final=${mergedCount} categories=${merged.categories.length}`
+    `[MENU ANALYSIS] baseline=${baselineCount} coverage=${auditCount} final=${mergedCount} ` +
+    `categories=${merged.categories.length} price_groups=${pricingGroups} standalone_recovered=${recoveredStandalone}`
   );
 
   if (!mergedCount) throw new Error('Nenhum produto foi identificado no cardápio.');

@@ -343,11 +343,33 @@ export class PanelService {
 
   async listProducts(companyId: string) {
     const result = await db.query(
-      `select id::text, category, name, description,
-              price::float8 as price, is_active, created_at, updated_at
-       from delivery_products
-       where company_id = $1
-       order by category nulls last, name`,
+      `select p.id::text, p.category, p.name, p.description,
+              p.price::float8 as price, p.is_active, p.created_at, p.updated_at,
+              coalesce((
+                select jsonb_agg(
+                  jsonb_build_object(
+                    'id', v.id::text,
+                    'name', v.name,
+                    'price_delta', v.price_delta::float8,
+                    'price', (p.price + v.price_delta)::float8,
+                    'is_active', v.is_active
+                  )
+                  order by
+                    case upper(v.name)
+                      when 'P' then 1
+                      when 'M' then 2
+                      when 'G' then 3
+                      when 'GG' then 4
+                      else 10
+                    end,
+                    v.name
+                )
+                from product_variations v
+                where v.product_id = p.id
+              ), '[]'::jsonb) as variations
+       from delivery_products p
+       where p.company_id = $1
+       order by p.category nulls last, p.name`,
       [companyId]
     );
     return result.rows;
@@ -420,7 +442,10 @@ export class PanelService {
         for (const rawProduct of products) {
           if (rawProduct?.ignore === true) continue;
           const name = cleanString(rawProduct?.name);
-          const price = Number(rawProduct?.price);
+          const rawPrice = rawProduct?.price;
+          const price = rawPrice === null || rawPrice === undefined || rawPrice === ''
+            ? Number.NaN
+            : Number(rawPrice);
           if (!name || !Number.isFinite(price) || price < 0) {
             throw new Error(`Produto sem preço válido: ${name || 'sem nome'}`);
           }

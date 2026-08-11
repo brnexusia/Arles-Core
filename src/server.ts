@@ -23,7 +23,7 @@ function authorized(request: { headers: Record<string, unknown> }): boolean {
 app.get('/health', async () => {
   await checkDb();
   await redis.ping();
-  return { ok: true, service: 'arles-engine', version: '1.2.1' };
+  return { ok: true, service: 'arles-engine', version: '1.3.0' };
 });
 
 app.get('/media/:token', async (request, reply) => {
