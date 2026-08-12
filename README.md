@@ -1,315 +1,94 @@
+# Arles Core v1.5.5
 
-## v1.1 — Painel
+Motor multi-tenant do ecossistema Arles, atualmente com a vertical Delivery.
+Ele centraliza autenticação, sessões, empresas, billing, cardápio, pedidos,
+clientes, WhatsApp, IA, follow-up e pós-venda.
 
-A v1.1 adiciona a API interna do painel e a migração operacional Supabase -> PostgreSQL.
-Consulte `docs/PANEL_INTEGRATION.md`.
+Esta árvore consolida a base integral do Core e todos os patches feitos até a
+correção de sessão `v1.5.5` de 11/08/2026.
 
-# Arles Core — Delivery v1.0
+## Stack
 
-Motor em **Node.js + TypeScript + PostgreSQL + Redis** que substitui o workflow principal do n8n do Arles Delivery.
+- Node.js 22 + TypeScript;
+- Fastify;
+- PostgreSQL;
+- Redis;
+- OpenAI;
+- Evolution API;
+- Vitest.
 
-## Arquitetura
+## Estrutura
 
-```text
-WhatsApp
-   ↓
-Evolution API
-   ↓
-Arles Engine
-   ├── Core
-   ├── Redis
-   ├── PostgreSQL
-   ├── OpenAI
-   └── verticals/
-         └── delivery/
+- `src/auth`: cadastro, login, sessão assinada e logout;
+- `src/billing`: contexto de assinatura e eventos Stripe;
+- `src/panel`: API interna consumida pelo Arles Delivery;
+- `src/menu`: análise assíncrona e normalização de cardápios;
+- `src/verticals/delivery`: regras determinísticas do delivery;
+- `src/ai`: interpretação de intenção e resposta conversacional;
+- `src/whatsapp`: cliente Evolution e normalização de mensagens;
+- `src/workers`: follow-up;
+- `migrations`: schema `001_core` até `005_auth_billing`;
+- `tests`: cardápio e regras do delivery.
+
+## Atualizações incorporadas
+
+- v1.0: engine Delivery completo, mídia, Pix, follow-up e pós-venda;
+- v1.1: integração do painel e migration `004_panel_bridge`;
+- v1.2–v1.3: importação de cardápio assíncrona, robusta e deduplicada;
+- v1.4: autenticação, trial e billing no PostgreSQL;
+- v1.5: fluxo limpo sem migração de contas Supabase;
+- v1.5.1: correções finais de cadastro/login;
+- v1.5.5: token de sessão assinado com HMAC-SHA256, validado sem depender de
+  uma segunda leitura imediata do PostgreSQL. O registro em `auth_sessions`
+  permanece para auditoria e o logout revoga o token no Redis.
+
+## Desenvolvimento
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-O mesmo Core foi preparado para receber depois:
+## Validação
 
-```text
-beauty
-barber
-pet
-tattoo
-studio
-```
-
-## Regra principal
-
-A IA serve para **interpretar linguagem** e responder perguntas usando contexto real.
-
-O código controla:
-
-- empresa/tenant;
-- estado da conversa;
-- produto;
-- variação;
-- preço;
-- quantidade;
-- entrega/retirada;
-- pagamento;
-- confirmação;
-- criação do pedido;
-- comprovante Pix;
-- follow-up;
-- pausa humana;
-- avaliações;
-- pós-venda.
-
-## Delivery v1.0
-
-Incluído:
-
-- texto;
-- buffer de mensagens;
-- deduplicação;
-- áudio + transcrição;
-- análise de imagem;
-- cardápio visual como imagem;
-- cliente recorrente;
-- produtos e variações reais;
-- perguntas de preço/disponibilidade;
-- checkout de uma pergunta por vez;
-- linguagem natural/variações de resposta;
-- confirmação determinística;
-- proteção contra reconfirmar pedido antigo;
-- criação do pedido;
-- Pix;
-- comprovante ligado somente ao pedido correto;
-- mídia do comprovante servida pelo Engine;
-- pausa quando humano responde;
-- transbordo;
-- follow-up único de 30 min;
-- atualização automática de status;
-- avaliação 1–5;
-- pedido de marcação para avaliação 4–5;
-- migrations automáticas;
-- simulator/seed.
-
-## Variáveis do Easypanel
-
-Mantenha as que já existem e adicione:
-
-```env
-PUBLIC_BASE_URL=https://SEU-DOMINIO-DO-ENGINE
-INTERNAL_API_KEY=UMA_CHAVE_LONGA_E_ALEATORIA
-
-OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
-
-EVOLUTION_SEND_MEDIA_PATH=/message/sendMedia/{instance}
-EVOLUTION_MEDIA_BASE64_PATH=/chat/getBase64FromMediaMessage/{instance}
-
-HUMAN_PAUSE_SECONDS=3600
-FOLLOWUP_DELAY_SECONDS=1800
-FOLLOWUP_WORKER_INTERVAL_MS=15000
-REVIEW_TTL_SECONDS=604800
-PIX_PROOF_MAX_AGE_HOURS=8
-```
-
-Continuam obrigatórias:
-
-```env
-DATABASE_URL=
-REDIS_URL=
-
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4o-mini
-
-EVOLUTION_BASE_URL=
-EVOLUTION_API_KEY=
-
-PORT=3000
-NODE_ENV=production
+```bash
+npm run typecheck
+npm test
+npm run build
 ```
 
 ## Deploy no Easypanel
 
-1. Substitua/adicione os arquivos da v1.0 no repositório GitHub.
-2. Commit + Push.
-3. Configure as novas variáveis.
-4. Clique em **Implantar**.
+1. Configure as variáveis de `.env.example`.
+2. Use o `Dockerfile` da raiz.
+3. Implante o serviço com PostgreSQL e Redis acessíveis.
+4. O comando de produção executa as migrations antes de iniciar o servidor.
+5. Valide `GET /health`.
 
-No startup:
-
-```text
-migrations
-↓
-003_delivery_runtime.sql
-↓
-servidor
-↓
-follow-up worker
-```
-
-Valide:
-
-```text
-GET /health
-```
-
-Esperado:
+Resposta esperada:
 
 ```json
 {
   "ok": true,
   "service": "arles-engine",
-  "version": "1.0.0"
+  "version": "1.5.5"
 }
 ```
+
+## Sessão v1.5.5
+
+Defina `AUTH_SESSION_SECRET` com uma chave longa e aleatória. Se a variável não
+existir, o Core usa `INTERNAL_API_KEY` como fallback compatível.
+
+O fluxo validado é:
+
+1. `POST /internal/auth/login` cria e grava a sessão;
+2. `POST /internal/auth/session` valida assinatura e expiração;
+3. o painel mantém o usuário autenticado;
+4. logout revoga o token no Redis até a expiração.
 
 ## Migrations
 
-O Engine registra cada arquivo em `schema_migrations`.
-
-Nunca edite uma migration já aplicada. Para mudanças futuras, crie:
-
-```text
-004_nome.sql
-005_nome.sql
-...
-```
-
-## Seed e simulador
-
-Empresa demo:
-
-```bash
-npm run seed:delivery
-```
-
-Simulador:
-
-```bash
-npm run simulate:delivery
-```
-
-Comandos:
-
-```text
-/reset
-/fresh
-/orders
-/exit
-```
-
-## Pós-venda
-
-Quando o painel mudar um pedido, o backend do painel deve chamar:
-
-```text
-POST /events/order-status
-```
-
-ou o alias:
-
-```text
-POST /webhooks/arles-delivery-events
-```
-
-Headers:
-
-```text
-x-arles-key: SUA_INTERNAL_API_KEY
-content-type: application/json
-```
-
-Body:
-
-```json
-{
-  "company_id": "UUID",
-  "order_id": "UUID",
-  "status": "Em preparo"
-}
-```
-
-Status reconhecidos:
-
-```text
-Novos
-Em preparo
-Pronto
-Saiu para entrega
-Finalizados
-Cancelados
-```
-
-Ao chegar em `Finalizados`, o Engine envia a pergunta de avaliação e passa a interpretar a próxima resposta de nota.
-
-## Comprovante Pix
-
-Quando chega uma imagem:
-
-```text
-imagem
-↓
-há pedido Pix pendente do mesmo cliente?
-↓
-SIM
-↓
-imagem parece comprovante?
-↓
-SIM
-↓
-salva em media_files
-↓
-atualiza APENAS aquele order_id
-↓
-payment_status = pending_approval
-```
-
-O campo `payment_proof_url` recebe uma URL do próprio Engine.
-
-## Pagamento
-
-Para aprovar/rejeitar via backend/painel:
-
-```text
-POST /events/payment-status
-```
-
-Exemplo:
-
-```json
-{
-  "company_id": "UUID",
-  "order_id": "UUID",
-  "payment_status": "approved"
-}
-```
-
-Valores:
-
-```text
-pending
-pending_approval
-approved
-rejected
-```
-
-## Pausa humana
-
-Se alguém da loja responde manualmente pelo WhatsApp:
-
-```text
-fromMe
-↓
-não foi mensagem enviada pelo Arles
-↓
-pausa do bot por 1 hora
-```
-
-Também existem endpoints internos:
-
-```text
-POST /internal/conversations/pause
-POST /internal/conversations/resume
-```
-
-## Importante sobre o painel
-
-O **motor do Delivery** está em PostgreSQL próprio.
-
-O frontend atual ainda precisa ser migrado do Supabase para uma API do Arles para que pedidos, clientes, cardápio, status e comprovantes passem a usar este novo banco em produção.
-
-Essa migração do painel é separada do motor do WhatsApp.
+As migrations são registradas em `schema_migrations`. Não edite migrations já
+aplicadas; novas alterações devem receber um novo número sequencial.
