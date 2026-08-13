@@ -1,6 +1,6 @@
 {
   "name": "arles-core",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "node dist/src/scripts/migrate.js",
+    "admin:create": "node dist/src/scripts/create-admin.js",
+    "admin:create:dev": "tsx src/scripts/create-admin.ts",
     "seed:delivery": "node dist/src/scripts/seed-delivery.js",
     "simulate:delivery": "node dist/src/scripts/simulate-delivery.js"
   },

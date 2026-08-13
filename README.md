@@ -1,4 +1,4 @@
-# Arles Core v2.0.0
+# Arles Core v2.1.0
 
 Motor multi-tenant e multi-vertical do ecossistema Arles.
 
@@ -39,6 +39,25 @@ cp .env.example .env
 npm run dev
 ```
 
+## Painel administrativo
+
+O Core fornece `GET /internal/admin/overview`, protegido pela chave interna e
+por uma sessao com papel `admin`. A rota reune usuarios, empresas, verticais,
+status de assinatura, uso, WhatsApp, receita recorrente ativa e pagamentos
+confirmados nos ultimos 30 dias.
+
+Depois do build e das migrations, crie ou atualize o primeiro administrador:
+
+```bash
+ADMIN_EMAIL=admin@seudominio.com \
+ADMIN_PASSWORD='uma-senha-forte' \
+ADMIN_NAME='Administrador' \
+npm run admin:create
+```
+
+Em desenvolvimento, use `npm run admin:create:dev`. O comando pode ser
+executado novamente para trocar a senha.
+
 ## Validacao
 
 ```bash
@@ -55,7 +74,7 @@ ou billing voltem a importar a implementacao do Delivery.
 1. Atualize as variaveis conforme `.env.example`.
 2. Implante o Core antes do painel Delivery.
 3. O comando de producao aplica as migrations antes de iniciar.
-4. Valide `GET /health` e confirme a versao `2.0.0`.
+4. Valide `GET /health` e confirme a versao `2.1.0`.
 5. Implante o Arles Delivery atualizado para os endpoints modulares.
 
 As migrations sao registradas com checksum. Nao edite migrations ja aplicadas;

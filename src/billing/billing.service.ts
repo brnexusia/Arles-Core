@@ -201,6 +201,7 @@ export class BillingService {
            cancel_at_period_end=coalesce($8,cancel_at_period_end),
            plan_key=coalesce($9,plan_key),
            monthly_contact_limit=coalesce($10,monthly_contact_limit),
+           monthly_price_cents=coalesce($11,monthly_price_cents),
            updated_at=now()
          where id=$1`,
         [
@@ -215,7 +216,10 @@ export class BillingService {
             ? body.cancel_at_period_end
             : null,
           planKey,
-          limit
+          limit,
+          Number.isInteger(body.monthly_price_cents) && body.monthly_price_cents >= 0
+            ? body.monthly_price_cents
+            : null
         ]
       );
 
@@ -223,6 +227,29 @@ export class BillingService {
         `insert into stripe_events(id,type) values($1,$2)`,
         [eventId, eventType]
       );
+
+      const invoiceId = String(body.invoice_id ?? '').trim();
+      const amountPaidCents = Number(body.amount_paid_cents);
+      if (
+        eventType === 'invoice.paid' &&
+        invoiceId &&
+        Number.isInteger(amountPaidCents) &&
+        amountPaidCents >= 0
+      ) {
+        await client.query(
+          `insert into billing_payments(
+             stripe_invoice_id,company_id,amount_paid_cents,currency,paid_at
+           ) values($1,$2,$3,$4,$5::timestamptz)
+           on conflict(stripe_invoice_id) do nothing`,
+          [
+            invoiceId,
+            companyId,
+            amountPaidCents,
+            String(body.currency ?? 'brl').toLowerCase(),
+            body.paid_at ? new Date(body.paid_at).toISOString() : new Date().toISOString()
+          ]
+        );
+      }
 
       await client.query('commit');
       return { companyId };
