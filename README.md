@@ -1,4 +1,4 @@
-# Arles Core v2.1.1
+# Arles Core v2.1.2
 
 Motor multi-tenant e multi-vertical do ecossistema Arles.
 
@@ -74,7 +74,7 @@ ou billing voltem a importar a implementacao do Delivery.
 1. Atualize as variaveis conforme `.env.example`.
 2. Implante o Core antes do painel Delivery.
 3. O comando de producao aplica as migrations antes de iniciar.
-4. Valide `GET /health` e confirme a versao `2.1.1`.
+4. Valide `GET /health` e confirme a versao `2.1.2`.
 5. Implante o Arles Delivery atualizado para os endpoints modulares.
 
 As migrations sao registradas com checksum. Nao edite migrations ja aplicadas;
