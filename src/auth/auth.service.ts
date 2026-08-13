@@ -276,10 +276,10 @@ export class AuthService {
 
       await client.query(
         `insert into company_capabilities(company_id,capability_key,status)
-         select $1,'vertical.' || id,'active'
+         select $1::uuid,'vertical.' || id,'active'
          from vertical_definitions where id=$2
          union all
-         select $1,unnest(capabilities),'active'
+         select $1::uuid,unnest(capabilities),'active'
          from vertical_definitions where id=$2
          on conflict(company_id,capability_key) do update set status='active',updated_at=now()`,
         [companyId, verticalId]
