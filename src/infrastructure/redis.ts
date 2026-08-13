@@ -13,8 +13,12 @@ const key = {
   buffer: (companyId: string, phone: string) => `arles:buffer:${companyId}:${phone}`,
   paused: (companyId: string, phone: string) => `arles:paused:${companyId}:${phone}`,
   systemSending: (companyId: string, phone: string) => `arles:system-sending:${companyId}:${phone}`,
-  lastInbound: (companyId: string, phone: string) => `arles:last-inbound:${companyId}:${phone}`
+  lastInbound: (companyId: string, phone: string) => `arles:last-inbound:${companyId}:${phone}`,
+  followupSent: (companyId: string, phone: string) => `arles:followup-sent:${companyId}:${phone}`,
+  followupJob: (companyId: string, phone: string) => `arles:followup-job:${companyId}:${phone}`,
 };
+
+const FOLLOWUP_ZSET = 'arles:followups:due';
 
 export async function onceMessage(companyId: string, messageId: string): Promise<boolean> {
   if (!messageId) return true;
@@ -125,4 +129,51 @@ export async function setLastInbound(companyId: string, phone: string, messageId
 
 export async function getLastInbound(companyId: string, phone: string): Promise<string> {
   return (await redis.get(key.lastInbound(companyId, phone))) ?? '';
+}
+
+export interface FollowupJob {
+  companyId: string;
+  phone: string;
+  instanceName: string;
+  replyJid: string;
+  sourceMessageId: string;
+  text: string;
+}
+
+export async function scheduleFollowup(job: FollowupJob, delaySeconds = env.followupDelaySeconds): Promise<void> {
+  const id = `${job.companyId}:${job.phone}`;
+  await redis.set(key.followupJob(job.companyId, job.phone), JSON.stringify(job), 'EX', Math.max(delaySeconds + 14_400, 18_000));
+  await redis.zadd(FOLLOWUP_ZSET, Date.now() + delaySeconds * 1000, id);
+}
+
+export async function popDueFollowups(limit = 50): Promise<FollowupJob[]> {
+  const ids = await redis.zrangebyscore(FOLLOWUP_ZSET, 0, Date.now(), 'LIMIT', 0, limit);
+  const jobs: FollowupJob[] = [];
+
+  for (const id of ids) {
+    const removed = await redis.zrem(FOLLOWUP_ZSET, id);
+    if (!removed) continue;
+    const [companyId, ...phoneParts] = id.split(':');
+    const phone = phoneParts.join(':');
+    if (!companyId || !phone) continue;
+    const jobKey = key.followupJob(companyId, phone);
+    const raw = await redis.get(jobKey);
+    if (!raw) continue;
+    await redis.del(jobKey);
+    try {
+      jobs.push(JSON.parse(raw) as FollowupJob);
+    } catch {
+      // ignora job corrompido
+    }
+  }
+
+  return jobs;
+}
+
+export async function followupAlreadySent(companyId: string, phone: string): Promise<boolean> {
+  return Boolean(await redis.get(key.followupSent(companyId, phone)));
+}
+
+export async function markFollowupSent(companyId: string, phone: string): Promise<void> {
+  await redis.set(key.followupSent(companyId, phone), '1', 'EX', 14_400);
 }

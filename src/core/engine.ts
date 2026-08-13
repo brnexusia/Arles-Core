@@ -7,14 +7,14 @@ import {
   markSystemSending,
   onceMessage,
   pauseConversation,
+  scheduleFollowup,
   setLastInbound,
   withConversationLock
 } from '../infrastructure/redis.js';
 import { evolution } from '../whatsapp/evolution.client.js';
 import { isMessageUpsert, normalizeEvolutionMessage } from '../whatsapp/normalize.js';
-import { moduleRegistry } from '../platform/modules/registry.js';
-import type { OutgoingAction, VerticalModule, VerticalResult } from '../platform/modules/contract.js';
-import { platformJobService } from '../platform/jobs/job.service.js';
+import { getVerticalModule } from '../verticals/router.js';
+import type { OutgoingAction, VerticalModule, VerticalResult } from '../verticals/vertical.js';
 import { mediaAiService } from '../media/media-ai.service.js';
 import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
@@ -36,7 +36,8 @@ export class ArlesEngine {
           instanceName: company.evolution_instance,
           to: message.replyJid || message.phone,
           mediaUrl: action.mediaUrl,
-          caption: action.caption
+          caption: action.caption,
+          fileName: action.fileName
         });
         await logOutgoing({
           companyId: company.id,
@@ -47,28 +48,52 @@ export class ArlesEngine {
     }
   }
 
+  private async applyResult(
+    company: Company,
+    message: NormalizedMessage,
+    result: VerticalResult
+  ): Promise<void> {
+    if (result.pauseSeconds) {
+      await pauseConversation(company.id, message.phone, result.pauseSeconds);
+    }
+    if (result.actions.length) await this.sendActions(company, message, result.actions);
+    if (result.followup) {
+      await scheduleFollowup({
+        companyId: company.id,
+        phone: message.phone,
+        instanceName: company.evolution_instance,
+        replyJid: message.replyJid || message.phone,
+        sourceMessageId: message.messageId,
+        text: result.followup.text
+      }, result.followup.delaySeconds);
+    }
+  }
+
   private async processImage(
     company: Company,
     message: NormalizedMessage,
     module: VerticalModule
-  ): Promise<string | null> {
+  ): Promise<{ text?: string; result?: VerticalResult }> {
     try {
       const media = await evolution.getMediaBase64({
         instanceName: company.evolution_instance,
         messageId: message.messageId
       });
 
-      if (module.media?.handleImage) {
-        const result = await module.media.handleImage({ company, message, media });
-        if (result.actions?.length) {
-          await this.sendActions(company, message, result.actions);
-        }
-        if (result.consumed) return null;
-        if (result.messageText) return result.messageText;
+      const analysis = await mediaAiService.analyzeImage(
+        media.base64,
+        media.mimeType
+      );
+
+      if (module.handleImage) {
+        const result = await module.handleImage(
+          { company, message, combinedText: '' },
+          { ...media, ...analysis }
+        );
+        if (result) return { result };
       }
 
-      const analysis = await mediaAiService.analyzeImage(media.base64, media.mimeType);
-      return `[Imagem enviada pelo cliente]\n${analysis.description}`;
+      return { text: `[Imagem enviada pelo cliente]\n${analysis.description}` };
     } catch (error) {
       console.error('[Arles] falha processando imagem:', error);
 
@@ -78,7 +103,7 @@ export class ArlesEngine {
           'Não consegui analisar essa imagem agora. Pode tentar enviar novamente ou me explicar em texto? 😊'
       }]);
 
-      return null;
+      return {};
     }
   }
 
@@ -131,9 +156,9 @@ export class ArlesEngine {
       return;
     }
 
-    const module = moduleRegistry.resolveForCompany(company);
-    if (!module?.conversationHandler) {
-      console.warn(`[Arles] Módulo sem handler para o tenant: ${company.vertical}`);
+    const module = getVerticalModule(company.vertical);
+    if (!module) {
+      console.warn(`[Arles] Vertical sem módulo registrado: ${company.vertical}`);
       return;
     }
 
@@ -167,7 +192,12 @@ export class ArlesEngine {
     if (message.type === 'text') {
       messageText = message.text;
     } else if (message.type === 'image') {
-      messageText = await this.processImage(company, message, module);
+      const image = await this.processImage(company, message, module);
+      if (image.result) {
+        await this.applyResult(company, message, image.result);
+        return;
+      }
+      messageText = image.text ?? null;
     } else if (message.type === 'audio') {
       messageText = await this.processAudio(company, message);
     } else {
@@ -185,52 +215,21 @@ export class ArlesEngine {
     });
     if (!combinedText) return;
 
-    const intercepted = await module.beforeConversation?.({
-      company,
-      message,
-      combinedText
-    });
-    if (intercepted) {
-      if (intercepted.pauseSeconds) {
-        await pauseConversation(company.id, message.phone, intercepted.pauseSeconds);
+    if (module.handlePendingInteraction) {
+      const intercepted = await module.handlePendingInteraction({ company, message, combinedText });
+      if (intercepted) {
+        await this.applyResult(company, message, intercepted);
+        return;
       }
-      if (intercepted.actions.length) {
-        await this.sendActions(company, message, intercepted.actions);
-      }
-      return;
     }
 
     const result = await withConversationLock(company.id, message.phone, async () => {
-      return module.conversationHandler!.handle({ company, message, combinedText });
+      return module.handle({ company, message, combinedText });
     });
 
     if (!result) return;
 
-    const verticalResult = result as VerticalResult;
-    if (verticalResult.pauseSeconds) {
-      await pauseConversation(company.id, message.phone, verticalResult.pauseSeconds);
-    }
-
-    if (verticalResult.actions.length) {
-      await this.sendActions(company, message, verticalResult.actions);
-    }
-
-    if (verticalResult.followupEligible && module.createFollowup) {
-      const followup = await module.createFollowup(
-        { company, message, combinedText },
-        verticalResult
-      );
-      if (followup) {
-        await platformJobService.enqueue({
-          companyId: company.id,
-          moduleKey: module.key,
-          type: followup.type,
-          runAt: followup.runAt,
-          payload: followup.payload,
-          idempotencyKey: followup.idempotencyKey
-        });
-      }
-    }
+    await this.applyResult(company, message, result as VerticalResult);
   }
 }
 

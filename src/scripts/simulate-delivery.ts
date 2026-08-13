@@ -236,8 +236,8 @@ async function run(): Promise<void> {
       }
     }
 
-    if (response.followupEligible) {
-      console.log('ARLES   > [follow-up elegível em 30 min]');
+    if (response.followup) {
+      console.log(`ARLES   > [follow-up: ${response.followup.text}]`);
     }
 
     if (response.pauseSeconds) {

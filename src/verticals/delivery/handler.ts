@@ -37,6 +37,7 @@ import {
   saveSession
 } from './repository.js';
 import type { DeliveryDraft, DeliveryProduct } from './types.js';
+import { deliveryConfig } from './config.js';
 
 function textResult(text: string, extra: Partial<VerticalResult> = {}): VerticalResult {
   return { actions: [{ type: 'text', text }], ...extra };
@@ -444,7 +445,12 @@ export class DeliveryHandler implements VerticalHandler {
       });
 
       await saveSession({ companyId: company.id, phone: message.phone, state: 'idle', draft: null });
-      await markRecentConfirmedOrder(company.id, message.phone, order.id);
+        await markRecentConfirmedOrder(
+          company.id,
+          message.phone,
+          order.id,
+          deliveryConfig.recentConfirmedTtlSeconds
+        );
 
       const firstName = order.clientName.trim().split(/\s+/)[0];
       let response = firstName && firstName.toLowerCase() !== 'cliente'
@@ -477,7 +483,9 @@ export class DeliveryHandler implements VerticalHandler {
             pauseSeconds: env.humanPauseSeconds
           });
         }
-        return textResult(summary(draft), { followupEligible: true });
+        return textResult(summary(draft), {
+          followup: { text: 'Oi 😊 Quer confirmar seu pedido?' }
+        });
       default:
         return textResult('Me diz qual item do cardápio você quer pedir 😊');
     }

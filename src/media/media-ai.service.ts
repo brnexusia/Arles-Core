@@ -2,8 +2,8 @@ import OpenAI from 'openai';
 import { env } from '../config/env.js';
 
 export interface ImageAnalysis {
+  looksLikePaymentProof: boolean;
   description: string;
-  rawText: string;
 }
 
 export class MediaAiService {
@@ -13,13 +13,9 @@ export class MediaAiService {
     this.client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
   }
 
-  async analyzeImage(
-    base64: string,
-    mimeType: string,
-    instructions = 'Descreva objetivamente a imagem e os textos visíveis.'
-  ): Promise<ImageAnalysis> {
+  async analyzeImage(base64: string, mimeType: string): Promise<ImageAnalysis> {
     if (!this.client) {
-      return { description: 'Imagem enviada pelo cliente.', rawText: '' };
+      return { looksLikePaymentProof: false, description: 'Imagem enviada pelo cliente.' };
     }
 
     const response = await this.client.responses.create({
@@ -29,7 +25,7 @@ export class MediaAiService {
         content: [
           {
             type: 'input_text',
-            text: instructions
+            text: 'Analise a imagem enviada por um cliente. Na PRIMEIRA linha responda exatamente COMPROVANTE_PAGAMENTO: SIM se a imagem parecer um comprovante, recibo, transferência bancária ou tela de pagamento concluído; caso contrário responda exatamente COMPROVANTE_PAGAMENTO: NAO. Na segunda linha escreva DESCRICAO: e descreva objetivamente o que está visível, incluindo textos relevantes. Não afirme que o pagamento foi aprovado; apenas classifique se parece ou não um comprovante.'
           },
           {
             type: 'input_image',
@@ -40,11 +36,13 @@ export class MediaAiService {
     });
 
     const text = String(response.output_text ?? '').trim();
+    const looksLikePaymentProof = /COMPROVANTE_PAGAMENTO\s*:\s*SIM/i.test(text);
     const description = text
-      .replace(/^\s*(CLASSIFICAÇÃO|CLASSIFICACAO|DESCRIÇÃO|DESCRICAO)\s*:\s*/gim, '')
+      .replace(/COMPROVANTE_PAGAMENTO\s*:\s*(SIM|NAO|NÃO)/ig, '')
+      .replace(/^\s*DESCRICAO\s*:\s*/im, '')
       .trim() || 'Imagem enviada pelo cliente.';
 
-    return { description, rawText: text };
+    return { looksLikePaymentProof, description };
   }
 
   async transcribeAudio(base64: string, mimeType: string): Promise<string> {

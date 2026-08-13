@@ -3,12 +3,6 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { db } from '../infrastructure/db.js';
 import { redis } from '../infrastructure/redis.js';
 import { env } from '../config/env.js';
-import { moduleRegistry } from '../platform/modules/registry.js';
-
-export type AuthCapabilityView = {
-  status: 'active' | 'inactive' | 'suspended';
-  configuration: Record<string, unknown>;
-};
 
 export type AuthUserView = {
   id: string;
@@ -17,15 +11,8 @@ export type AuthUserView = {
   role: 'admin' | 'user';
   companyId: string;
   company: string;
-  capabilities: Record<string, AuthCapabilityView>;
-  modules: Array<{
-    key: string;
-    name: string;
-    capability: string;
-    ui: unknown;
-    onboardingSteps: unknown[];
-  }>;
-  has_delivery: boolean;
+  verticals: string[];
+  capabilities: string[];
   has_calendar: boolean;
   has_services: boolean;
   has_custom_metrics: boolean;
@@ -158,12 +145,8 @@ export class AuthService {
       role: 'admin' | 'user';
       company_id: string | null;
       company_name: string | null;
-      vertical: string | null;
-      capabilities: Array<{
-        key: string;
-        status: 'active' | 'inactive' | 'suspended';
-        configuration: Record<string, unknown>;
-      }> | null;
+      verticals: string[] | null;
+      capabilities: string[] | null;
     }>(
       `select
          u.id::text,
@@ -172,22 +155,21 @@ export class AuthService {
          u.role,
          u.company_id::text,
          c.name as company_name,
-         c.vertical,
-         coalesce(
-           jsonb_agg(
-             jsonb_build_object(
-               'key', cc.capability_key,
-               'status', cc.status,
-               'configuration', cc.configuration
-             )
-           ) filter (where cc.capability_key is not null),
-           '[]'::jsonb
-         ) as capabilities
+         coalesce((
+           select array_agg(cv.vertical_id order by cv.vertical_id)
+           from company_verticals cv
+           where cv.company_id = u.company_id and cv.enabled = true
+         ), array[]::text[]) as verticals,
+         coalesce((
+           select array_agg(distinct capability order by capability)
+           from company_verticals cv
+           join vertical_definitions vd on vd.id = cv.vertical_id
+           cross join lateral unnest(vd.capabilities) capability
+           where cv.company_id = u.company_id and cv.enabled = true
+         ), array[]::text[]) as capabilities
        from auth_users u
        left join companies c on c.id = u.company_id
-       left join company_capabilities cc on cc.company_id = c.id
        where u.id = $1
-       group by u.id, c.id
        limit 1`,
       [userId]
     );
@@ -195,39 +177,8 @@ export class AuthService {
     const row = result.rows[0];
     if (!row) return null;
 
-    const rows = Array.isArray(row.capabilities) ? row.capabilities : [];
-    const capabilities = Object.fromEntries(
-      rows.map(capability => [capability.key, {
-        status: capability.status,
-        configuration: capability.configuration ?? {}
-      }])
-    );
-
-    // Compatibilidade para bancos em rollout: a projeção vertical permanece
-    // válida até todos os tenants possuírem company_capabilities.
-    const projectedDelivery = row.role === 'user' && (row.vertical || 'delivery') === 'delivery';
-    if (projectedDelivery && !capabilities['vertical.delivery']) {
-      capabilities['vertical.delivery'] = { status: 'active', configuration: {} };
-    }
-
-    const activeKeys = new Set(
-      Object.entries(capabilities)
-        .filter(([, value]) => value.status === 'active')
-        .map(([key]) => key)
-    );
-
-    const modules = moduleRegistry.list()
-      .map(module => {
-        const capability = module.capabilities.find(item => activeKeys.has(item.key));
-        return capability ? {
-          key: module.key,
-          name: module.metadata.name,
-          capability: capability.key,
-          ui: module.ui ?? null,
-          onboardingSteps: module.onboardingSteps ?? []
-        } : null;
-      })
-      .filter((module): module is NonNullable<typeof module> => module !== null);
+    const verticals = row.verticals ?? [];
+    const capabilities = row.capabilities ?? [];
 
     return {
       id: row.id,
@@ -236,9 +187,8 @@ export class AuthService {
       role: row.role,
       companyId: row.company_id || 'admin',
       company: row.company_name || 'Admin',
+      verticals,
       capabilities,
-      modules,
-      has_delivery: capabilities['vertical.delivery']?.status === 'active',
       has_calendar: false,
       has_services: false,
       has_custom_metrics: false
@@ -251,17 +201,26 @@ export class AuthService {
     email: string;
     phone: string;
     password: string;
+    verticalId: string;
   }): Promise<AuthResult> {
     const email = emailNorm(input.email);
     const phone = phoneNorm(input.phone);
     const name = input.name.trim();
     const companyName = input.companyName.trim();
     const password = input.password;
+    const verticalId = input.verticalId.trim().toLowerCase();
 
     if (!name || !companyName) throw new Error('FIELDS_REQUIRED');
     if (!validEmail(email)) throw new Error('EMAIL_INVALID');
     if (password.length < 6) throw new Error('PASSWORD_TOO_SHORT');
     if (phone.length < 10 || phone.length > 15) throw new Error('PHONE_INVALID');
+    if (!/^[a-z][a-z0-9_-]{1,31}$/.test(verticalId)) throw new Error('VERTICAL_REQUIRED');
+
+    const vertical = await db.query(
+      `select 1 from vertical_definitions where id = $1 and enabled = true limit 1`,
+      [verticalId]
+    );
+    if (!vertical.rowCount) throw new Error('VERTICAL_NOT_FOUND');
 
     const existing = await db.query(
       `select 1 from auth_users where email_normalized = $1 limit 1`,
@@ -281,10 +240,6 @@ export class AuthService {
 
     const companyId = randomUUID();
     const userId = randomUUID();
-    const initialModule = moduleRegistry.defaultModule();
-    const initialCapability = initialModule.capabilities.find(item => item.required)
-      ?? initialModule.capabilities[0];
-    if (!initialCapability) throw new Error('DEFAULT_MODULE_CAPABILITY_MISSING');
     const now = new Date();
     const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const passwordHash = await bcrypt.hash(password, 12);
@@ -295,22 +250,28 @@ export class AuthService {
 
       await client.query(
         `insert into companies(
-           id,name,slug,vertical,evolution_instance,
+           id,name,slug,vertical,active_vertical_id,evolution_instance,
            subscription_status,access_active,trial_started_at,trial_ends_at,
            legacy_supabase_migrated,created_at,updated_at
          ) values(
-           $1,$2,$3,$4,$5,
+           $1,$2,$3,$4,$4,$5,
            'trial',true,$6,$7,true,now(),now()
          )`,
         [
           companyId,
           companyName,
-          `${initialModule.key}-${companyId.replace(/-/g, '').slice(0, 16)}`,
-          initialModule.key,
+          `arles-${companyId.replace(/-/g, '').slice(0, 16)}`,
+          verticalId,
           deterministicInstance(companyId),
           now,
           trialEndsAt
         ]
+      );
+
+      await client.query(
+        `insert into company_verticals(company_id, vertical_id, enabled, onboarding_completed)
+         values($1,$2,true,false)`,
+        [companyId, verticalId]
       );
 
       await client.query(
@@ -332,14 +293,6 @@ export class AuthService {
          values($1,$2::jsonb)
          on conflict(company_id) do nothing`,
         [companyId, JSON.stringify({ email, phone, display_name: companyName })]
-      );
-
-      await client.query(
-        `insert into company_capabilities(company_id,capability_key,status,configuration)
-         values($1,$2,'active','{}'::jsonb)
-         on conflict(company_id,capability_key) do update set
-           status='active', updated_at=now()`,
-        [companyId, initialCapability.key]
       );
 
       await client.query(

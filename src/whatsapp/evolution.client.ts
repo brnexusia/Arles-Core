@@ -114,6 +114,7 @@ export class EvolutionClient {
     to: string;
     mediaUrl: string;
     caption?: string;
+    fileName?: string;
   }): Promise<void> {
     const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendMediaPath, input.instanceName);
     const response = await fetch(endpoint, {
@@ -125,7 +126,7 @@ export class EvolutionClient {
         mimetype: 'image/jpeg',
         media: input.mediaUrl,
         caption: input.caption ?? '',
-        fileName: 'cardapio.jpg'
+        fileName: input.fileName || 'image.jpg'
       })
     });
 

@@ -45,17 +45,18 @@ export class PanelService {
 
     await db.query(
       `insert into companies (
-         id, name, slug, vertical, evolution_instance,
+         id, name, slug, vertical, active_vertical_id, evolution_instance,
          subscription_status, access_active, trial_started_at, trial_ends_at,
          instagram, store_info_completed, whatsapp_completed, onboarding_completed, logo_url,
          created_at, updated_at
        ) values (
-         $1, $2, $3, 'delivery', $4,
+         $1, $2, $3, 'delivery', 'delivery', $4,
          $5, true, $6::timestamptz, $7::timestamptz,
          $8, $9, $10, $11, $12, now(), now()
        )
        on conflict (id) do update set
          name = excluded.name,
+         active_vertical_id = 'delivery',
          subscription_status = excluded.subscription_status,
          trial_started_at = coalesce(excluded.trial_started_at, companies.trial_started_at),
          trial_ends_at = coalesce(excluded.trial_ends_at, companies.trial_ends_at),
@@ -65,7 +66,7 @@ export class PanelService {
       [
         input.id,
         input.name || 'Delivery',
-        `delivery-${input.id.replace(/-/g, '').slice(0, 16)}`,
+        `arles-${input.id.replace(/-/g, '').slice(0, 16)}`,
         instance,
         input.subscriptionStatus || 'trial',
         input.trialStartedAt || null,
@@ -76,6 +77,16 @@ export class PanelService {
         input.onboardingCompleted === true,
         input.logoUrl || null
       ]
+    );
+
+    await db.query(
+      `insert into company_verticals(company_id, vertical_id, enabled, onboarding_completed)
+       values($1, 'delivery', true, $2)
+       on conflict(company_id, vertical_id) do update set
+         enabled = true,
+         onboarding_completed = excluded.onboarding_completed,
+         updated_at = now()`,
+      [input.id, input.onboardingCompleted === true]
     );
 
     await db.query(
@@ -108,6 +119,12 @@ export class PanelService {
       `update companies
        set onboarding_completed = $2, updated_at = now()
        where id = $1`,
+      [companyId, complete]
+    );
+    await db.query(
+      `update company_verticals
+       set onboarding_completed = $2, updated_at = now()
+       where company_id = $1 and vertical_id = 'delivery'`,
       [companyId, complete]
     );
   }
@@ -147,20 +164,16 @@ export class PanelService {
   async listCustomers(companyId: string) {
     const result = await db.query(
       `select c.id::text, c.company_id::text, c.name, c.phone_number, c.notes,
-              coalesce(p.default_address,c.default_address) as default_address,
-              coalesce(p.favorite_payment,c.favorite_payment) as favorite_payment,
-              coalesce(p.last_rating,c.last_rating) as last_rating,
-              coalesce(p.last_review_at,c.last_review_at) as last_review_at,
-              coalesce(p.total_orders,c.total_orders) as orders_count,
-              coalesce(p.total_spent,c.total_spent)::float8 as total_spent,
+              c.default_address, c.favorite_payment, c.last_rating, c.last_review_at,
+              c.total_orders as orders_count,
+              c.total_spent::float8 as total_spent,
               c.first_seen_at as first_order_at, c.first_seen_at, c.last_seen_at,
               coalesce(max(o.created_at), c.last_seen_at) as last_order_at,
               c.created_at
        from customers c
-       left join delivery_customer_profiles p on p.customer_id=c.id and p.company_id=c.company_id
        left join delivery_orders o on o.customer_id = c.id and o.company_id = c.company_id
        where c.company_id = $1
-       group by c.id,p.customer_id
+       group by c.id
        order by c.last_seen_at desc`,
       [companyId]
     );
@@ -266,7 +279,7 @@ export class PanelService {
         const absolute = Number(variation.price);
         if (!Number.isFinite(absolute)) continue;
         await client.query(
-          `insert into product_variations(product_id,name,price_delta,is_active)
+          `insert into delivery_product_variations(product_id,name,price_delta,is_active)
            values($1,$2,$3,true)`,
           [productId,cleanString(variation.name),Math.round((absolute-Number(base.rows[0].price))*100)/100]
         );
@@ -312,10 +325,10 @@ export class PanelService {
         );
       }
 
-      for (const asset of Array.isArray(payload.menu_assets) ? payload.menu_assets : []) {
+      for (const asset of Array.isArray(payload.delivery_menu_assets) ? payload.delivery_menu_assets : []) {
         const url=cleanString(asset.image_url || asset.asset_url); if(!url) continue;
         await client.query(
-          `insert into menu_assets(company_id,page_number,asset_url,type,category,is_active,created_at)
+          `insert into delivery_menu_assets(company_id,page_number,asset_url,type,category,is_active,created_at)
            values($1,$2,$3,$4,$5,$6,coalesce($7::timestamptz,now()))`,
           [companyId,Number(asset.page_number)||1,url,cleanString(asset.type)||'menu_page',cleanString(asset.category)||null,asset.is_active!==false,asset.created_at||null]
         );
@@ -368,7 +381,7 @@ export class PanelService {
                     end,
                     v.name
                 )
-                from product_variations v
+                from delivery_product_variations v
                 where v.product_id = p.id
               ), '[]'::jsonb) as variations
        from delivery_products p
@@ -482,14 +495,14 @@ export class PanelService {
             productId = inserted.rows[0]!.id;
           }
 
-          await client.query(`delete from product_variations where product_id = $1`, [productId]);
+          await client.query(`delete from delivery_product_variations where product_id = $1`, [productId]);
           for (const variation of Array.isArray(rawProduct?.variations) ? rawProduct.variations : []) {
             const variationName = cleanString(variation?.name);
             const variationPrice = Number(variation?.price);
             if (!variationName || !Number.isFinite(variationPrice)) continue;
             const delta = Math.round((variationPrice - price) * 100) / 100;
             await client.query(
-              `insert into product_variations (product_id, name, price_delta, is_active)
+              `insert into delivery_product_variations (product_id, name, price_delta, is_active)
                values ($1, $2, $3, true)`,
               [productId, variationName, delta]
             );
@@ -595,7 +608,7 @@ export class PanelService {
     const result = await db.query(
       `select id::text, company_id::text, page_number,
               asset_url as image_url, type, category, is_active, created_at
-       from menu_assets
+       from delivery_menu_assets
        where company_id = $1 and is_active = true
        order by page_number asc, created_at asc`,
       [companyId]
@@ -608,7 +621,7 @@ export class PanelService {
     const client = await db.connect();
     try {
       await client.query('begin');
-      await client.query(`delete from menu_assets where company_id = $1`, [companyId]);
+      await client.query(`delete from delivery_menu_assets where company_id = $1`, [companyId]);
       await client.query(`delete from media_files where company_id = $1 and kind = 'menu_asset'`, [companyId]);
 
       const assets = [];
@@ -620,8 +633,9 @@ export class PanelService {
         const { mimeType, bytes } = toBase64Payload(image);
         if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new Error('Imagem de cardápio inválida');
         const media = await client.query<{ public_token: string }>(
-          `insert into media_files (company_id, kind, mime_type, data, size_bytes)
-           values ($1, 'menu_asset', $2, $3, $4)
+          `insert into media_files (
+             company_id, owner_vertical, owner_type, kind, mime_type, data, size_bytes
+           ) values ($1, 'delivery', 'menu', 'menu_asset', $2, $3, $4)
            returning public_token::text`,
           [companyId, mimeType, bytes, bytes.length]
         );
@@ -629,7 +643,7 @@ export class PanelService {
         const pageNumber = Number((page as any).page_number);
         const normalizedPage = Number.isFinite(pageNumber) ? pageNumber : fallbackPage;
         const asset = await client.query(
-          `insert into menu_assets (company_id, page_number, asset_url, type, category, is_active)
+          `insert into delivery_menu_assets (company_id, page_number, asset_url, type, category, is_active)
            values ($1, $2, $3, 'menu_page', $4, true)
            returning id::text, company_id::text, page_number,
                      asset_url as image_url, type, category, is_active, created_at`,

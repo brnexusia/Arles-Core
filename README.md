@@ -1,56 +1,45 @@
-# Arles Core v1.5.5
+# Arles Core v2.0.0
 
-Motor multi-tenant do ecossistema Arles, atualmente com a vertical Delivery.
-Ele centraliza autenticação, sessões, empresas, billing, cardápio, pedidos,
-clientes, WhatsApp, IA, follow-up e pós-venda.
+Motor multi-tenant e multi-vertical do ecossistema Arles.
 
-Esta árvore consolida a base integral do Core e todos os patches feitos até a
-correção de sessão `v1.5.5` de 11/08/2026.
+O Core centraliza autenticacao, empresas, sessoes, billing, canais, mensagens,
+midia, automacoes e infraestrutura. Regras de negocio ficam em modulos de
+vertical registrados pelo contrato `VerticalModule`.
 
-## Stack
+## Arquitetura
 
-- Node.js 22 + TypeScript;
-- Fastify;
-- PostgreSQL;
-- Redis;
-- OpenAI;
-- Evolution API;
-- Vitest.
+- `src/core`: recepcao e roteamento de mensagens;
+- `src/auth`: cadastro, login e sessoes;
+- `src/billing`: assinatura, limites e eventos Stripe;
+- `src/media`: processamento e armazenamento global de midia;
+- `src/infrastructure`: PostgreSQL e Redis;
+- `src/verticals`: contrato, registro e modulos instalados;
+- `src/verticals/delivery`: primeira vertical, isolada do motor;
+- `migrations/006_vertical_engine.sql`: capabilities, associacao de verticais,
+  contatos globais e separacao dos dados Delivery.
 
-## Estrutura
+## Contrato de vertical
 
-- `src/auth`: cadastro, login, sessão assinada e logout;
-- `src/billing`: contexto de assinatura e eventos Stripe;
-- `src/panel`: API interna consumida pelo Arles Delivery;
-- `src/menu`: análise assíncrona e normalização de cardápios;
-- `src/verticals/delivery`: regras determinísticas do delivery;
-- `src/ai`: interpretação de intenção e resposta conversacional;
-- `src/whatsapp`: cliente Evolution e normalização de mensagens;
-- `src/workers`: follow-up;
-- `migrations`: schema `001_core` até `005_auth_billing`;
-- `tests`: cardápio e regras do delivery.
+Uma vertical implementa `VerticalModule` e declara:
 
-## Atualizações incorporadas
+- identificador, nome, versao e capabilities;
+- manipulador de mensagens;
+- manipuladores opcionais de midia e interacoes pendentes;
+- rotas internas opcionais.
 
-- v1.0: engine Delivery completo, mídia, Pix, follow-up e pós-venda;
-- v1.1: integração do painel e migration `004_panel_bridge`;
-- v1.2–v1.3: importação de cardápio assíncrona, robusta e deduplicada;
-- v1.4: autenticação, trial e billing no PostgreSQL;
-- v1.5: fluxo limpo sem migração de contas Supabase;
-- v1.5.1: correções finais de cadastro/login;
-- v1.5.5: token de sessão assinado com HMAC-SHA256, validado sem depender de
-  uma segunda leitura imediata do PostgreSQL. O registro em `auth_sessions`
-  permanece para auditoria e o logout revoga o token no Redis.
+Os modulos oficiais sao registrados em `src/verticals/index.ts`. O servidor,
+engine, autenticacao e billing nao precisam conhecer a implementacao de uma
+vertical.
 
 ## Desenvolvimento
 
 ```bash
-npm install
+npm ci
 cp .env.example .env
 npm run dev
 ```
 
-## Validação
+## Validacao
 
 ```bash
 npm run typecheck
@@ -58,37 +47,16 @@ npm test
 npm run build
 ```
 
-## Deploy no Easypanel
+Os testes de fronteira impedem que `server.ts`, `core/engine.ts`, autenticacao
+ou billing voltem a importar a implementacao do Delivery.
 
-1. Configure as variáveis de `.env.example`.
-2. Use o `Dockerfile` da raiz.
-3. Implante o serviço com PostgreSQL e Redis acessíveis.
-4. O comando de produção executa as migrations antes de iniciar o servidor.
-5. Valide `GET /health`.
+## Deploy
 
-Resposta esperada:
+1. Atualize as variaveis conforme `.env.example`.
+2. Implante o Core antes do painel Delivery.
+3. O comando de producao aplica as migrations antes de iniciar.
+4. Valide `GET /health` e confirme a versao `2.0.0`.
+5. Implante o Arles Delivery atualizado para os endpoints modulares.
 
-```json
-{
-  "ok": true,
-  "service": "arles-engine",
-  "version": "1.5.5"
-}
-```
-
-## Sessão v1.5.5
-
-Defina `AUTH_SESSION_SECRET` com uma chave longa e aleatória. Se a variável não
-existir, o Core usa `INTERNAL_API_KEY` como fallback compatível.
-
-O fluxo validado é:
-
-1. `POST /internal/auth/login` cria e grava a sessão;
-2. `POST /internal/auth/session` valida assinatura e expiração;
-3. o painel mantém o usuário autenticado;
-4. logout revoga o token no Redis até a expiração.
-
-## Migrations
-
-As migrations são registradas em `schema_migrations`. Não edite migrations já
-aplicadas; novas alterações devem receber um novo número sequencial.
+As migrations sao registradas com checksum. Nao edite migrations ja aplicadas;
+adicione uma nova migration para mudancas futuras.

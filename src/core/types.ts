@@ -1,17 +1,10 @@
-export type CapabilityStatus = 'active' | 'inactive' | 'suspended';
-
-export interface CompanyCapability {
-  key: string;
-  status: CapabilityStatus;
-  configuration: Record<string, unknown>;
-}
+export type Vertical = string;
 
 export interface Company {
   id: string;
   name: string;
   slug: string;
-  vertical: string;
-  capabilities: CompanyCapability[];
+  vertical: Vertical;
   evolution_instance: string;
   subscription_status: string;
   access_active: boolean;

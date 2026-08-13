@@ -60,6 +60,9 @@ function authError(reply: FastifyReply, error: unknown) {
   if (code === 'FIELDS_REQUIRED') {
     return reply.code(400).send({ error: 'Preencha todos os campos obrigatórios.', code });
   }
+  if (code === 'VERTICAL_REQUIRED' || code === 'VERTICAL_NOT_FOUND') {
+    return reply.code(400).send({ error: 'Vertical inválida ou indisponível.', code });
+  }
 
   console.error('[Auth]', error);
   return reply.code(500).send({ error: 'AUTH_INTERNAL_ERROR', code });
@@ -75,7 +78,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         companyName: String(body.company_name ?? body.companyName ?? ''),
         email: String(body.email ?? ''),
         phone: String(body.phone ?? ''),
-        password: String(body.password ?? '')
+        password: String(body.password ?? ''),
+        verticalId: String(body.vertical_id ?? body.verticalId ?? '')
       });
       return reply.send({
         ok: true,

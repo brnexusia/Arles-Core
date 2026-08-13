@@ -47,5 +47,6 @@ export const env = {
   messageBufferMs: numberEnv('MESSAGE_BUFFER_MS', 350),
   messageLockMs: numberEnv('MESSAGE_LOCK_MS', 15000),
   humanPauseSeconds: numberEnv('HUMAN_PAUSE_SECONDS', 3600),
-  jobWorkerIntervalMs: numberEnv('JOB_WORKER_INTERVAL_MS', 15000)
+  followupDelaySeconds: numberEnv('FOLLOWUP_DELAY_SECONDS', 1800),
+  followupWorkerIntervalMs: numberEnv('FOLLOWUP_WORKER_INTERVAL_MS', 15000)
 };
