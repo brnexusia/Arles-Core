@@ -16,14 +16,17 @@ describe('route composition', () => {
       import('../src/platform/platform.routes.js'),
       import('../src/verticals/delivery/routes.js')
     ]);
+    const { registerBeautyRoutes } = await import('../src/verticals/beauty/routes.js');
     const app = Fastify();
 
     await registerPlatformRoutes(app);
     await registerDeliveryRoutes(app);
+    await registerBeautyRoutes(app);
     await expect(app.ready()).resolves.toBe(app);
 
     expect(app.hasRoute({ method: 'GET', url: '/internal/platform/company' })).toBe(true);
     expect(app.hasRoute({ method: 'GET', url: '/internal/verticals/delivery/orders' })).toBe(true);
+    expect(app.hasRoute({ method: 'GET', url: '/internal/verticals/beauty/appointments' })).toBe(true);
 
     await app.close();
   });

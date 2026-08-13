@@ -275,6 +275,17 @@ export class AuthService {
       );
 
       await client.query(
+        `insert into company_capabilities(company_id,capability_key,status)
+         select $1,'vertical.' || id,'active'
+         from vertical_definitions where id=$2
+         union all
+         select $1,unnest(capabilities),'active'
+         from vertical_definitions where id=$2
+         on conflict(company_id,capability_key) do update set status='active',updated_at=now()`,
+        [companyId, verticalId]
+      );
+
+      await client.query(
         `insert into auth_users(
            id,company_id,email,email_normalized,password_hash,name,phone,role,created_at,updated_at
          ) values($1,$2,$3,$3,$4,$5,$6,'user',now(),now())`,
