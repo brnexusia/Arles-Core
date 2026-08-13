@@ -22,30 +22,6 @@ FROM companies
 WHERE coalesce(vertical, '') <> ''
 ON CONFLICT (company_id, capability_key) DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS delivery_customer_profiles (
-  customer_id uuid PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
-  company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  default_address text,
-  favorite_payment text,
-  total_orders integer NOT NULL DEFAULT 0,
-  total_spent numeric(12,2) NOT NULL DEFAULT 0,
-  last_rating integer,
-  last_review_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE(company_id, customer_id)
-);
-
-INSERT INTO delivery_customer_profiles(
-  customer_id, company_id, default_address, favorite_payment,
-  total_orders, total_spent, last_rating, last_review_at
-)
-SELECT
-  id, company_id, default_address, favorite_payment,
-  total_orders, total_spent, last_rating, last_review_at
-FROM customers
-ON CONFLICT (customer_id) DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS media_links (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,

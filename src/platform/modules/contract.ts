@@ -3,7 +3,7 @@ import type { Company, NormalizedMessage } from '../../core/types.js';
 
 export type OutgoingAction =
   | { type: 'text'; text: string }
-  | { type: 'image'; mediaUrl: string; caption?: string };
+  | { type: 'image'; mediaUrl: string; caption?: string; fileName?: string };
 
 export interface ModuleResult {
   actions: OutgoingAction[];
