@@ -1,7 +1,7 @@
-import { deliveryIntentService } from '../../ai/delivery-intent.service.js';
-import { deliveryConversationService } from '../../ai/delivery-conversation.service.js';
+import { deliveryIntentService } from './ai/intent.service.js';
+import { deliveryConversationService } from './ai/conversation.service.js';
 import { env } from '../../config/env.js';
-import { getRecentConfirmedOrder, markRecentConfirmedOrder } from '../../infrastructure/redis.js';
+import { getRecentConfirmedOrder, markRecentConfirmedOrder } from './state.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import {
   brl,

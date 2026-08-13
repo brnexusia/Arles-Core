@@ -1,8 +1,8 @@
-import { db } from '../infrastructure/db.js';
-import { env } from '../config/env.js';
-import { evolution } from '../whatsapp/evolution.client.js';
-import { deliveryPostSaleService } from '../post-sale/delivery-post-sale.service.js';
-import { updatePaymentStatus } from '../verticals/delivery/repository.js';
+import { db } from '../../infrastructure/db.js';
+import { env } from '../../config/env.js';
+import { evolution } from '../../whatsapp/evolution.client.js';
+import { deliveryPostSaleService } from './post-sale.service.js';
+import { updatePaymentStatus } from './repository.js';
 import { randomUUID } from 'node:crypto';
 
 export type PanelCompanyBootstrap = {
@@ -147,16 +147,20 @@ export class PanelService {
   async listCustomers(companyId: string) {
     const result = await db.query(
       `select c.id::text, c.company_id::text, c.name, c.phone_number, c.notes,
-              c.default_address, c.favorite_payment, c.last_rating, c.last_review_at,
-              c.total_orders as orders_count,
-              c.total_spent::float8 as total_spent,
+              coalesce(p.default_address,c.default_address) as default_address,
+              coalesce(p.favorite_payment,c.favorite_payment) as favorite_payment,
+              coalesce(p.last_rating,c.last_rating) as last_rating,
+              coalesce(p.last_review_at,c.last_review_at) as last_review_at,
+              coalesce(p.total_orders,c.total_orders) as orders_count,
+              coalesce(p.total_spent,c.total_spent)::float8 as total_spent,
               c.first_seen_at as first_order_at, c.first_seen_at, c.last_seen_at,
               coalesce(max(o.created_at), c.last_seen_at) as last_order_at,
               c.created_at
        from customers c
+       left join delivery_customer_profiles p on p.customer_id=c.id and p.company_id=c.company_id
        left join delivery_orders o on o.customer_id = c.id and o.company_id = c.company_id
        where c.company_id = $1
-       group by c.id
+       group by c.id,p.customer_id
        order by c.last_seen_at desc`,
       [companyId]
     );

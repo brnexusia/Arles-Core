@@ -1,3 +1,4 @@
+/** Delivery menu normalization contract. */
 export type MenuVariation = {
   name: string;
   price: number;

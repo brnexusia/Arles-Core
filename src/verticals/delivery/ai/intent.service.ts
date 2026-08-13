@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
-import { env } from '../config/env.js';
+import { env } from '../../../config/env.js';
 
 const ProductRequestSchema = z.object({
   query: z.string(),

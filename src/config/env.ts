@@ -46,10 +46,6 @@ export const env = {
 
   messageBufferMs: numberEnv('MESSAGE_BUFFER_MS', 350),
   messageLockMs: numberEnv('MESSAGE_LOCK_MS', 15000),
-  recentConfirmedTtlSeconds: numberEnv('RECENT_CONFIRMED_TTL_SECONDS', 86400),
   humanPauseSeconds: numberEnv('HUMAN_PAUSE_SECONDS', 3600),
-  followupDelaySeconds: numberEnv('FOLLOWUP_DELAY_SECONDS', 1800),
-  followupWorkerIntervalMs: numberEnv('FOLLOWUP_WORKER_INTERVAL_MS', 15000),
-  reviewTtlSeconds: numberEnv('REVIEW_TTL_SECONDS', 604800),
-  pixProofMaxAgeHours: numberEnv('PIX_PROOF_MAX_AGE_HOURS', 8)
+  jobWorkerIntervalMs: numberEnv('JOB_WORKER_INTERVAL_MS', 15000)
 };

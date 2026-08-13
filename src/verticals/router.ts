@@ -1,10 +1,6 @@
+import { moduleRegistry } from '../platform/modules/registry.js';
 import type { VerticalHandler } from './vertical.js';
-import { deliveryHandler } from './delivery/handler.js';
-
-const handlers = new Map<string, VerticalHandler>([
-  ['delivery', deliveryHandler]
-]);
 
 export function getVerticalHandler(vertical: string): VerticalHandler | null {
-  return handlers.get(vertical) ?? null;
+  return moduleRegistry.get(vertical)?.conversationHandler ?? null;
 }

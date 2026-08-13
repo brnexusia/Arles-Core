@@ -2,28 +2,20 @@ import { getCompanyByInstance, companyCanUseEngine } from './company.repository.
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
   bufferTextMessage,
-  clearAwaitingReview,
   consumeSystemSending,
-  getAwaitingReview,
   isConversationPaused,
   markSystemSending,
   onceMessage,
   pauseConversation,
-  scheduleFollowup,
   setLastInbound,
   withConversationLock
 } from '../infrastructure/redis.js';
 import { evolution } from '../whatsapp/evolution.client.js';
 import { isMessageUpsert, normalizeEvolutionMessage } from '../whatsapp/normalize.js';
-import { getVerticalHandler } from '../verticals/router.js';
-import type { OutgoingAction, VerticalResult } from '../verticals/vertical.js';
+import { moduleRegistry } from '../platform/modules/registry.js';
+import type { OutgoingAction, VerticalModule, VerticalResult } from '../platform/modules/contract.js';
+import { platformJobService } from '../platform/jobs/job.service.js';
 import { mediaAiService } from '../media/media-ai.service.js';
-import {
-  getPendingPixOrder,
-  registerReview,
-  savePixProof
-} from '../verticals/delivery/repository.js';
-import { parseRating } from '../verticals/delivery/helpers.js';
 import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
 
@@ -55,38 +47,10 @@ export class ArlesEngine {
     }
   }
 
-  private async handleReviewIfPending(company: Company, message: NormalizedMessage, text: string): Promise<boolean> {
-    const pending = await getAwaitingReview(company.id, message.phone);
-    if (!pending) return false;
-
-    const rating = parseRating(text);
-    if (!rating) return false;
-
-    await registerReview({
-      companyId: company.id,
-      orderId: pending.orderId,
-      customerName: pending.clientName,
-      phone: message.phone,
-      rating
-    });
-    await clearAwaitingReview(company.id, message.phone);
-
-    let instagram = pending.companyInstagram.trim()
-      .replace(/^https?:\/\/(www\.)?instagram\.com\//i, '')
-      .replace(/\/.*$/, '')
-      .replace(/^@/, '');
-
-    const response = rating >= 4
-      ? `Aee! 💙 Obrigado pela nota ${rating}/5. Se postar seu pedido, marca ${instagram ? `@${instagram}` : pending.companyName || 'a gente'} e @arlesdelivery pra gente ver 😄`
-      : `Obrigado pela nota ${rating}/5 💙 Seu feedback ajuda a gente a melhorar.`;
-
-    await this.sendActions(company, message, [{ type: 'text', text: response }]);
-    return true;
-  }
-
   private async processImage(
     company: Company,
-    message: NormalizedMessage
+    message: NormalizedMessage,
+    module: VerticalModule
   ): Promise<string | null> {
     try {
       const media = await evolution.getMediaBase64({
@@ -94,47 +58,16 @@ export class ArlesEngine {
         messageId: message.messageId
       });
 
-      const pendingPix = await getPendingPixOrder(
-        company.id,
-        message.phone
-      );
-
-      const analysis = await mediaAiService.analyzeImage(
-        media.base64,
-        media.mimeType
-      );
-
-      if (pendingPix) {
-        if (!analysis.looksLikePixProof) {
-          await this.sendActions(company, message, [{
-            type: 'text',
-            text:
-              'Recebi a imagem, mas não consegui identificar um comprovante de Pix. Pode me enviar uma foto ou print do comprovante? 😊'
-          }]);
-          return null;
+      if (module.media?.handleImage) {
+        const result = await module.media.handleImage({ company, message, media });
+        if (result.actions?.length) {
+          await this.sendActions(company, message, result.actions);
         }
-
-        await savePixProof({
-          companyId: company.id,
-          orderId: pendingPix.id,
-          expectedPaymentStatus: pendingPix.payment_status,
-          mimeType: media.mimeType.startsWith('image/')
-            ? media.mimeType
-            : 'image/jpeg',
-          bytes: Buffer.from(media.base64, 'base64')
-        });
-
-        await this.sendActions(company, message, [{
-          type: 'text',
-          text:
-            `Recebi seu comprovante 😊 Ele foi anexado somente ao pedido #${pendingPix.id
-              .slice(0, 4)
-              .toUpperCase()} e está aguardando a conferência da equipe.`
-        }]);
-
-        return null;
+        if (result.consumed) return null;
+        if (result.messageText) return result.messageText;
       }
 
+      const analysis = await mediaAiService.analyzeImage(media.base64, media.mimeType);
       return `[Imagem enviada pelo cliente]\n${analysis.description}`;
     } catch (error) {
       console.error('[Arles] falha processando imagem:', error);
@@ -198,6 +131,12 @@ export class ArlesEngine {
       return;
     }
 
+    const module = moduleRegistry.resolveForCompany(company);
+    if (!module?.conversationHandler) {
+      console.warn(`[Arles] Módulo sem handler para o tenant: ${company.vertical}`);
+      return;
+    }
+
     // Mensagem escrita manualmente pela loja pausa a IA por 1h.
     // Mensagens enviadas pelo próprio Arles possuem marcador curto e são ignoradas.
     if (message.fromMe) {
@@ -228,7 +167,7 @@ export class ArlesEngine {
     if (message.type === 'text') {
       messageText = message.text;
     } else if (message.type === 'image') {
-      messageText = await this.processImage(company, message);
+      messageText = await this.processImage(company, message, module);
     } else if (message.type === 'audio') {
       messageText = await this.processAudio(company, message);
     } else {
@@ -246,15 +185,23 @@ export class ArlesEngine {
     });
     if (!combinedText) return;
 
-    if (await this.handleReviewIfPending(company, message, combinedText)) return;
+    const intercepted = await module.beforeConversation?.({
+      company,
+      message,
+      combinedText
+    });
+    if (intercepted) {
+      if (intercepted.pauseSeconds) {
+        await pauseConversation(company.id, message.phone, intercepted.pauseSeconds);
+      }
+      if (intercepted.actions.length) {
+        await this.sendActions(company, message, intercepted.actions);
+      }
+      return;
+    }
 
     const result = await withConversationLock(company.id, message.phone, async () => {
-      const handler = getVerticalHandler(company.vertical);
-      if (!handler) {
-        console.warn(`[Arles] Vertical ainda sem handler: ${company.vertical}`);
-        return null;
-      }
-      return handler.handle({ company, message, combinedText });
+      return module.conversationHandler!.handle({ company, message, combinedText });
     });
 
     if (!result) return;
@@ -268,15 +215,21 @@ export class ArlesEngine {
       await this.sendActions(company, message, verticalResult.actions);
     }
 
-    if (verticalResult.followupEligible) {
-      await scheduleFollowup({
-        companyId: company.id,
-        phone: message.phone,
-        instanceName: company.evolution_instance,
-        replyJid: message.replyJid || message.phone,
-        sourceMessageId: message.messageId,
-        text: 'Oi 😊 Quer confirmar seu pedido?'
-      });
+    if (verticalResult.followupEligible && module.createFollowup) {
+      const followup = await module.createFollowup(
+        { company, message, combinedText },
+        verticalResult
+      );
+      if (followup) {
+        await platformJobService.enqueue({
+          companyId: company.id,
+          moduleKey: module.key,
+          type: followup.type,
+          runAt: followup.runAt,
+          payload: followup.payload,
+          idempotencyKey: followup.idempotencyKey
+        });
+      }
     }
   }
 }

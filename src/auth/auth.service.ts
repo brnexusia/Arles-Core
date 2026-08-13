@@ -3,6 +3,12 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { db } from '../infrastructure/db.js';
 import { redis } from '../infrastructure/redis.js';
 import { env } from '../config/env.js';
+import { moduleRegistry } from '../platform/modules/registry.js';
+
+export type AuthCapabilityView = {
+  status: 'active' | 'inactive' | 'suspended';
+  configuration: Record<string, unknown>;
+};
 
 export type AuthUserView = {
   id: string;
@@ -11,6 +17,14 @@ export type AuthUserView = {
   role: 'admin' | 'user';
   companyId: string;
   company: string;
+  capabilities: Record<string, AuthCapabilityView>;
+  modules: Array<{
+    key: string;
+    name: string;
+    capability: string;
+    ui: unknown;
+    onboardingSteps: unknown[];
+  }>;
   has_delivery: boolean;
   has_calendar: boolean;
   has_services: boolean;
@@ -145,6 +159,11 @@ export class AuthService {
       company_id: string | null;
       company_name: string | null;
       vertical: string | null;
+      capabilities: Array<{
+        key: string;
+        status: 'active' | 'inactive' | 'suspended';
+        configuration: Record<string, unknown>;
+      }> | null;
     }>(
       `select
          u.id::text,
@@ -153,16 +172,62 @@ export class AuthService {
          u.role,
          u.company_id::text,
          c.name as company_name,
-         c.vertical
+         c.vertical,
+         coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'key', cc.capability_key,
+               'status', cc.status,
+               'configuration', cc.configuration
+             )
+           ) filter (where cc.capability_key is not null),
+           '[]'::jsonb
+         ) as capabilities
        from auth_users u
        left join companies c on c.id = u.company_id
+       left join company_capabilities cc on cc.company_id = c.id
        where u.id = $1
+       group by u.id, c.id
        limit 1`,
       [userId]
     );
 
     const row = result.rows[0];
     if (!row) return null;
+
+    const rows = Array.isArray(row.capabilities) ? row.capabilities : [];
+    const capabilities = Object.fromEntries(
+      rows.map(capability => [capability.key, {
+        status: capability.status,
+        configuration: capability.configuration ?? {}
+      }])
+    );
+
+    // Compatibilidade para bancos em rollout: a projeção vertical permanece
+    // válida até todos os tenants possuírem company_capabilities.
+    const projectedDelivery = row.role === 'user' && (row.vertical || 'delivery') === 'delivery';
+    if (projectedDelivery && !capabilities['vertical.delivery']) {
+      capabilities['vertical.delivery'] = { status: 'active', configuration: {} };
+    }
+
+    const activeKeys = new Set(
+      Object.entries(capabilities)
+        .filter(([, value]) => value.status === 'active')
+        .map(([key]) => key)
+    );
+
+    const modules = moduleRegistry.list()
+      .map(module => {
+        const capability = module.capabilities.find(item => activeKeys.has(item.key));
+        return capability ? {
+          key: module.key,
+          name: module.metadata.name,
+          capability: capability.key,
+          ui: module.ui ?? null,
+          onboardingSteps: module.onboardingSteps ?? []
+        } : null;
+      })
+      .filter((module): module is NonNullable<typeof module> => module !== null);
 
     return {
       id: row.id,
@@ -171,7 +236,9 @@ export class AuthService {
       role: row.role,
       companyId: row.company_id || 'admin',
       company: row.company_name || 'Admin',
-      has_delivery: row.role === 'user' ? (row.vertical || 'delivery') === 'delivery' : false,
+      capabilities,
+      modules,
+      has_delivery: capabilities['vertical.delivery']?.status === 'active',
       has_calendar: false,
       has_services: false,
       has_custom_metrics: false
@@ -214,6 +281,10 @@ export class AuthService {
 
     const companyId = randomUUID();
     const userId = randomUUID();
+    const initialModule = moduleRegistry.defaultModule();
+    const initialCapability = initialModule.capabilities.find(item => item.required)
+      ?? initialModule.capabilities[0];
+    if (!initialCapability) throw new Error('DEFAULT_MODULE_CAPABILITY_MISSING');
     const now = new Date();
     const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const passwordHash = await bcrypt.hash(password, 12);
@@ -228,13 +299,14 @@ export class AuthService {
            subscription_status,access_active,trial_started_at,trial_ends_at,
            legacy_supabase_migrated,created_at,updated_at
          ) values(
-           $1,$2,$3,'delivery',$4,
-           'trial',true,$5,$6,true,now(),now()
+           $1,$2,$3,$4,$5,
+           'trial',true,$6,$7,true,now(),now()
          )`,
         [
           companyId,
           companyName,
-          `delivery-${companyId.replace(/-/g, '').slice(0, 16)}`,
+          `${initialModule.key}-${companyId.replace(/-/g, '').slice(0, 16)}`,
+          initialModule.key,
           deterministicInstance(companyId),
           now,
           trialEndsAt
@@ -260,6 +332,14 @@ export class AuthService {
          values($1,$2::jsonb)
          on conflict(company_id) do nothing`,
         [companyId, JSON.stringify({ email, phone, display_name: companyName })]
+      );
+
+      await client.query(
+        `insert into company_capabilities(company_id,capability_key,status,configuration)
+         values($1,$2,'active','{}'::jsonb)
+         on conflict(company_id,capability_key) do update set
+           status='active', updated_at=now()`,
+        [companyId, initialCapability.key]
       );
 
       await client.query(

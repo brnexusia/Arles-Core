@@ -1,16 +1,17 @@
-export type Vertical =
-  | 'delivery'
-  | 'beauty'
-  | 'barber'
-  | 'pet'
-  | 'tattoo'
-  | 'studio';
+export type CapabilityStatus = 'active' | 'inactive' | 'suspended';
+
+export interface CompanyCapability {
+  key: string;
+  status: CapabilityStatus;
+  configuration: Record<string, unknown>;
+}
 
 export interface Company {
   id: string;
   name: string;
   slug: string;
-  vertical: Vertical;
+  vertical: string;
+  capabilities: CompanyCapability[];
   evolution_instance: string;
   subscription_status: string;
   access_active: boolean;

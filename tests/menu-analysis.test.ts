@@ -3,7 +3,7 @@ import {
   applyPricingAudit,
   cleanMenuResult,
   mergeMenuResults
-} from '../src/menu/menu-analysis.normalize.js';
+} from '../src/verticals/delivery/menu/analysis.normalize.js';
 
 describe('menu analysis normalization', () => {
   it('usa o menor valor de variação como preço base quando necessário', () => {

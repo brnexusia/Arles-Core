@@ -1,13 +1,11 @@
-import { evolution } from '../whatsapp/evolution.client.js';
+import { evolution } from '../../whatsapp/evolution.client.js';
 import {
-  markStatusSent,
   markSystemSending,
-  resumeConversation,
-  setAwaitingReview,
-  statusAlreadySent
-} from '../infrastructure/redis.js';
-import { updateOrderStatus } from '../verticals/delivery/repository.js';
-import { logOutgoing } from '../core/message.repository.js';
+  resumeConversation
+} from '../../infrastructure/redis.js';
+import { markStatusSent, setAwaitingReview, statusAlreadySent } from './state.js';
+import { updateOrderStatus } from './repository.js';
+import { logOutgoing } from '../../core/message.repository.js';
 
 export type CanonicalOrderStatus =
   | 'Novos'
@@ -71,7 +69,7 @@ export class DeliveryPostSaleService {
     const message = statusMessage(status);
     if (!message) return { changed, notified: false, status };
 
-    if (await statusAlreadySent(context.orderId, status)) {
+    if (await statusAlreadySent(context.companyId, context.orderId, status)) {
       return { changed, notified: false, status };
     }
 
@@ -86,7 +84,7 @@ export class DeliveryPostSaleService {
       phone: context.clientPhone,
       body: message
     });
-    await markStatusSent(context.orderId, status);
+    await markStatusSent(context.companyId, context.orderId, status);
 
     if (status === 'Finalizados') {
       await resumeConversation(context.companyId, context.clientPhone);

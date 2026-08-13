@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { env } from '../config/env.js';
-import { redis } from '../infrastructure/redis.js';
+import { env } from '../../../config/env.js';
+import { redis } from '../../../infrastructure/redis.js';
 import {
   applyPricingAudit,
   cleanMenuResult,
@@ -9,10 +9,10 @@ import {
   mergeMenuResults,
   type MenuPricingAudit,
   type MenuResult
-} from './menu-analysis.normalize.js';
+} from './analysis.normalize.js';
 
-export { applyPricingAudit, cleanMenuResult, cleanPricingAudit, collapseSizedCategories, mergeMenuResults } from './menu-analysis.normalize.js';
-export type { MenuVariation, MenuProduct, MenuCategory, MenuPricingAudit, MenuResult } from './menu-analysis.normalize.js';
+export { applyPricingAudit, cleanMenuResult, cleanPricingAudit, collapseSizedCategories, mergeMenuResults } from './analysis.normalize.js';
+export type { MenuVariation, MenuProduct, MenuCategory, MenuPricingAudit, MenuResult } from './analysis.normalize.js';
 
 export type MenuInputImage = {
   data: string;

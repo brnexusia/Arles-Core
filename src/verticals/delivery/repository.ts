@@ -1,5 +1,6 @@
 import { db } from '../../infrastructure/db.js';
 import { env } from '../../config/env.js';
+import { deliveryConfig } from './config.js';
 import type {
   DeliveryCustomer,
   DeliveryDraft,
@@ -82,8 +83,13 @@ export async function getMenuAssets(companyId: string): Promise<MenuAsset[]> {
 
 export async function getCustomer(companyId: string, phone: string): Promise<DeliveryCustomer | null> {
   const result = await db.query<DeliveryCustomer>(
-    `select id::text, name, phone_number, default_address, favorite_payment
-     from customers where company_id = $1 and phone_number = $2 limit 1`,
+    `select c.id::text,c.name,c.phone_number,
+            coalesce(p.default_address,c.default_address) as default_address,
+            coalesce(p.favorite_payment,c.favorite_payment) as favorite_payment
+     from customers c
+     left join delivery_customer_profiles p
+       on p.customer_id=c.id and p.company_id=c.company_id
+     where c.company_id=$1 and c.phone_number=$2 limit 1`,
     [companyId, phone]
   );
   return result.rows[0] ?? null;
@@ -143,21 +149,27 @@ export async function createDeliveryOrder(input: {
 
     const customer = await client.query(
       `insert into customers (
-         company_id, name, phone_number, default_address, favorite_payment,
-         last_seen_at, updated_at
-       ) values ($1, $2, $3, $4, $5, now(), now())
+         company_id,name,phone_number,last_seen_at,updated_at
+       ) values ($1,$2,$3,now(),now())
        on conflict (company_id, phone_number)
        do update set
          name = case when excluded.name <> 'Cliente' then excluded.name else customers.name end,
-         default_address = case when nullif(excluded.default_address, '') is not null
-                           then excluded.default_address else customers.default_address end,
-         favorite_payment = coalesce(nullif(excluded.favorite_payment, ''), customers.favorite_payment),
          last_seen_at = now(), updated_at = now()
        returning id::text`,
+      [input.companyId, clientName, input.phone]
+    );
+
+    await client.query(
+      `insert into delivery_customer_profiles(
+         customer_id,company_id,default_address,favorite_payment,updated_at
+       ) values($1,$2,$3,$4,now())
+       on conflict(customer_id) do update set
+         default_address=coalesce(nullif(excluded.default_address,''),delivery_customer_profiles.default_address),
+         favorite_payment=coalesce(nullif(excluded.favorite_payment,''),delivery_customer_profiles.favorite_payment),
+         updated_at=now()`,
       [
+        customer.rows[0].id,
         input.companyId,
-        clientName,
-        input.phone,
         input.draft.delivery_type === 'delivery' ? input.draft.delivery_address : null,
         input.draft.payment_method || null
       ]
@@ -193,11 +205,10 @@ export async function createDeliveryOrder(input: {
     );
 
     await client.query(
-      `update customers set total_orders = total_orders + 1,
-                            total_spent = total_spent + $3,
-                            updated_at = now()
-       where company_id = $1 and phone_number = $2`,
-      [input.companyId, input.phone, total]
+      `update delivery_customer_profiles
+       set total_orders=total_orders+1,total_spent=total_spent+$3,updated_at=now()
+       where company_id=$1 and customer_id=$2`,
+      [input.companyId, customer.rows[0].id, total]
     );
 
     await client.query('commit');
@@ -217,7 +228,7 @@ export async function createDeliveryOrder(input: {
 }
 
 export async function getPendingPixOrder(companyId: string, phone: string): Promise<PendingPixOrder | null> {
-  const hours = Math.max(1, env.pixProofMaxAgeHours);
+  const hours = deliveryConfig.pixProofMaxAgeHours;
   const result = await db.query<PendingPixOrder>(
     `select id::text, client_name, payment_status, total_value::float8 as total_value,
             status, created_at
@@ -245,14 +256,21 @@ export async function savePixProof(input: {
   const client = await db.connect();
   try {
     await client.query('begin');
-    const media = await client.query<{ public_token: string }>(
+    const media = await client.query<{ id: string; public_token: string }>(
       `insert into media_files (company_id, order_id, kind, mime_type, data, size_bytes)
        values ($1, $2, 'pix_proof', $3, $4, $5)
-       returning public_token::text`,
+       returning id::text,public_token::text`,
       [input.companyId, input.orderId, input.mimeType || 'image/jpeg', input.bytes, input.bytes.length]
     );
 
     const token = media.rows[0]!.public_token;
+
+    await client.query(
+      `insert into media_links(company_id,media_id,owner_type,owner_id)
+       values($1,$2,'delivery.order',$3)
+       on conflict(media_id,owner_type,owner_id) do nothing`,
+      [input.companyId, media.rows[0]!.id, input.orderId]
+    );
     const url = env.publicBaseUrl ? `${env.publicBaseUrl}/media/${token}` : `/media/${token}`;
 
     const updated = await client.query(
@@ -277,15 +295,6 @@ export async function savePixProof(input: {
   }
 }
 
-export async function getMediaByToken(token: string): Promise<{ mimeType: string; data: Buffer } | null> {
-  const result = await db.query<{ mime_type: string; data: Buffer }>(
-    `select mime_type, data from media_files where public_token = $1::uuid limit 1`,
-    [token]
-  );
-  const row = result.rows[0];
-  return row ? { mimeType: row.mime_type, data: row.data } : null;
-}
-
 export async function registerReview(input: {
   companyId: string;
   orderId: string;
@@ -303,9 +312,11 @@ export async function registerReview(input: {
       [input.companyId, input.orderId || null, input.customerName || null, input.phone, input.rating]
     );
     await client.query(
-      `update customers
-       set last_rating = $3, last_review_at = now(), updated_at = now()
-       where company_id = $1 and phone_number = $2`,
+      `update delivery_customer_profiles p
+       set last_rating=$3,last_review_at=now(),updated_at=now()
+       from customers c
+       where p.customer_id=c.id and p.company_id=$1
+         and c.company_id=$1 and c.phone_number=$2`,
       [input.companyId, input.phone, input.rating]
     );
     await client.query('commit');

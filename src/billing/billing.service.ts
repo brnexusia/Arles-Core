@@ -7,16 +7,6 @@ export type BillingStatus =
   | 'past_due'
   | 'canceled';
 
-const PLAN_LIMITS: Record<string, number> = {
-  essential: 360,
-  professional: 1500,
-  scale: 3000
-};
-
-function planLimit(plan: string | null): number | null {
-  return plan ? (PLAN_LIMITS[plan] ?? null) : null;
-}
-
 function stripeToArlesStatus(eventType: string, stripeStatus: string): BillingStatus | null {
   if (eventType === 'customer.subscription.deleted') return 'canceled';
   if (eventType === 'invoice.payment_failed') return 'past_due';
@@ -30,6 +20,17 @@ function stripeToArlesStatus(eventType: string, stripeStatus: string): BillingSt
 }
 
 export class BillingService {
+  async catalog() {
+    const result = await db.query(
+      `select plan_key,display_name,display_price_cents,currency,
+              contact_limit,sort_order,configuration
+       from billing_plan_catalog
+       where active=true
+       order by sort_order,plan_key`
+    );
+    return result.rows;
+  }
+
   async subscriptionInfo(companyId: string) {
     const result = await db.query<any>(
       `select
@@ -97,7 +98,7 @@ export class BillingService {
         daysRemaining > 0 &&
         daysRemaining <= 2,
       planKey: row.plan_key ?? null,
-      contactLimit: row.monthly_contact_limit ?? planLimit(row.plan_key ?? null),
+      contactLimit: row.monthly_contact_limit ?? null,
       contactsUsed: Number(row.monthly_contacts_used ?? 0),
       stripeCustomerId: row.stripe_customer_id ?? null,
       stripeSubscriptionId: row.stripe_subscription_id ?? null,
@@ -175,7 +176,14 @@ export class BillingService {
       const stripeStatus = String(body.stripe_status ?? '').toLowerCase();
       const nextStatus = stripeToArlesStatus(eventType, stripeStatus);
       const planKey = String(body.plan_key ?? '').trim() || null;
-      const limit = planLimit(planKey);
+      const catalogPlan = planKey
+        ? await client.query<{ contact_limit: number }>(
+          `select contact_limit from billing_plan_catalog where plan_key=$1 and active=true limit 1`,
+          [planKey]
+        )
+        : null;
+      if (planKey && !catalogPlan?.rows[0]) throw new Error('BILLING_PLAN_INVALID');
+      const limit = catalogPlan?.rows[0]?.contact_limit ?? null;
 
       const currentPeriodEnd = body.current_period_end
         ? new Date(body.current_period_end).toISOString()

@@ -1,31 +1,23 @@
 import Fastify from 'fastify';
+import { composeApplication } from './composition.js';
 import { env } from './config/env.js';
+import { arlesEngine } from './core/engine.js';
 import { checkDb } from './infrastructure/db.js';
 import { redis, pauseConversation, resumeConversation } from './infrastructure/redis.js';
-import { arlesEngine } from './core/engine.js';
-import { deliveryPostSaleService } from './post-sale/delivery-post-sale.service.js';
-import { getMediaByToken, updatePaymentStatus } from './verticals/delivery/repository.js';
-import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
-import { registerPanelRoutes } from './panel/panel.routes.js';
-import { registerAuthRoutes } from './auth/auth.routes.js';
-import { registerBillingRoutes } from './billing/billing.routes.js';
+import { getMediaByToken } from './media/media.repository.js';
+import { isInternalRequest } from './platform/security/internal-auth.js';
+import { resolveTenantContext, tenantErrorStatus } from './platform/security/tenant-context.js';
+import { startPlatformJobWorker, stopPlatformJobWorker } from './platform/jobs/job.worker.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
   bodyLimit: 32 * 1024 * 1024
 });
 
-function authorized(request: { headers: Record<string, unknown> }): boolean {
-  if (!env.internalApiKey) return false;
-  const direct = String(request.headers['x-arles-key'] ?? '').trim();
-  const auth = String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
-  return direct === env.internalApiKey || auth === env.internalApiKey;
-}
-
 app.get('/health', async () => {
   await checkDb();
   await redis.ping();
-  return { ok: true, service: 'arles-engine', version: '1.5.5' };
+  return { ok: true, service: 'arles-platform', version: '2.0.0' };
 });
 
 app.get('/media/:token', async (request, reply) => {
@@ -46,107 +38,35 @@ app.post('/webhooks/evolution', async (request, reply) => {
   });
 });
 
-async function handleOrderStatusEvent(request: any, reply: any) {
-  if (!authorized(request)) {
-    return reply.code(401).send({ error: 'unauthorized' });
+async function conversationControl(request: any, reply: any, action: 'pause' | 'resume') {
+  if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
+  try {
+    const context = await resolveTenantContext(request, { allowLegacyInternalTenant: true });
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const phone = String(body.phone ?? '').replace(/\D/g, '');
+    if (!phone) return reply.code(400).send({ error: 'phone é obrigatório' });
+    if (action === 'pause') {
+      await pauseConversation(context.companyId, phone, Number(body.seconds) || env.humanPauseSeconds);
+    } else {
+      await resumeConversation(context.companyId, phone);
+    }
+    return reply.send({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return reply.code(tenantErrorStatus(error)).send({ error: message });
   }
-
-  const body = (request.body ?? {}) as Record<string, unknown>;
-  const companyId = String(body.company_id ?? body.companyId ?? '').trim();
-  const orderId = String(body.order_id ?? body.orderId ?? '').trim();
-  const status = String(body.status ?? '').trim();
-
-  if (!companyId || !orderId || !status) {
-    return reply.code(400).send({
-      error: 'company_id, order_id e status são obrigatórios'
-    });
-  }
-
-  const result = await deliveryPostSaleService.updateAndNotify({
-    companyId,
-    orderId,
-    status
-  });
-
-  return reply.send({ ok: true, ...result });
 }
 
-app.post('/events/order-status', handleOrderStatusEvent);
+app.post('/internal/platform/conversations/pause', (request, reply) => conversationControl(request, reply, 'pause'));
+app.post('/internal/platform/conversations/resume', (request, reply) => conversationControl(request, reply, 'resume'));
+app.post('/internal/conversations/pause', (request, reply) => conversationControl(request, reply, 'pause'));
+app.post('/internal/conversations/resume', (request, reply) => conversationControl(request, reply, 'resume'));
 
-// Alias para facilitar a migração do webhook antigo do n8n.
-app.post('/webhooks/arles-delivery-events', handleOrderStatusEvent);
-
-app.post('/events/payment-status', async (request, reply) => {
-  if (!authorized(request as any)) {
-    return reply.code(401).send({ error: 'unauthorized' });
-  }
-
-  const body = (request.body ?? {}) as Record<string, unknown>;
-  const companyId = String(body.company_id ?? body.companyId ?? '').trim();
-  const orderId = String(body.order_id ?? body.orderId ?? '').trim();
-  const paymentStatus = String(
-    body.payment_status ?? body.paymentStatus ?? ''
-  ).trim().toLowerCase();
-
-  const allowed = new Set([
-    'pending',
-    'pending_approval',
-    'approved',
-    'rejected'
-  ]);
-
-  if (!companyId || !orderId || !allowed.has(paymentStatus)) {
-    return reply.code(400).send({
-      error:
-        'company_id, order_id e payment_status válido são obrigatórios'
-    });
-  }
-
-  const updated = await updatePaymentStatus({
-    companyId,
-    orderId,
-    paymentStatus: paymentStatus as
-      | 'pending'
-      | 'pending_approval'
-      | 'approved'
-      | 'rejected'
-  });
-
-  if (!updated) {
-    return reply.code(404).send({ error: 'order_not_found' });
-  }
-
-  return reply.send({ ok: true, payment_status: paymentStatus });
-});
-
-app.post('/internal/conversations/pause', async (request, reply) => {
-  if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
-  const body = (request.body ?? {}) as any;
-  const companyId = String(body.company_id ?? '').trim();
-  const phone = String(body.phone ?? '').replace(/\D/g, '');
-  if (!companyId || !phone) return reply.code(400).send({ error: 'company_id e phone são obrigatórios' });
-  await pauseConversation(companyId, phone, Number(body.seconds) || env.humanPauseSeconds);
-  return reply.send({ ok: true });
-});
-
-app.post('/internal/conversations/resume', async (request, reply) => {
-  if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
-  const body = (request.body ?? {}) as any;
-  const companyId = String(body.company_id ?? '').trim();
-  const phone = String(body.phone ?? '').replace(/\D/g, '');
-  if (!companyId || !phone) return reply.code(400).send({ error: 'company_id e phone são obrigatórios' });
-  await resumeConversation(companyId, phone);
-  return reply.send({ ok: true });
-});
-
-await registerAuthRoutes(app);
-await registerBillingRoutes(app);
-await registerPanelRoutes(app);
-
-startFollowupWorker();
+await composeApplication(app);
+startPlatformJobWorker();
 
 const shutdown = async () => {
-  stopFollowupWorker();
+  stopPlatformJobWorker();
   await app.close().catch(() => undefined);
   await redis.quit().catch(() => undefined);
   process.exit(0);

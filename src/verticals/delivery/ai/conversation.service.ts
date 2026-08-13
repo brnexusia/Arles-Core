@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
-import { env } from '../config/env.js';
-import type { DeliveryCustomer, DeliveryProduct, DeliveryStore } from '../verticals/delivery/types.js';
+import { env } from '../../../config/env.js';
+import type { DeliveryCustomer, DeliveryProduct, DeliveryStore } from '../types.js';
 
 export class DeliveryConversationService {
   private client: OpenAI | null;
