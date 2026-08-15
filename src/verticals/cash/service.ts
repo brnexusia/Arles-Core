@@ -1,7 +1,7 @@
 import { db } from '../../infrastructure/db.js';
 import { env } from '../../config/env.js';
 import type { CashSummary, CashTransactionInput, CashTransactionType } from './types.js';
-import { currentMonthWindow, isoBrazil } from './time.js';
+import { currentMonthWindow } from './time.js';
 
 function cleanPhone(value: string): string {
   return value.replace(/\D/g, '').slice(0, 20);
@@ -90,6 +90,14 @@ export class CashService {
     );
   }
 
+  async beginOnboarding(companyId: string): Promise<void> {
+    await db.query(
+      `update cash_settings set onboarding_state='awaiting_name',updated_at=now()
+       where company_id=$1 and onboarding_state='welcome'`,
+      [companyId]
+    );
+  }
+
   async settings(companyId: string) {
     const result = await db.query(
       `select
@@ -160,6 +168,19 @@ export class CashService {
       await db.query(
         `update companies set subscription_status='expired',access_active=false,updated_at=now()
          where id=$1 and subscription_status='trial'`,
+        [companyId]
+      );
+      return { ...settings, subscription_status: 'expired', access_active: false, hasAccess: false };
+    }
+
+    if (
+      settings.subscription_status === 'active' &&
+      settings.subscription_current_period_end &&
+      settings.subscription_current_period_end.getTime() <= now
+    ) {
+      await db.query(
+        `update companies set subscription_status='expired',access_active=false,updated_at=now()
+         where id=$1 and subscription_status='active'`,
         [companyId]
       );
       return { ...settings, subscription_status: 'expired', access_active: false, hasAccess: false };
