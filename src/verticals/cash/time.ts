@@ -26,9 +26,26 @@ export function isoBrazil(date = new Date()): string {
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 }
 
-export function formatBrazilDate(iso: string): string {
-  const [year, month, day] = iso.split('-');
-  return `${day}/${month}/${year}`;
+/**
+ * Formata uma data para DD/MM/AAAA sem carregar hora, timezone ou localização.
+ * O pg pode devolver uma coluna DATE como string YYYY-MM-DD ou como um Date
+ * serializado (ex.: "Sat Aug 15 2026 00:00:00 GMT+0000 ...").
+ */
+export function formatBrazilDate(value: string | Date): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${String(value.getUTCDate()).padStart(2, '0')}/${String(value.getUTCMonth() + 1).padStart(2, '0')}/${value.getUTCFullYear()}`;
+  }
+
+  const raw = String(value ?? '').trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:\b|T)/);
+  if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return `${String(parsed.getUTCDate()).padStart(2, '0')}/${String(parsed.getUTCMonth() + 1).padStart(2, '0')}/${parsed.getUTCFullYear()}`;
+  }
+
+  return raw;
 }
 
 export function addBrazilDays(date: Date, days: number): Date {
