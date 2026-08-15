@@ -1,5 +1,6 @@
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashParser } from './parser.js';
+import { cashQuery } from './query.js';
 import { cashReports, formatCashReport, formatCashSummary } from './reports.js';
 import { cashService } from './service.js';
 import {
@@ -61,6 +62,9 @@ function helpMessage(): string {
     '💸 Registrar despesa → “gastei 50 no mercado”',
     '💰 Registrar receita → “recebi 2000 de salário”',
     '📝 Registrar com descrição → “comprei uma blusinha na SHEIN de 15 reais”',
+    '🔎 Pesquisar seus registros → “quanto gastei na SHEIN esse mês?”',
+    '🔎 Filtrar por período → “quanto gastei ontem?” ou “gastos entre dia 1 e dia 10”',
+    '🔎 Filtrar por valor → “mostra despesas acima de 100 reais”',
     '📊 Ver saldo → “saldo”',
     '📋 Histórico → “histórico”',
     '✏️ Editar registro → “edita o último” ou “edita o 2”',
@@ -68,6 +72,7 @@ function helpMessage(): string {
     '📅 Relatório semanal → “relatório semanal”',
     '📅 Relatório mensal → “relatório mensal”',
     '',
+    'Se você pesquisar sem dizer a data, eu considero o mês atual.',
     'Pode escrever do seu jeito. Eu tento entender português natural, abreviações e gírias.'
   ].join('\n');
 }
@@ -273,6 +278,11 @@ export class CashHandler implements VerticalHandler {
       return text(editPrompt(row));
     }
 
+    // Pesquisa financeira em linguagem natural. A IA, quando necessária, só extrai
+    // filtros; totais e linhas sempre vêm do PostgreSQL.
+    const queryResult = await cashQuery.handle(company.id, combinedText);
+    if (queryResult) return queryResult;
+
     if (/^(historico|histórico|ultimos|últimos|o que registrei|meus registros)[!.? ]*$/.test(normalized)) {
       return text(historyMessage(await cashService.listRecent(company.id, message.phone, 5)));
     }
@@ -324,7 +334,7 @@ export class CashHandler implements VerticalHandler {
       }
       return text([
         'Hmm, não entendi bem 🤔',
-        'Tente assim: “gastei 80 no mercado” ou “recebi 2000 de salário”',
+        'Tente assim: “gastei 80 no mercado”, “recebi 2000 de salário” ou “quanto gastei no mercado?”',
         'Se quiser ver tudo que dá para fazer, mande “ajuda”.'
       ].join('\n'));
     }
