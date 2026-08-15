@@ -1,6 +1,5 @@
 import { deliveryIntentService } from './ai/intent.service.js';
 import { deliveryConversationService } from './ai/conversation.service.js';
-import { env } from '../../config/env.js';
 import { getRecentConfirmedOrder, markRecentConfirmedOrder } from './state.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import {
@@ -10,7 +9,6 @@ import {
   emptyDraft,
   extractName,
   findProductsInMessage,
-  handoffReason,
   isConfirmation,
   isGreeting,
   isMenuRequest,
@@ -36,7 +34,7 @@ import {
   getSession,
   saveSession
 } from './repository.js';
-import type { DeliveryDraft, DeliveryProduct } from './types.js';
+import type { DeliveryDraft, DeliveryProduct, DeliveryState } from './types.js';
 import { deliveryConfig } from './config.js';
 
 function textResult(text: string, extra: Partial<VerticalResult> = {}): VerticalResult {
@@ -52,9 +50,14 @@ function menuResult(intro: string, assets: Array<{ asset_url: string }>): Vertic
   };
 }
 
-
 function looksLikeOrderVerb(text: string): boolean {
   return /\b(quero|queria|manda|mandar|me ve|me vê|me manda|vou querer|pode colocar|coloca|adiciona|acrescenta|faz|separa)\b/.test(norm(text));
+}
+
+function looksLikeReplacementSelection(text: string): boolean {
+  const s = norm(text);
+  if (/\b(adiciona|adicionar|acrescenta|acrescentar|mais um|mais uma|tambem|também|junto)\b/.test(s)) return false;
+  return /^(vou querer|quero|queria|eu quero|so quero|só quero|fica so|fica só|deixa so|deixa só|vai ser)\b/.test(s);
 }
 
 function parseChange(text: string): number | null {
@@ -70,7 +73,6 @@ function paymentQuestion(paymentMethods: string | null): string {
   if (!normalized) return 'E como você prefere pagar: Pix, dinheiro ou cartão? 😊';
   return `E como você prefere pagar? Temos ${normalized}. 😊`;
 }
-
 
 function deterministicQuestionAnswer(input: {
   text: string;
@@ -189,9 +191,72 @@ function addOrUpdateProduct(
   });
 }
 
-function bestProduct(query: string, catalog: DeliveryProduct[]): DeliveryProduct | null {
+function safeProductMatches(query: string, catalog: DeliveryProduct[]): DeliveryProduct[] {
   const matches = findProductsInMessage(query, catalog);
+  if (matches.length <= 1) return matches;
+
+  const message = norm(query);
+  return matches.filter(product => {
+    const name = norm(product.name);
+    return !matches.some(other => {
+      if (other.id === product.id) return false;
+      const otherName = norm(other.name);
+      return otherName.length > name.length &&
+        otherName.includes(name) &&
+        message.includes(otherName);
+    });
+  });
+}
+
+function bestProduct(query: string, catalog: DeliveryProduct[]): DeliveryProduct | null {
+  const matches = safeProductMatches(query, catalog);
   return matches.length === 1 ? matches[0]! : null;
+}
+
+function configuredFeeForAddress(value: unknown, address: string): number | null {
+  const single = singleConfiguredFee(value);
+  if (single !== null) return single;
+
+  const raw = String(value ?? '').trim();
+  const normalizedAddress = norm(address);
+  if (!raw || !normalizedAddress) return null;
+
+  const parts = raw.split(/[\n;|]+/).map(item => item.trim()).filter(Boolean);
+  for (const part of parts) {
+    const number = part.match(/\d+(?:[.,]\d+)?/);
+    if (!number) continue;
+
+    const fee = Number(number[0].replace(',', '.'));
+    if (!Number.isFinite(fee)) continue;
+
+    const area = norm(part.replace(number[0], '').replace(/r\$/gi, ''));
+    const tokens = area
+      .split(/[^a-z0-9]+/)
+      .filter(token => token.length >= 4 && !['taxa', 'entrega', 'bairro', 'valor'].includes(token));
+
+    if (tokens.some(token => normalizedAddress.includes(token))) return fee;
+  }
+
+  return null;
+}
+
+function unresolvedProductQuestion(terms: string[], catalog: DeliveryProduct[]): string {
+  const cleanTerms = [...new Set(terms.map(term => term.trim()).filter(Boolean))];
+  const label = cleanTerms.slice(0, 3).join(', ');
+  const normalized = norm(label);
+
+  const beverageLike = /\b(coca|coca cola|refri|refrigerante|guarana|guaraná|fanta|sprite|pepsi|bebida)\b/.test(normalized);
+  if (beverageLike) {
+    const options = catalog
+      .filter(product => /bebida|refrigerante|suco|agua|água/.test(norm(`${product.category} ${product.name}`)))
+      .slice(0, 5);
+
+    if (options.length) {
+      return `Anotei o que consegui identificar. Sobre ${label || 'a bebida'}, no cardápio tenho ${options.map(item => `${item.name} (${brl(item.price)})`).join(', ')}. Qual você quer?`;
+    }
+  }
+
+  return `Anotei o que consegui identificar, mas não encontrei “${label || 'esse item'}” com segurança no cardápio. Qual item do cardápio você quer no lugar?`;
 }
 
 export class DeliveryHandler implements VerticalHandler {
@@ -219,44 +284,79 @@ export class DeliveryHandler implements VerticalHandler {
     ]);
 
     if (!store) {
-      return textResult('O atendimento está temporariamente indisponível. Vou chamar a equipe para te ajudar.', {
-        pauseSeconds: env.humanPauseSeconds
-      });
+      return textResult('O atendimento está temporariamente indisponível. Tenta novamente em alguns instantes, por favor.');
     }
 
-    // Controle do painel: quando o lojista desativa o atendimento automático,
-    // nenhuma resposta da IA é enviada até ele reativar.
-    if (store.ai_enabled === false) {
-      return null;
-    }
+    if (store.ai_enabled === false) return null;
 
     let draft = session.draft ?? emptyDraft();
     const hadDraft = Boolean(session.draft?.items?.length);
+    const editingOrder = session.state === 'editing_order';
 
     if (!isRealName(draft.client_name) && isRealName(customer?.name)) {
       draft.client_name = customer!.name;
     }
 
-    const stageBefore = stageForDraft(draft);
-    const directProducts = findProductsInMessage(combinedText, catalog);
-    const directHandoff = handoffReason(combinedText, Boolean(recentConfirmed));
+    const directProducts = safeProductMatches(combinedText, catalog);
 
+    // Caminhos óbvios não precisam gastar IA.
+    if (isMenuRequest(combinedText)) {
+      if (menuAssets.length) return menuResult('Claro! 😊 Aqui está nosso cardápio:', menuAssets);
+      if (catalog.length) {
+        const lines = catalog.slice(0, 30).map(product => `• ${product.name} — ${brl(product.price)}`);
+        return textResult(`Claro! 😊 Nosso cardápio disponível agora:\n\n${lines.join('\n')}`);
+      }
+      return textResult('Nosso cardápio está sendo atualizado agora. Me diz o que você procura que eu tento te ajudar 😊');
+    }
+
+    if (!hadDraft && isGreeting(combinedText)) {
+      if (menuAssets.length) return menuResult('Oi! 😊 Aqui está nosso cardápio:', menuAssets);
+      return textResult(`Oi! 😊 Sou o atendimento do ${store.store_name}. O que você gostaria de pedir?`);
+    }
+
+    if (!hadDraft && !looksLikeOrderVerb(combinedText)) {
+      const deterministic = deterministicQuestionAnswer({
+        text: combinedText,
+        store,
+        products: directProducts
+      });
+      if (deterministic) return textResult(deterministic);
+    }
+
+    const stageBefore = editingOrder ? 'editing_order' : stageForDraft(draft);
     const intent = await deliveryIntentService.extract({
       message: combinedText,
       expectedField: stageBefore,
       catalog: catalog.map(product => ({ name: product.name, variations: product.variations })),
       hasDraft: hadDraft,
-      hasRecentConfirmedOrder: Boolean(recentConfirmed)
+      hasRecentConfirmedOrder: Boolean(recentConfirmed),
+      draftItems: draft.items.map(item => `${item.quantity}x ${item.name}${item.variation ? ` (${item.variation})` : ''}`),
+      recentHistory: history
     });
 
-    const reason = directHandoff || (intent.handoff ? intent.handoff_reason || 'Atendimento humano solicitado' : null);
-    if (reason) {
-      return textResult('Entendi. Vou deixar a equipe continuar com você por aqui 😊', {
-        pauseSeconds: env.humanPauseSeconds
-      });
+    if (intent.intent === 'menu') {
+      if (menuAssets.length) return menuResult('Claro! 😊 Aqui está nosso cardápio:', menuAssets);
+      if (catalog.length) {
+        const lines = catalog.slice(0, 30).map(product => `• ${product.name} — ${brl(product.price)}`);
+        return textResult(`Claro! 😊 Nosso cardápio disponível agora:\n\n${lines.join('\n')}`);
+      }
     }
 
-    // Proteção pós-pedido: não reconstrói o checkout anterior por memória/conversa.
+    if (!hadDraft && intent.intent === 'greeting') {
+      return textResult(`Oi! 😊 Sou o atendimento do ${store.store_name}. O que você gostaria de pedir?`);
+    }
+
+    // O Arles Delivery não transborda automaticamente: mesmo se pedirem humano,
+    // a conversa continua no próprio atendente digital.
+    if (intent.intent === 'human') {
+      return textResult('Eu consigo continuar seu atendimento por aqui 😊 Me diz o que você precisa resolver no pedido.');
+    }
+
+    if (intent.intent === 'cancel' && hadDraft && !recentConfirmed) {
+      await saveSession({ companyId: company.id, phone: message.phone, state: 'idle', draft: null });
+      return textResult('Certo, cancelei esse pedido em andamento. Se quiser começar outro, é só me dizer o que vai querer 😊');
+    }
+
     if (recentConfirmed && !hadDraft && directProducts.length === 0) {
       if (isThanks(combinedText)) {
         return textResult('Por nada 😊 Seu pedido já está confirmado. Qualquer coisa, é só chamar.');
@@ -266,52 +366,8 @@ export class DeliveryHandler implements VerticalHandler {
       }
     }
 
-    // Pedido explícito de cardápio sempre vence o estado do checkout.
-    // O rascunho é preservado para o cliente continuar ajustando depois de olhar o menu.
-    const menuRequested = isMenuRequest(combinedText) || intent.intent === 'menu';
-    if (menuRequested) {
-      if (menuAssets.length) {
-        return menuResult('Claro! 😊 Aqui está nosso cardápio:', menuAssets);
-      }
-
-      if (catalog.length) {
-        const lines = catalog
-          .slice(0, 30)
-          .map(product => `• ${product.name} — ${brl(product.price)}`);
-        return textResult(`Claro! 😊 Nosso cardápio disponível agora:\n\n${lines.join('\n')}`);
-      }
-
-      return textResult('Nosso cardápio está sendo atualizado agora. Me diz o que você procura que eu te ajudo 😊');
-    }
-
-    // Saudação simples abre uma conversa nova somente quando não há checkout ativo.
-    if (!hadDraft && (isGreeting(combinedText) || intent.intent === 'greeting')) {
-      if (menuAssets.length) {
-        return menuResult('Oi! 😊 Aqui está nosso cardápio:', menuAssets);
-      }
-      return textResult(`Oi! 😊 Sou o atendimento do ${store.store_name}. O que você gostaria de pedir?`);
-    }
-
-    // Perguntas comuns são respondidas por código quando possível:
-    // mais rápido e sem risco de a IA inventar preço/taxa/horário.
-    if (!hadDraft && !looksLikeOrderVerb(combinedText)) {
-      const deterministic = deterministicQuestionAnswer({
-        text: combinedText,
-        store,
-        products: directProducts
-      });
-
-      if (deterministic) return textResult(deterministic);
-    }
-
-    // Perguntas sobre produto/loja não viram pedido automaticamente.
     if (!hadDraft && intent.intent === 'question') {
-      const deterministic = deterministicQuestionAnswer({
-        text: combinedText,
-        store,
-        products: directProducts
-      });
-
+      const deterministic = deterministicQuestionAnswer({ text: combinedText, store, products: directProducts });
       if (deterministic) return textResult(deterministic);
 
       const answer = await deliveryConversationService.answer({
@@ -325,26 +381,47 @@ export class DeliveryHandler implements VerticalHandler {
       return textResult(answer);
     }
 
-    // Remove itens somente com comando explícito.
+    // Em modo de edição, uma nova seleção (“vou querer...”) substitui os itens antigos.
+    // “adiciona/acrescenta” continua acrescentando normalmente.
+    const shouldReplaceItems = editingOrder &&
+      (intent.order_action === 'replace' ||
+        (looksLikeReplacementSelection(combinedText) && intent.order_action !== 'add')) &&
+      (intent.product_requests.length > 0 || directProducts.length > 0);
+
+    if (shouldReplaceItems) draft.items = [];
+
     const removed = productsToRemove(combinedText, catalog);
     if (draft.items.length && removed.length) {
       const ids = new Set(removed.map(product => product.id));
       draft.items = draft.items.filter(item => !ids.has(item.product_id));
     }
 
+    if (intent.order_action === 'remove' && intent.product_requests.length) {
+      const ids = new Set(
+        intent.product_requests
+          .map(request => bestProduct(request.query, catalog)?.id)
+          .filter((id): id is string => Boolean(id))
+      );
+      if (ids.size) draft.items = draft.items.filter(item => !ids.has(item.product_id));
+    }
+
     const wantsOrder =
       hadDraft ||
+      editingOrder ||
       intent.intent === 'order' ||
       looksLikeOrderVerb(combinedText);
 
-    if (wantsOrder) {
+    const unresolved = new Set<string>(intent.unrecognized_products);
+
+    if (wantsOrder && intent.order_action !== 'remove' && intent.order_action !== 'keep') {
       const handledByAi = new Set<string>();
 
-      // Quando a IA conseguiu extrair quantidade/variação/observação,
-      // ela ajuda na interpretação, mas o produto/preço continuam vindo do catálogo real.
       for (const request of intent.product_requests) {
         const product = bestProduct(request.query, catalog);
-        if (!product) continue;
+        if (!product) {
+          if (request.query.trim()) unresolved.add(request.query.trim());
+          continue;
+        }
 
         handledByAi.add(product.id);
         addOrUpdateProduct(
@@ -356,30 +433,27 @@ export class DeliveryHandler implements VerticalHandler {
         );
       }
 
-      // Fallback determinístico para produto real mencionado na mensagem.
       for (const product of directProducts) {
         if (handledByAi.has(product.id)) continue;
-        addOrUpdateProduct(
-          draft,
-          product,
-          quantityForProduct(combinedText, product)
-        );
+        addOrUpdateProduct(draft, product, quantityForProduct(combinedText, product));
       }
     }
 
-    // Observação solta durante checkout: aplica ao último item em vez de confundir com nome.
     if (draft.items.length && intent.observation.trim() && !intent.product_requests.length) {
       const lastItem = draft.items[draft.items.length - 1];
       if (lastItem) lastItem.notes = intent.observation.trim();
     }
 
-    if (!draft.items.length) {
-      if (directProducts.length && intent.intent !== 'question') {
-        // Produto real mencionado mas classificador ficou indeciso.
-        for (const product of directProducts) {
-          addOrUpdateProduct(draft, product, quantityForProduct(combinedText, product));
-        }
+    if (!draft.items.length && directProducts.length && intent.intent !== 'question' && intent.order_action !== 'remove') {
+      for (const product of directProducts) {
+        addOrUpdateProduct(draft, product, quantityForProduct(combinedText, product));
       }
+    }
+
+    if (unresolved.size) {
+      const state: DeliveryState = editingOrder ? 'editing_order' : stageForDraft(draft);
+      await saveSession({ companyId: company.id, phone: message.phone, state, draft: draft.items.length ? draft : null });
+      return textResult(unresolvedProductQuestion([...unresolved], catalog));
     }
 
     if (!draft.items.length) {
@@ -440,16 +514,16 @@ export class DeliveryHandler implements VerticalHandler {
     }
 
     if (draft.delivery_type === 'delivery' && draft.delivery_fee === null) {
-      draft.delivery_fee = singleConfiguredFee(store.delivery_fee);
+      draft.delivery_fee = configuredFeeForAddress(store.delivery_fee, draft.delivery_address);
     }
 
     if (draft.payment_method !== 'cash') draft.change_for = null;
 
-    const nextState = stageForDraft(draft);
+    let nextState = stageForDraft(draft);
 
     if (nextState === 'waiting_confirmation' && isRejection(combinedText)) {
-      await saveSession({ companyId: company.id, phone: message.phone, state: nextState, draft });
-      return textResult('Claro 😊 Me diz o que você quer ajustar no pedido.');
+      await saveSession({ companyId: company.id, phone: message.phone, state: 'editing_order', draft });
+      return textResult('Claro 😊 Me diz o que você quer mudar. Pode falar naturalmente, por exemplo: “vou querer só uma Calabresa” ou “adiciona um refrigerante”.');
     }
 
     if (nextState === 'waiting_confirmation' && isConfirmation(combinedText)) {
@@ -461,23 +535,31 @@ export class DeliveryHandler implements VerticalHandler {
       });
 
       await saveSession({ companyId: company.id, phone: message.phone, state: 'idle', draft: null });
-        await markRecentConfirmedOrder(
-          company.id,
-          message.phone,
-          order.id,
-          deliveryConfig.recentConfirmedTtlSeconds
-        );
+      await markRecentConfirmedOrder(
+        company.id,
+        message.phone,
+        order.id,
+        deliveryConfig.recentConfirmedTtlSeconds
+      );
 
       const firstName = order.clientName.trim().split(/\s+/)[0];
       let response = firstName && firstName.toLowerCase() !== 'cliente'
-        ? `Fechou, ${firstName}! ✅ Seu pedido foi confirmado e já está com a equipe. Vou te atualizando por aqui 😊`
-        : 'Fechou! ✅ Seu pedido foi confirmado e já está com a equipe. Vou te atualizando por aqui 😊';
+        ? `Fechou, ${firstName}! ✅ Seu pedido foi confirmado e já entrou na fila de preparo.`
+        : 'Fechou! ✅ Seu pedido foi confirmado e já entrou na fila de preparo.';
 
       if (draft.payment_method === 'pix' && store.pix_key?.trim()) {
         response += `\n\nPix: ${store.pix_key.trim()}\nDepois do pagamento, pode mandar o comprovante por aqui.`;
       }
 
       return textResult(response);
+    }
+
+    if (nextState === 'waiting_confirmation' && draft.delivery_type === 'delivery' && draft.delivery_fee === null) {
+      // Não inventa taxa e não transborda: pede o dado que falta e continua sozinho.
+      draft.delivery_address = '';
+      nextState = 'waiting_address';
+      await saveSession({ companyId: company.id, phone: message.phone, state: nextState, draft });
+      return textResult('Me manda o endereço completo com o bairro para eu calcular a taxa de entrega certinho 😊');
     }
 
     await saveSession({ companyId: company.id, phone: message.phone, state: nextState, draft });
@@ -494,11 +576,6 @@ export class DeliveryHandler implements VerticalHandler {
       case 'waiting_change':
         return textResult('Precisa de troco? Se sim, pra quanto? 😊');
       case 'waiting_confirmation':
-        if (draft.delivery_type === 'delivery' && draft.delivery_fee === null) {
-          return textResult('Não consegui determinar a taxa de entrega com segurança. Vou chamar a equipe para te ajudar 😊', {
-            pauseSeconds: env.humanPauseSeconds
-          });
-        }
         return textResult(summary(draft), {
           followup: { text: 'Oi 😊 Quer confirmar seu pedido?' }
         });
