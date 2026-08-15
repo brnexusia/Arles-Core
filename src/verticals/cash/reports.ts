@@ -6,8 +6,8 @@ import { cashService } from './service.js';
 import type { CashSummary } from './types.js';
 import {
   addBrazilDays,
-  currentWeekWindow,
   formatBrazilDate,
+  isoBrazil,
   monthBeforeWindow,
   nextFirstOfMonthAt8Brazil,
   nextMondayAt8Brazil,
@@ -205,7 +205,10 @@ export class CashReports {
   async trialDay7(context: ModuleJobContext): Promise<void> {
     const settings = await cashService.accessState(context.companyId);
     if (settings.subscription_status !== 'trial' || !settings.owner_phone) return;
-    const window = currentWeekWindow();
+    const window = {
+      from: settings.trial_started_at ? isoBrazil(settings.trial_started_at) : isoBrazil(addBrazilDays(new Date(), -6)),
+      to: isoBrazil()
+    };
     const summary = await cashService.summary(context.companyId, window.from, window.to);
     const report = formatCashReport({
       title: 'Relatório Semanal',
