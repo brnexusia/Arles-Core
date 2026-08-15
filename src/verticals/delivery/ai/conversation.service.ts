@@ -18,7 +18,7 @@ export class DeliveryConversationService {
     settings?: Record<string, unknown>;
   }): Promise<string> {
     if (!this.client) {
-      return 'Posso te ajudar com o cardápio, valores, entrega e seu pedido 😊';
+      return 'Não entendi essa parte. Me explica de outro jeito que eu continuo seu pedido 😊';
     }
 
     const catalog = input.catalog.map(product => ({
@@ -38,12 +38,15 @@ export class DeliveryConversationService {
           {
             role: 'system',
             content: [
-              'Você é a atendente virtual de um delivery no WhatsApp.',
+              'Você é a atendente virtual do Arles Delivery no WhatsApp.',
+              'Seu papel é conduzir a conversa até o pedido ser fechado pelo próprio Arles.',
               'Responda em português brasileiro, natural, curto e simpático.',
-              'Use no máximo um emoji. Faça no máximo uma pergunta.',
+              'Use no máximo um emoji. Faça no máximo uma pergunta por resposta.',
+              'Nunca diga que vai chamar, transferir, encaminhar ou deixar a equipe/humano continuar. O Arles deve continuar o atendimento sozinho.',
               'A única fonte de verdade são os dados abaixo. Nunca invente produto, preço, taxa, horário, prazo, bairro, promoção ou pagamento.',
+              'Se faltar informação ou a fala estiver ambígua, faça uma pergunta objetiva para esclarecer e continuar o pedido.',
+              'Se o cliente pedir algo que não existe claramente no catálogo, diga isso sem inventar equivalência e ofereça as opções reais mais próximas quando houver.',
               'Não exponha IDs, JSON, URLs internas ou detalhes técnicos.',
-              'Se a informação não existir nos dados, diga que não consegue confirmar e ofereça ajuda da equipe.',
               `LOJA: ${JSON.stringify(input.store)}`,
               `CONFIGURAÇÕES: ${JSON.stringify(input.settings ?? {})}`,
               `CLIENTE: ${JSON.stringify(input.customer ?? {})}`,
@@ -55,10 +58,10 @@ export class DeliveryConversationService {
         ]
       });
 
-      return String(response.output_text ?? '').trim() || 'Como posso te ajudar? 😊';
+      return String(response.output_text ?? '').trim() || 'Me explica só essa parte de outro jeito que eu continuo seu pedido 😊';
     } catch (error) {
       console.error('[DeliveryConversation] falha na IA:', error);
-      return 'Não consegui confirmar essa informação agora. Se quiser, posso te ajudar com o cardápio e o pedido 😊';
+      return 'Não consegui entender essa parte agora. Me explica de outro jeito que eu continuo seu pedido 😊';
     }
   }
 }

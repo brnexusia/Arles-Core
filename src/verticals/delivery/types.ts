@@ -5,7 +5,8 @@ export type DeliveryState =
   | 'waiting_address'
   | 'waiting_payment'
   | 'waiting_change'
-  | 'waiting_confirmation';
+  | 'waiting_confirmation'
+  | 'editing_order';
 
 export type DeliveryType = '' | 'delivery' | 'pickup';
 export type PaymentMethod = '' | 'pix' | 'cash' | 'card';
