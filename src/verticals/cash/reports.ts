@@ -144,7 +144,12 @@ export class CashReports {
 
   async weekly(context: ModuleJobContext): Promise<void> {
     const settings = await cashService.accessState(context.companyId);
-    if (settings.hasAccess && settings.weekly_report_enabled && settings.owner_phone) {
+    if (
+      settings.hasAccess &&
+      settings.onboarding_state === 'active' &&
+      settings.weekly_report_enabled &&
+      settings.owner_phone
+    ) {
       const window = previousWeekWindow();
       const summary = await cashService.summary(context.companyId, window.from, window.to);
       await this.send(settings.owner_phone, formatCashReport({
@@ -160,7 +165,12 @@ export class CashReports {
 
   async monthly(context: ModuleJobContext): Promise<void> {
     const settings = await cashService.accessState(context.companyId);
-    if (settings.hasAccess && settings.monthly_report_enabled && settings.owner_phone) {
+    if (
+      settings.hasAccess &&
+      settings.onboarding_state === 'active' &&
+      settings.monthly_report_enabled &&
+      settings.owner_phone
+    ) {
       const window = previousMonthWindow();
       const previousWindow = monthBeforeWindow(window.from);
       const [summary, previous] = await Promise.all([
