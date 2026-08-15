@@ -29,6 +29,16 @@ describe('cash natural query', () => {
     });
   });
 
+  it('separa a loja do mês nomeado', () => {
+    const result = deterministicCashQuery('Quanto gastei na SHEIN em julho?');
+    expect(result).toMatchObject({
+      type: 'expense',
+      term: 'SHEIN',
+      periodLabel: 'julho'
+    });
+    expect(result?.from.endsWith('-07-01')).toBe(true);
+  });
+
   it('filtra categoria explícita e período', () => {
     expect(deterministicCashQuery('Mostra minhas despesas de Alimentação esse mês')).toMatchObject({
       type: 'expense',
@@ -38,10 +48,14 @@ describe('cash natural query', () => {
     });
   });
 
-  it('entende intervalo de dias no mês atual', () => {
-    const result = deterministicCashQuery('Quanto gastei entre dia 1 e dia 10?');
-    expect(result?.from.endsWith('-01')).toBe(true);
-    expect(result?.to.endsWith('-10')).toBe(true);
+  it('entende intervalos de dias no mês atual e em mês nomeado', () => {
+    const current = deterministicCashQuery('Quanto gastei entre dia 1 e dia 10?');
+    expect(current?.from.endsWith('-01')).toBe(true);
+    expect(current?.to.endsWith('-10')).toBe(true);
+
+    const named = deterministicCashQuery('Mostra minhas despesas de 1 a 10 de julho');
+    expect(named?.from.endsWith('-07-01')).toBe(true);
+    expect(named?.to.endsWith('-07-10')).toBe(true);
   });
 
   it('entende filtros de valor e ranking', () => {
