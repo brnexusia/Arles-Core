@@ -32,6 +32,35 @@ export class ArlesEngine {
     return message?.instanceName || company.evolution_instance;
   }
 
+  private async resolveCompany(message: NormalizedMessage): Promise<{
+    company: Company | null;
+    cashShared: boolean;
+    route: 'instance' | 'cash-shared' | 'none';
+  }> {
+    // Regra de isolamento: uma instância já pertencente a uma empresa não-Cash
+    // (principalmente Delivery) nunca pode ser sequestrada pela configuração global do Cash.
+    const instanceCompany = await getCompanyByInstance(message.instanceName);
+    if (instanceCompany && instanceCompany.vertical !== 'cash') {
+      return { company: instanceCompany, cashShared: false, route: 'instance' };
+    }
+
+    const cashShared = this.isCashSharedInstance(message.instanceName);
+    if (cashShared) {
+      const cashCompany = await getCashCompanyByOwnerPhone(message.phone);
+      return {
+        company: cashCompany,
+        cashShared: true,
+        route: cashCompany ? 'cash-shared' : 'none'
+      };
+    }
+
+    return {
+      company: instanceCompany,
+      cashShared: false,
+      route: instanceCompany ? 'instance' : 'none'
+    };
+  }
+
   private async replyUnknownCashSender(message: NormalizedMessage): Promise<void> {
     if (!env.cashSignupUrl || message.fromMe) return;
     const onceKey = `arles:cash:unknown:${message.messageId || message.phone}`;
@@ -174,24 +203,37 @@ export class ArlesEngine {
 
   async handleEvolution(payload: unknown): Promise<void> {
     const message = normalizeEvolutionMessage(payload);
+    const phoneTail = message.phone ? message.phone.slice(-4) : '----';
 
-    if (!message.instanceName || !message.remoteJid || !message.phone) return;
-    if (message.isGroup || message.isBroadcast) return;
-    if (message.event && !isMessageUpsert(message.event)) return;
+    if (!message.instanceName || !message.remoteJid || !message.phone) {
+      console.warn('[Arles] Webhook Evolution descartado: payload sem instanceName/remoteJid/phone.');
+      return;
+    }
+    if (message.isGroup || message.isBroadcast) {
+      console.info(`[Arles] Webhook ignorado: grupo/broadcast instance=${message.instanceName} phone=*${phoneTail}`);
+      return;
+    }
+    if (message.event && !isMessageUpsert(message.event)) {
+      console.info(`[Arles] Webhook ignorado: event=${message.event} instance=${message.instanceName} phone=*${phoneTail}`);
+      return;
+    }
 
-    const cashShared = this.isCashSharedInstance(message.instanceName);
-    const company = cashShared
-      ? await getCashCompanyByOwnerPhone(message.phone)
-      : await getCompanyByInstance(message.instanceName);
+    const resolved = await this.resolveCompany(message);
+    const company = resolved.company;
 
     if (!company) {
-      if (cashShared) {
+      if (resolved.cashShared) {
+        console.warn(`[Arles] Cash: remetente não cadastrado instance=${message.instanceName} phone=*${phoneTail}`);
         await this.replyUnknownCashSender(message);
       } else {
         console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
       }
       return;
     }
+
+    console.info(
+      `[Arles] Webhook roteado: instance=${message.instanceName} route=${resolved.route} vertical=${company.vertical} event=${message.event || 'sem_evento'} type=${message.type} phone=*${phoneTail}`
+    );
 
     const module = getVerticalModule(company.vertical);
     if (!module) {
@@ -204,13 +246,22 @@ export class ArlesEngine {
     if (message.fromMe) {
       const wasSystem = await consumeSystemSending(company.id, message.phone);
       if (!wasSystem) {
+        console.info(`[Arles] Conversa pausada por mensagem humana: company=${company.id} phone=*${phoneTail}`);
         await pauseConversation(company.id, message.phone, env.humanPauseSeconds);
       }
       return;
     }
 
-    if (!companyCanUseEngine(company)) return;
-    if (!(await onceMessage(company.id, message.messageId))) return;
+    if (!companyCanUseEngine(company)) {
+      console.warn(
+        `[Arles] Engine bloqueado para company=${company.id} vertical=${company.vertical} access_active=${company.access_active} subscription_status=${company.subscription_status}`
+      );
+      return;
+    }
+    if (!(await onceMessage(company.id, message.messageId))) {
+      console.info(`[Arles] Mensagem duplicada ignorada: company=${company.id} messageId=${message.messageId}`);
+      return;
+    }
 
     await logIncoming({
       companyId: company.id,
@@ -222,7 +273,10 @@ export class ArlesEngine {
     });
     await setLastInbound(company.id, message.phone, message.messageId);
 
-    if (await isConversationPaused(company.id, message.phone)) return;
+    if (await isConversationPaused(company.id, message.phone)) {
+      console.info(`[Arles] Mensagem recebida com conversa pausada: company=${company.id} phone=*${phoneTail}`);
+      return;
+    }
 
     let messageText: string | null = null;
 
@@ -242,7 +296,10 @@ export class ArlesEngine {
       return;
     }
 
-    if (!messageText) return;
+    if (!messageText) {
+      console.info(`[Arles] Mensagem sem conteúdo processável: company=${company.id} type=${message.type}`);
+      return;
+    }
 
     const combinedText = await bufferTextMessage({
       companyId: company.id,
@@ -250,7 +307,10 @@ export class ArlesEngine {
       messageId: message.messageId,
       text: messageText
     });
-    if (!combinedText) return;
+    if (!combinedText) {
+      console.info(`[Arles] Buffer aguardando/consumido por outra mensagem: company=${company.id} phone=*${phoneTail}`);
+      return;
+    }
 
     if (module.handlePendingInteraction) {
       const intercepted = await module.handlePendingInteraction({ company, message, combinedText });
@@ -264,7 +324,10 @@ export class ArlesEngine {
       return module.handle({ company, message, combinedText });
     });
 
-    if (!result) return;
+    if (!result) {
+      console.info(`[Arles] Lock ocupado/sem resultado: company=${company.id} phone=*${phoneTail}`);
+      return;
+    }
 
     await this.applyResult(company, message, result as VerticalResult);
   }
