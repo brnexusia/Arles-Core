@@ -1,4 +1,4 @@
-# Arles Core v2.2.0
+# Arles Core v2.1.0
 
 Motor multi-tenant e multi-vertical do ecossistema Arles.
 
@@ -15,7 +15,6 @@ vertical registrados pelo contrato `VerticalModule`.
 - `src/infrastructure`: PostgreSQL e Redis;
 - `src/verticals`: contrato, registro e modulos instalados;
 - `src/verticals/delivery`: primeira vertical, isolada do motor;
-- `src/verticals/beauty`: agenda, servicos, profissionais e atendimento Beauty;
 - `migrations/006_vertical_engine.sql`: capabilities, associacao de verticais,
   contatos globais e separacao dos dados Delivery.
 
@@ -28,7 +27,7 @@ Uma vertical implementa `VerticalModule` e declara:
 - manipuladores opcionais de midia e interacoes pendentes;
 - rotas internas opcionais.
 
-Os modulos oficiais sao registrados na composicao do motor. O servidor,
+Os modulos oficiais sao registrados em `src/verticals/index.ts`. O servidor,
 engine, autenticacao e billing nao precisam conhecer a implementacao de uma
 vertical.
 
@@ -67,16 +66,16 @@ npm test
 npm run build
 ```
 
-Os testes de fronteira impedem que infraestrutura, autenticacao ou billing
-passem a depender das regras de uma vertical.
+Os testes de fronteira impedem que `server.ts`, `core/engine.ts`, autenticacao
+ou billing voltem a importar a implementacao do Delivery.
 
 ## Deploy
 
 1. Atualize as variaveis conforme `.env.example`.
-2. Implante o Core antes dos paineis Delivery e Beauty.
+2. Implante o Core antes do painel Delivery.
 3. O comando de producao aplica as migrations antes de iniciar.
-4. Valide `GET /health` e confirme a versao `2.2.0`.
-5. Implante cada frontend vertical apontando para este mesmo Core.
+4. Valide `GET /health` e confirme a versao `2.1.0`.
+5. Implante o Arles Delivery atualizado para os endpoints modulares.
 
 As migrations sao registradas com checksum. Nao edite migrations ja aplicadas;
 adicione uma nova migration para mudancas futuras.

@@ -1,7 +1,8 @@
 import type { VerticalModule } from '../vertical.js';
 import { deliveryHandler } from './handler.js';
+import { registerDeliveryEventRoutes } from './event.routes.js';
 import { handleDeliveryImage, handleDeliveryPendingInteraction } from './interactions.js';
-import { registerDeliveryRoutes } from './routes.js';
+import { registerDeliveryPanelRoutes } from './panel.routes.js';
 
 export const deliveryModule: VerticalModule = {
   id: 'delivery',
@@ -19,6 +20,7 @@ export const deliveryModule: VerticalModule = {
   handlePendingInteraction: handleDeliveryPendingInteraction,
   handleImage: handleDeliveryImage,
   async registerRoutes(app) {
-    await registerDeliveryRoutes(app);
+    await registerDeliveryPanelRoutes(app);
+    await registerDeliveryEventRoutes(app);
   }
 };
