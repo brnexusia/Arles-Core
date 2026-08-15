@@ -10,7 +10,7 @@ BEGIN
   ) THEN
     ALTER TABLE cash_settings
       ADD CONSTRAINT cash_settings_onboarding_state_check
-      CHECK (onboarding_state IN ('awaiting_name', 'active'));
+      CHECK (onboarding_state IN ('welcome', 'awaiting_name', 'active'));
   END IF;
 END $$;
 
