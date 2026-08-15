@@ -14,18 +14,21 @@ BEGIN
   END IF;
 END $$;
 
+-- Contas Cash antigas continuam ativas. Quando houver usuário legado, reaproveita o nome.
 UPDATE cash_settings cs
-SET owner_name = nullif(trim(u.name), ''),
+SET owner_name = coalesce(
+      cs.owner_name,
+      nullif(trim((
+        SELECT au.name
+        FROM auth_users au
+        WHERE au.company_id = cs.company_id AND au.role = 'user'
+        ORDER BY au.created_at ASC
+        LIMIT 1
+      )), '')
+    ),
     onboarding_state = 'active',
     onboarding_completed_at = coalesce(cs.onboarding_completed_at, now())
-FROM LATERAL (
-  SELECT name
-  FROM auth_users
-  WHERE company_id = cs.company_id AND role = 'user'
-  ORDER BY created_at ASC
-  LIMIT 1
-) u
-WHERE cs.owner_name IS NULL;
+WHERE cs.onboarding_state <> 'welcome';
 
 CREATE TABLE IF NOT EXISTS cash_payment_events (
   id text PRIMARY KEY,
