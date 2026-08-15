@@ -7,6 +7,7 @@ import {
   markSystemSending,
   onceMessage,
   pauseConversation,
+  redis,
   scheduleFollowup,
   setLastInbound,
   withConversationLock
