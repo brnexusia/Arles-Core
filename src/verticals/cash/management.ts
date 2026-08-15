@@ -40,11 +40,11 @@ export function asksHowToManage(text: string): boolean {
   return asksHow && management;
 }
 
-function explicitIndex(value: string, verbs: RegExp): number | null {
+function explicitIndex(value: string, verbSource: string): number | null {
   const named = value.match(/\b(?:registro|registo|item|numero|n|#)\s*(\d{1,2})\b/);
   if (named) return Number(named[1]);
 
-  const direct = value.match(new RegExp(`${verbs.source}\\w*\\s+(?:o\\s+)?(\\d{1,2})(?:\\s*[!.?])?$`, 'i'));
+  const direct = value.match(new RegExp(`(?:${verbSource})\\w*\\s+(?:o\\s+)?(\\d{1,2})(?:\\s*[!.?])?$`, 'i'));
   return direct ? Number(direct[1]) : null;
 }
 
@@ -53,10 +53,10 @@ export function deletionTarget(text: string): CashRecordTarget | null {
   if (asksHowToManage(value)) return null;
   if (/^(errei|foi errado|registrei errado|registei errado)[!. ]*$/.test(value)) return { kind: 'last' };
 
-  const verbs = /(apag|exclu|remov|retir|tir|cancel|delet)/;
-  if (!verbs.test(value)) return null;
+  const verbSource = 'apag|exclu|remov|retir|tir|cancel|delet';
+  if (!new RegExp(`(?:${verbSource})\\w*`, 'i').test(value)) return null;
 
-  const index = explicitIndex(value, verbs);
+  const index = explicitIndex(value, verbSource);
   if (index && index >= 1 && index <= 20) return { kind: 'index', index };
 
   if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) {
@@ -69,10 +69,10 @@ export function editTarget(text: string): CashRecordTarget | null {
   const value = normalizeCashText(text);
   if (asksHowToManage(value)) return null;
 
-  const verbs = /(edit|alter|mud|corrig|ajust|troc)/;
-  if (!verbs.test(value)) return null;
+  const verbSource = 'edit|alter|mud|corrig|ajust|troc';
+  if (!new RegExp(`(?:${verbSource})\\w*`, 'i').test(value)) return null;
 
-  const index = explicitIndex(value, verbs);
+  const index = explicitIndex(value, verbSource);
   if (index && index >= 1 && index <= 20) return { kind: 'index', index };
 
   if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) {
@@ -125,8 +125,10 @@ export function parseCashEditPatch(text: string): CashEditPatch {
   }
 
   for (const [key, canonical] of Object.entries(CATEGORY_CANONICAL)) {
-    const categoryPattern = new RegExp(`\\b(?:categoria(?:\\s+para)?|categoria|para)\\s+${key}\\b`, 'i');
-    if (categoryPattern.test(normalized) || new RegExp(`\\bcategoria\\s*[:=-]?\\s*${key}\\b`, 'i').test(normalized)) {
+    if (
+      new RegExp(`\\bcategoria\\b.*\\b${key}\\b`, 'i').test(normalized) ||
+      new RegExp(`\\bpara\\s+${key}\\b`, 'i').test(normalized)
+    ) {
       patch.category = canonical;
       break;
     }
