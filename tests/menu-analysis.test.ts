@@ -39,6 +39,57 @@ describe('menu analysis normalization', () => {
     expect(product?.variations[0]?.price).toBe(30);
   });
 
+  it('entende preços brasileiros com vírgula e símbolo de moeda', () => {
+    const result = cleanMenuResult({
+      categories: [{
+        name: 'Lanches',
+        products: [{
+          name: 'X-Bacon',
+          description: '',
+          price: 'R$ 19,90',
+          available: true,
+          variations: []
+        }]
+      }]
+    });
+
+    expect(result.categories[0]?.products[0]?.price).toBe(19.9);
+  });
+
+  it('junta categorias equivalentes no singular e plural', () => {
+    const result = mergeMenuResults(
+      cleanMenuResult({ categories: [{ name: 'Bebida', products: [{ name: 'Água', description: '', price: 4, available: true, variations: [] }] }] }),
+      cleanMenuResult({ categories: [{ name: 'Bebidas', products: [{ name: 'Suco', description: '', price: 7, available: true, variations: [] }] }] })
+    );
+
+    expect(result.categories).toHaveLength(1);
+    expect(result.categories[0]?.products).toHaveLength(2);
+  });
+
+  it('remove duplicata causada por pequena diferença de OCR entre recortes', () => {
+    const result = mergeMenuResults(
+      cleanMenuResult({ categories: [{ name: 'Lanches', products: [{ name: 'X-Bacon', description: '', price: 18, available: true, variations: [] }] }] }),
+      cleanMenuResult({ categories: [{ name: 'Lanches', products: [{ name: 'X-Bacom', description: 'Hambúrguer, bacon e queijo', price: 18, available: true, variations: [] }] }] })
+    );
+
+    expect(result.categories[0]?.products).toHaveLength(1);
+    expect(result.categories[0]?.products[0]?.description).toContain('bacon');
+  });
+
+  it('não confunde volumes diferentes durante a deduplicação aproximada', () => {
+    const result = cleanMenuResult({
+      categories: [{
+        name: 'Bebidas',
+        products: [
+          { name: 'Coca-Cola 1L', description: '', price: 10, available: true, variations: [] },
+          { name: 'Coca-Cola 2L', description: '', price: 10, available: true, variations: [] }
+        ]
+      }]
+    });
+
+    expect(result.categories[0]?.products).toHaveLength(2);
+  });
+
   it('transforma categorias Pizzas M/G/GG em variações de um único produto', () => {
     const result = cleanMenuResult({
       categories: [

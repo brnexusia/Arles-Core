@@ -1,5 +1,11 @@
 export type Vertical = string;
 
+export interface CompanyCapability {
+  key: string;
+  status: string;
+  configuration: Record<string, unknown>;
+}
+
 export interface Company {
   id: string;
   name: string;
@@ -10,6 +16,7 @@ export interface Company {
   access_active: boolean;
   trial_ends_at: Date | null;
   timezone: string;
+  capabilities?: CompanyCapability[];
 }
 
 export interface NormalizedMessage {

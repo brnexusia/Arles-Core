@@ -30,7 +30,7 @@ export class ModuleRegistry {
 
   resolveForCompany(company: Company): VerticalModule | null {
     const enabled = new Set(
-      company.capabilities
+      (company.capabilities ?? [])
         .filter(capability => capability.status === 'active')
         .map(capability => capability.key)
     );
