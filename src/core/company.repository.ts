@@ -138,13 +138,12 @@ export async function getOrCreateCashCompanyByOwnerPhone(phone: string): Promise
       );
     }
 
+    // Mantém compatibilidade com a tabela global de trials sem sobrescrever
+    // um entitlement que possa pertencer a outra vertical/produto.
     await client.query(
       `insert into trial_entitlements(company_id,phone_normalized,trial_started_at,trial_ends_at)
        values($1,$2,$3,$4)
-       on conflict(phone_normalized) do update set
-         company_id=excluded.company_id,
-         trial_started_at=excluded.trial_started_at,
-         trial_ends_at=excluded.trial_ends_at`,
+       on conflict(phone_normalized) do nothing`,
       [companyId, normalized, startedAt, trialEndsAt]
     );
 
