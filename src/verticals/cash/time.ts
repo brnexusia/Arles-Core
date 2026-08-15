@@ -108,6 +108,12 @@ export function nextMondayAt8Brazil(from = new Date()): Date {
 
 export function nextFirstOfMonthAt8Brazil(from = new Date()): Date {
   const p = brazilParts(from);
+
+  // Se ainda for antes das 08:00 do próprio dia 1, agenda para hoje.
+  if (p.day === 1 && p.hour < 8) {
+    return brazilDate(p.year, p.month, 1, 8, 0);
+  }
+
   const target = new Date(Date.UTC(p.year, p.month, 1));
   return brazilDate(target.getUTCFullYear(), target.getUTCMonth() + 1, 1, 8, 0);
 }
