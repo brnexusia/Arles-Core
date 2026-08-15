@@ -1,4 +1,4 @@
-import { getCashCompanyByOwnerPhone, getCompanyByInstance, companyCanUseEngine } from './company.repository.js';
+import { getCompanyByInstance, getOrCreateCashCompanyByOwnerPhone, companyCanUseEngine } from './company.repository.js';
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
   bufferTextMessage,
@@ -7,7 +7,6 @@ import {
   markSystemSending,
   onceMessage,
   pauseConversation,
-  redis,
   scheduleFollowup,
   setLastInbound,
   withConversationLock
@@ -37,8 +36,7 @@ export class ArlesEngine {
     cashShared: boolean;
     route: 'instance' | 'cash-shared' | 'none';
   }> {
-    // Regra de isolamento: uma instância já pertencente a uma empresa não-Cash
-    // (principalmente Delivery) nunca pode ser sequestrada pela configuração global do Cash.
+    // Delivery e outras verticais sempre têm prioridade pela própria instância.
     const instanceCompany = await getCompanyByInstance(message.instanceName);
     if (instanceCompany && instanceCompany.vertical !== 'cash') {
       return { company: instanceCompany, cashShared: false, route: 'instance' };
@@ -46,11 +44,13 @@ export class ArlesEngine {
 
     const cashShared = this.isCashSharedInstance(message.instanceName);
     if (cashShared) {
-      const cashCompany = await getCashCompanyByOwnerPhone(message.phone);
+      // WhatsApp-first: um número remetente é uma conta. Se for o primeiro contato,
+      // a conta e o trial são criados automaticamente, sem cadastro/painel.
+      const cashAccount = await getOrCreateCashCompanyByOwnerPhone(message.phone);
       return {
-        company: cashCompany,
+        company: cashAccount.company,
         cashShared: true,
-        route: cashCompany ? 'cash-shared' : 'none'
+        route: 'cash-shared'
       };
     }
 
@@ -59,23 +59,6 @@ export class ArlesEngine {
       cashShared: false,
       route: instanceCompany ? 'instance' : 'none'
     };
-  }
-
-  private async replyUnknownCashSender(message: NormalizedMessage): Promise<void> {
-    if (!env.cashSignupUrl || message.fromMe) return;
-    const onceKey = `arles:cash:unknown:${message.messageId || message.phone}`;
-    const fresh = await redis.set(onceKey, '1', 'EX', 86400, 'NX');
-    if (!fresh) return;
-
-    await evolution.sendText({
-      instanceName: env.cashEvolutionInstance,
-      to: message.replyJid || message.phone,
-      text: [
-        'Olá! Este é o Arles Cash. 💰',
-        'Seu número ainda não está cadastrado.',
-        `Crie sua conta aqui: ${env.cashSignupUrl}`
-      ].join('\n')
-    });
   }
 
   private async sendActions(company: Company, message: NormalizedMessage, actions: OutgoingAction[]): Promise<void> {
@@ -222,12 +205,7 @@ export class ArlesEngine {
     const company = resolved.company;
 
     if (!company) {
-      if (resolved.cashShared) {
-        console.warn(`[Arles] Cash: remetente não cadastrado instance=${message.instanceName} phone=*${phoneTail}`);
-        await this.replyUnknownCashSender(message);
-      } else {
-        console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
-      }
+      console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
       return;
     }
 
@@ -252,7 +230,9 @@ export class ArlesEngine {
       return;
     }
 
-    if (!companyCanUseEngine(company)) {
+    // Cash precisa receber a mensagem mesmo expirado para conseguir mostrar o paywall
+    // e permitir reativação. As outras verticais mantêm o bloqueio global normal.
+    if (!companyCanUseEngine(company) && company.vertical !== 'cash') {
       console.warn(
         `[Arles] Engine bloqueado para company=${company.id} vertical=${company.vertical} access_active=${company.access_active} subscription_status=${company.subscription_status}`
       );
