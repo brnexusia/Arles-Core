@@ -91,13 +91,33 @@ export async function getCustomer(companyId: string, phone: string): Promise<Del
 }
 
 export async function getSession(companyId: string, phone: string): Promise<{ state: DeliveryState; draft: DeliveryDraft | null }> {
-  const result = await db.query(
-    `select state, draft from conversation_sessions
+  const result = await db.query<{ state: DeliveryState; draft: DeliveryDraft | null; updated_at: Date }>(
+    `select state, draft, updated_at from conversation_sessions
      where company_id = $1 and phone_number = $2 and vertical = 'delivery' limit 1`,
     [companyId, phone]
   );
   const row = result.rows[0];
   if (!row) return { state: 'idle', draft: null };
+
+  const updatedAt = row.updated_at instanceof Date
+    ? row.updated_at.getTime()
+    : new Date(row.updated_at).getTime();
+  const staleDraft = Boolean(
+    row.draft?.items?.length &&
+    Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt > deliveryConfig.draftTtlSeconds * 1000
+  );
+
+  if (staleDraft) {
+    await db.query(
+      `update conversation_sessions
+       set state = 'idle', draft = null, updated_at = now()
+       where company_id = $1 and phone_number = $2 and vertical = 'delivery'`,
+      [companyId, phone]
+    );
+    return { state: 'idle', draft: null };
+  }
+
   return { state: row.state as DeliveryState, draft: row.draft as DeliveryDraft | null };
 }
 
