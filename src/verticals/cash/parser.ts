@@ -87,14 +87,31 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
   if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio/.test(value)) return 'Saúde';
   if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
   if (/escola|curso|livro|faculdade|mensalidade/.test(value)) return 'Educação';
-  if (/salão|salao|academia|roupa|sapato|shopping/.test(value)) return 'Pessoal';
+  if (/salão|salao|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio/.test(value)) return 'Pessoal';
   return 'Outros';
 }
 
 function merchantFrom(text: string): string {
-  const withoutDate = text.replace(/\b(hoje|ontem|anteontem)\b/gi, '');
+  const withoutDate = text.replace(/\b(hoje|ontem|anteontem|agora)\b/gi, '');
   const match = withoutDate.match(/\b(?:no|na|em|para o|para a|de)\s+([^,.]+?)(?:\s+(?:por|de)\s+r?\$?\s*\d|$)/i);
   return (match?.[1] ?? '').trim().slice(0, 120);
+}
+
+export function descriptionFrom(text: string): string {
+  let value = text.trim();
+  value = value
+    .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
+    .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
+    .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
+    .replace(/(?:\b(?:por|de)\s+)?(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:[.,]\d{1,2})?(?:\s*reais?)?/gi, ' ')
+    .replace(/^\s*(?:um|uma)\s+/i, '')
+    .replace(/^\s*(?:no|na|em|de)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b(?:por|de|em)\s*$/i, '')
+    .trim();
+
+  return (value || text.trim()).slice(0, 500);
 }
 
 export function deterministicCashParse(text: string): CashTransactionInput | null {
@@ -106,7 +123,7 @@ export function deterministicCashParse(text: string): CashTransactionInput | nul
     amount,
     category: categoryFrom(text, type),
     merchant: merchantFrom(text),
-    description: text.trim().slice(0, 500),
+    description: descriptionFrom(text),
     transactionDate: dateFrom(text)
   };
 }
@@ -140,7 +157,8 @@ export class CashParser {
               'Não invente valor. Se não houver lançamento e valor identificáveis, is_transaction=false.',
               'Use SOMENTE estas categorias: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Receita, Outros.',
               'Toda entrada/receita deve usar a categoria Receita.',
-              'merchant é o local/pessoa quando estiver claro; description preserva uma observação útil.',
+              'merchant é o local/pessoa quando estiver claro.',
+              'description deve ser curta e útil, descrevendo o que foi comprado/recebido sem repetir verbo, valor ou data. Exemplo: “comprei uma blusinha na SHEIN de 15 reais” => “blusinha na SHEIN”.',
               `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
@@ -155,7 +173,7 @@ export class CashParser {
         amount: Math.round(parsed.amount * 100) / 100,
         category: parsed.type === 'income' ? 'Receita' : parsed.category,
         merchant: parsed.merchant.trim(),
-        description: parsed.description.trim() || text.trim(),
+        description: parsed.description.trim() || deterministic?.description || descriptionFrom(text),
         transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
           ? parsed.transaction_date
           : isoBrazil()
