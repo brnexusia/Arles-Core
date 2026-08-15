@@ -1,5 +1,5 @@
 import type { VerticalModule } from '../vertical.js';
-import { cashHandler } from './handler.js';
+import { cashConversationHandler } from './conversation.js';
 import { cashReports } from './reports.js';
 import { registerCashRoutes } from './routes.js';
 
@@ -8,7 +8,7 @@ export const cashModule: VerticalModule = {
   name: 'Arles Cash',
   version: '2.0.0',
   capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings'],
-  handle: context => cashHandler.handle(context),
+  handle: context => cashConversationHandler.handle(context),
   registerRoutes: registerCashRoutes,
   jobs: {
     'cash.weekly-summary': context => cashReports.weekly(context),
