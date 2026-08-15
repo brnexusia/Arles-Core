@@ -45,7 +45,7 @@ function tenantRoute(
 }
 
 export async function registerPlatformRoutes(app: FastifyInstance): Promise<void> {
-  tenantRoute(app, 'GET', '/internal/platform/company', ['/internal/panel/company'],
+  tenantRoute(app, 'GET', '/internal/platform/company', [],
     async (_request, reply, companyId) => {
       const [company, manifest] = await Promise.all([
         platformService.company(companyId),
@@ -60,7 +60,7 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
   tenantRoute(app, 'GET', '/internal/platform/onboarding', [],
     async (_request, reply, companyId) => reply.send({ data: await platformService.onboarding(companyId) }));
 
-  tenantRoute(app, 'POST', '/internal/platform/onboarding/complete', ['/internal/panel/onboarding/complete'],
+  tenantRoute(app, 'POST', '/internal/platform/onboarding/complete', [],
     async (request, reply, companyId) => {
       const body = (request.body ?? {}) as { step_keys?: unknown[] };
       const steps = Array.isArray(body.step_keys) ? body.step_keys.map(String) : [];
@@ -81,21 +81,21 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
       });
     });
 
-  tenantRoute(app, 'GET', '/internal/platform/settings', ['/internal/panel/settings'],
+  tenantRoute(app, 'GET', '/internal/platform/settings', [],
     async (_request, reply, companyId) => reply.send({ data: await platformService.settings(companyId) }));
 
-  tenantRoute(app, 'PUT', '/internal/platform/settings', ['/internal/panel/settings'],
+  tenantRoute(app, 'PUT', '/internal/platform/settings', [],
     async (request, reply, companyId) => reply.send({
       ok: true,
       data: await platformService.saveSettings(companyId, (request.body ?? {}) as Record<string, unknown>)
     }));
 
-  tenantRoute(app, 'GET', '/internal/platform/channels/whatsapp', ['/internal/panel/whatsapp/status'],
+  tenantRoute(app, 'GET', '/internal/platform/channels/whatsapp', [],
     async (_request, reply, companyId) => reply.send(await platformService.channelStatus(companyId)));
 
-  tenantRoute(app, 'POST', '/internal/platform/channels/whatsapp/connect', ['/internal/panel/whatsapp/connect'],
+  tenantRoute(app, 'POST', '/internal/platform/channels/whatsapp/connect', [],
     async (_request, reply, companyId) => reply.send(await platformService.connectChannel(companyId)));
 
-  tenantRoute(app, 'POST', '/internal/platform/channels/whatsapp/disconnect', ['/internal/panel/whatsapp/disconnect'],
+  tenantRoute(app, 'POST', '/internal/platform/channels/whatsapp/disconnect', [],
     async (_request, reply, companyId) => reply.send(await platformService.disconnectChannel(companyId)));
 }

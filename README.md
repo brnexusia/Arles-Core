@@ -1,4 +1,4 @@
-# Arles Core v2.1.1
+# Arles Core v2.2.0
 
 Motor multi-tenant e multi-vertical do ecossistema Arles.
 
@@ -14,7 +14,9 @@ vertical registrados pelo contrato `VerticalModule`.
 - `src/media`: processamento e armazenamento global de midia;
 - `src/infrastructure`: PostgreSQL e Redis;
 - `src/verticals`: contrato, registro e modulos instalados;
-- `src/verticals/delivery`: primeira vertical, isolada do motor;
+- `src/verticals/delivery`: pedidos e cardapio do Arles Delivery;
+- `src/verticals/beauty`: agenda e servicos do Arles Beauty;
+- `src/verticals/cash`: lancamentos e resumos do Arles Cash;
 - `migrations/006_vertical_engine.sql`: capabilities, associacao de verticais,
   contatos globais e separacao dos dados Delivery.
 
@@ -25,11 +27,13 @@ Uma vertical implementa `VerticalModule` e declara:
 - identificador, nome, versao e capabilities;
 - manipulador de mensagens;
 - manipuladores opcionais de midia e interacoes pendentes;
-- rotas internas opcionais.
+- rotas internas opcionais;
+- tarefas agendadas, onboarding e navegacao opcionais.
 
-Os modulos oficiais sao registrados em `src/verticals/index.ts`. O servidor,
-engine, autenticacao e billing nao precisam conhecer a implementacao de uma
-vertical.
+Os modulos oficiais sao registrados pela composicao em `src/composition.ts`.
+O engine, autenticacao e billing nao dependem das regras internas de nenhuma
+vertical. O worker global executa tarefas declaradas por cada modulo, como os
+resumos semanais e mensais do Cash.
 
 ## Desenvolvimento
 
@@ -72,10 +76,10 @@ ou billing voltem a importar a implementacao do Delivery.
 ## Deploy
 
 1. Atualize as variaveis conforme `.env.example`.
-2. Implante o Core antes do painel Delivery.
+2. Implante o Core antes dos aplicativos Delivery, Beauty ou Cash.
 3. O comando de producao aplica as migrations antes de iniciar.
-4. Valide `GET /health` e confirme a versao `2.1.1`.
-5. Implante o Arles Delivery atualizado para os endpoints modulares.
+4. Valide `GET /health` e confirme a versao `2.2.0`.
+5. Implante o aplicativo da vertical que sera usada.
 
 As migrations sao registradas com checksum. Nao edite migrations ja aplicadas;
 adicione uma nova migration para mudancas futuras.

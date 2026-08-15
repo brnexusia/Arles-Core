@@ -5,8 +5,8 @@ import { redis, pauseConversation, resumeConversation } from './infrastructure/r
 import { arlesEngine } from './core/engine.js';
 import { getMediaByToken } from './media/media.repository.js';
 import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
-import { composeApplication } from './composition.js';
 import { startPlatformJobWorker, stopPlatformJobWorker } from './platform/jobs/job.worker.js';
+import { composeApplication } from './composition.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
@@ -23,7 +23,7 @@ function authorized(request: { headers: Record<string, unknown> }): boolean {
 app.get('/health', async () => {
   await checkDb();
   await redis.ping();
-  return { ok: true, service: 'arles-engine', version: '2.1.1' };
+  return { ok: true, service: 'arles-engine', version: '2.2.0' };
 });
 
 app.get('/media/:token', async (request, reply) => {

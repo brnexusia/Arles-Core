@@ -1,5 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import type { Company, NormalizedMessage } from '../core/types.js';
+import type {
+  ModuleJobContext,
+  ModuleOnboardingStep,
+  ModuleUiMetadata
+} from '../platform/modules/contract.js';
 
 export type OutgoingAction =
   | { type: 'text'; text: string }
@@ -41,4 +46,7 @@ export interface VerticalModule extends VerticalHandler {
   registerRoutes?(app: FastifyInstance): Promise<void> | void;
   handlePendingInteraction?(context: VerticalContext): Promise<VerticalResult | undefined>;
   handleImage?(context: VerticalContext, media: VerticalMedia): Promise<VerticalResult | undefined>;
+  jobs?: Record<string, (context: ModuleJobContext) => Promise<void>>;
+  onboardingSteps?: ModuleOnboardingStep[];
+  ui?: ModuleUiMetadata;
 }

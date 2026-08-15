@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { deliveryModule } from './delivery/module.js';
+import { beautyModule } from './beauty/module.js';
+import { cashModule } from './cash/module.js';
 import { getVerticalModule, registerVertical } from './router.js';
 
-const builtInModules = [deliveryModule];
+const builtInModules = [deliveryModule, beautyModule, cashModule];
 
 export async function registerBuiltInVerticals(app?: FastifyInstance): Promise<void> {
   for (const module of builtInModules) {

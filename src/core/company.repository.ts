@@ -15,18 +15,7 @@ export async function getCompanyByInstance(
       subscription_status,
       access_active,
       trial_ends_at,
-      timezone,
-      coalesce((
-        select jsonb_agg(
-          jsonb_build_object(
-            'key', cc.capability_key,
-            'status', cc.status,
-            'configuration', cc.configuration
-          ) order by cc.capability_key
-        )
-        from company_capabilities cc
-        where cc.company_id = companies.id
-      ), '[]'::jsonb) as capabilities
+      timezone
     from companies
     where evolution_instance = $1
     limit 1

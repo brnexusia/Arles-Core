@@ -19,6 +19,12 @@ export type MenuCategory = {
 
 export type MenuResult = {
   categories: MenuCategory[];
+  analysis?: {
+    sourceImages: number;
+    regionsAnalyzed: number;
+    passesCompleted: number;
+    productsWithoutPrice: number;
+  };
 };
 
 export type MenuPricingAudit = {
@@ -55,8 +61,107 @@ function norm(value: unknown): string {
 
 function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
-  const n = Number(value);
+  const raw = String(value).trim().replace(/R\$/gi, '').replace(/\s+/g, '');
+  const normalized = raw.includes(',')
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : raw;
+  const n = Number(normalized);
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+}
+
+function cleanText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/^\s*[•·▪◦]+\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const CATEGORY_ALIASES: Record<string, string> = {
+  pizza: 'pizza',
+  pizzas: 'pizza',
+  'pizza tradicional': 'pizza tradicional',
+  'pizzas tradicionais': 'pizza tradicional',
+  'pizza doce': 'pizza doce',
+  'pizzas doces': 'pizza doce',
+  lanche: 'lanche',
+  lanches: 'lanche',
+  hamburguer: 'hamburguer',
+  hamburgueres: 'hamburguer',
+  bebida: 'bebida',
+  bebidas: 'bebida',
+  refrigerante: 'refrigerante',
+  refrigerantes: 'refrigerante',
+  suco: 'suco',
+  sucos: 'suco',
+  porcao: 'porcao',
+  porcoes: 'porcao',
+  entrada: 'entrada',
+  entradas: 'entrada',
+  sobremesa: 'sobremesa',
+  sobremesas: 'sobremesa',
+  adicional: 'adicional',
+  adicionais: 'adicional',
+  complemento: 'complemento',
+  complementos: 'complemento',
+  combo: 'combo',
+  combos: 'combo',
+  'prato principal': 'prato principal',
+  'pratos principais': 'prato principal'
+};
+
+function categoryKey(value: unknown): string {
+  const key = norm(value) || 'geral';
+  return CATEGORY_ALIASES[key] ?? key;
+}
+
+function sizeFingerprint(value: string): string {
+  const tokens = norm(value).match(/\b(?:p|m|g|gg|pequena|media|grande|familia|lata|\d+(?:[.,]\d+)?\s*(?:ml|l|lt|litro|litros))\b/g);
+  return tokens?.join('|') ?? '';
+}
+
+function boundedLevenshtein(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    let rowMinimum = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const value = Math.min(
+        current[j - 1]! + 1,
+        previous[j]! + 1,
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      current.push(value);
+      rowMinimum = Math.min(rowMinimum, value);
+    }
+    if (rowMinimum > limit) return limit + 1;
+    previous = current;
+  }
+
+  return previous[b.length] ?? limit + 1;
+}
+
+function pricesCompatible(a: MenuProduct, b: MenuProduct): boolean {
+  if (a.price === null || b.price === null) return true;
+  if (Math.abs(a.price - b.price) <= 0.01) return true;
+  return a.variations.some(left =>
+    b.variations.some(right => norm(left.name) === norm(right.name) && Math.abs(left.price - right.price) <= 0.01)
+  );
+}
+
+/** Conservative OCR dedupe for overlaps such as "X-Bacon" and "X-Bacom". */
+function likelySameProduct(a: MenuProduct, b: MenuProduct): boolean {
+  const left = norm(a.name);
+  const right = norm(b.name);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) < 6) return false;
+  if (sizeFingerprint(left) !== sizeFingerprint(right)) return false;
+  if (!pricesCompatible(a, b)) return false;
+
+  const limit = Math.max(left.length, right.length) >= 14 ? 2 : 1;
+  return boundedLevenshtein(left, right, limit) <= limit;
 }
 
 function mergeProduct(target: MenuProduct, source: MenuProduct): void {
@@ -87,18 +192,19 @@ function dedupeMenu(menu: MenuResult): MenuResult {
   const categories = new Map<string, MenuCategory>();
 
   for (const category of menu.categories) {
-    const categoryKey = norm(category.name) || 'geral';
-    let target = categories.get(categoryKey);
+    const key = categoryKey(category.name);
+    let target = categories.get(key);
     if (!target) {
       target = { name: category.name, products: [] };
-      categories.set(categoryKey, target);
+      categories.set(key, target);
     }
 
     const productMap = new Map(target.products.map(p => [norm(p.name), p]));
     for (const product of category.products) {
       const productKey = norm(product.name);
       if (!productKey) continue;
-      const existing = productMap.get(productKey);
+      const existing = productMap.get(productKey)
+        ?? target.products.find(candidate => likelySameProduct(candidate, product));
 
       if (!existing) {
         const copy = { ...product, variations: [...product.variations] };
@@ -108,6 +214,7 @@ function dedupeMenu(menu: MenuResult): MenuResult {
       }
 
       mergeProduct(existing, product);
+      productMap.set(productKey, existing);
     }
   }
 
@@ -215,20 +322,20 @@ export function cleanMenuResult(input: unknown): MenuResult {
     : [];
 
   for (const rawCat of rawCategories) {
-    const categoryName = String(rawCat?.name ?? '').trim();
+    const categoryName = cleanText(rawCat?.name);
     if (!categoryName) continue;
 
     const products: MenuProduct[] = [];
     const rawProducts = Array.isArray(rawCat?.products) ? rawCat.products : [];
 
     for (const raw of rawProducts) {
-      const name = String(raw?.name ?? '').trim();
+      const name = cleanText(raw?.name);
       if (!name) continue;
 
       const variations: MenuVariation[] = [];
       const seenVariations = new Set<string>();
       for (const variation of Array.isArray(raw?.variations) ? raw.variations : []) {
-        const variationName = String(variation?.name ?? '').trim();
+        const variationName = cleanText(variation?.name);
         const variationPrice = numberOrNull(variation?.price);
         const key = norm(variationName);
         if (!variationName || variationPrice === null || seenVariations.has(key)) continue;
@@ -243,7 +350,7 @@ export function cleanMenuResult(input: unknown): MenuResult {
 
       products.push({
         name,
-        description: String(raw?.description ?? '').trim(),
+        description: cleanText(raw?.description),
         price,
         available: raw?.available !== false,
         variations
