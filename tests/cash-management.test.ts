@@ -9,6 +9,7 @@ const {
   asksHowToManage,
   deletionTarget,
   editTarget,
+  normalizeCashText,
   parseCashEditPatch
 } = await import('../src/verticals/cash/management.js');
 
@@ -23,6 +24,12 @@ describe('cash record management', () => {
     expect(asksHowToManage('Como posso remover ou editar?')).toBe(true);
     expect(deletionTarget('Como posso remover o último?')).toBeNull();
     expect(editTarget('Como posso editar o registro?')).toBeNull();
+  });
+
+  it('normaliza perguntas naturais pelos comandos para o menu de ajuda', () => {
+    expect(normalizeCashText('Quais os comandos?')).toBe('comandos');
+    expect(normalizeCashText('Quais são os comandos?')).toBe('comandos');
+    expect(normalizeCashText('Que comandos existem?')).toBe('comandos');
   });
 
   it('entende alvo de edição por último ou posição do histórico', () => {
