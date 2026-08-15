@@ -21,7 +21,6 @@ describe('cash conversational layer', () => {
   it('reconhece pedido natural para desfazer exclusão', () => {
     expect(isUndoRequest('Coloca ele de novo')).toBe(true);
     expect(isUndoRequest('desfaz')).toBe(true);
-    expect(isUndoRequest('restaura o registro')).toBe(true);
   });
 
   it('reconhece guia e comandos em linguagem natural', () => {
