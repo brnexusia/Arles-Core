@@ -39,7 +39,7 @@ export const env = {
   // Arles Cash usa um único WhatsApp administrado pela Arles.
   // Cada remetente cria/usa a própria conta Cash automaticamente.
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
-  cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() ?? '').replace(/\D/g, ''),
+  cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5571999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
   cashPaymentMonthlyUrl: process.env.CASH_PAYMENT_MONTHLY_URL?.trim() ?? '',
   cashPaymentSemiannualUrl: process.env.CASH_PAYMENT_SEMIANNUAL_URL?.trim() ?? '',
