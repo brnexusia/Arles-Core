@@ -138,12 +138,14 @@ export async function getOrCreateCashCompanyByOwnerPhone(phone: string): Promise
       );
     }
 
-    // Mantém compatibilidade com a tabela global de trials sem sobrescrever
-    // um entitlement que possa pertencer a outra vertical/produto.
+    // O índice único de phone_normalized é parcial; o predicado precisa ser
+    // repetido no ON CONFLICT para o PostgreSQL conseguir inferir o índice.
     await client.query(
       `insert into trial_entitlements(company_id,phone_normalized,trial_started_at,trial_ends_at)
        values($1,$2,$3,$4)
-       on conflict(phone_normalized) do nothing`,
+       on conflict(phone_normalized)
+       where phone_normalized is not null and phone_normalized <> ''
+       do nothing`,
       [companyId, normalized, startedAt, trialEndsAt]
     );
 
