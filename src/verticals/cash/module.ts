@@ -6,23 +6,18 @@ import { registerCashRoutes } from './routes.js';
 export const cashModule: VerticalModule = {
   id: 'cash',
   name: 'Arles Cash',
-  version: '1.0.0',
+  version: '2.0.0',
   capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings'],
   handle: context => cashHandler.handle(context),
   registerRoutes: registerCashRoutes,
   jobs: {
     'cash.weekly-summary': context => cashReports.weekly(context),
-    'cash.monthly-summary': context => cashReports.monthly(context)
+    'cash.monthly-summary': context => cashReports.monthly(context),
+    'cash.trial-day5': context => cashReports.trialDay5(context),
+    'cash.trial-day7': context => cashReports.trialDay7(context),
+    'cash.trial-expired': context => cashReports.trialExpired(context)
   },
-  onboardingSteps: [
-    {
-      key: 'cash.authorized-phone',
-      scope: 'capability',
-      capabilityKey: 'cash.transactions',
-      title: 'Número autorizado',
-      order: 10
-    }
-  ],
+  onboardingSteps: [],
   ui: {
     entry: 'cash',
     navigation: [
@@ -32,4 +27,3 @@ export const cashModule: VerticalModule = {
     ]
   }
 };
-
