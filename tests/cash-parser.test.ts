@@ -5,7 +5,7 @@ process.env.REDIS_URL ||= 'redis://127.0.0.1:6379';
 process.env.EVOLUTION_BASE_URL ||= 'https://evolution.invalid';
 process.env.EVOLUTION_API_KEY ||= 'test-key';
 
-const { deterministicCashParse, categoryFrom } = await import('../src/verticals/cash/parser.js');
+const { deterministicCashParse, categoryFrom, descriptionFrom } = await import('../src/verticals/cash/parser.js');
 
 describe('cash parser', () => {
   it('registra despesa simples no mercado', () => {
@@ -14,7 +14,8 @@ describe('cash parser', () => {
       type: 'expense',
       amount: 15,
       category: 'Alimentação',
-      merchant: 'mercado'
+      merchant: 'mercado',
+      description: 'mercado'
     });
   });
 
@@ -52,8 +53,21 @@ describe('cash parser', () => {
     expect(categoryFrom('condomínio', 'expense')).toBe('Moradia');
     expect(categoryFrom('faculdade', 'expense')).toBe('Educação');
     expect(categoryFrom('academia', 'expense')).toBe('Pessoal');
+    expect(categoryFrom('blusinha na SHEIN', 'expense')).toBe('Pessoal');
     expect(categoryFrom('qualquer entrada', 'income')).toBe('Receita');
     expect(categoryFrom('coisa diferente', 'expense')).toBe('Outros');
+  });
+
+  it('gera descrição curta e útil para o registro', () => {
+    const result = deterministicCashParse('comprei uma blusinha na SHEIN de 15 reais');
+    expect(result).toMatchObject({
+      type: 'expense',
+      amount: 15,
+      category: 'Pessoal',
+      merchant: 'SHEIN',
+      description: 'blusinha na SHEIN'
+    });
+    expect(descriptionFrom('Gastei 85,56 no mercado agora')).toBe('mercado');
   });
 
   it('não inventa lançamento sem valor', () => {
