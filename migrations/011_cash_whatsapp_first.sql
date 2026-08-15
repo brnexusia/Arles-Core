@@ -59,3 +59,7 @@ ON CONFLICT (plan_key) DO UPDATE SET
   configuration = excluded.configuration,
   active = true,
   updated_at = now();
+
+UPDATE vertical_definitions
+SET version='2.0.0', updated_at=now()
+WHERE id='cash';
