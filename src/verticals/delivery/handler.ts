@@ -266,14 +266,30 @@ export class DeliveryHandler implements VerticalHandler {
       }
     }
 
-    // Cardápio visual e saudação simples, como no workflow do n8n.
-    if (!hadDraft && (isMenuRequest(combinedText) || intent.intent === 'menu' || isGreeting(combinedText) || intent.intent === 'greeting')) {
+    // Pedido explícito de cardápio sempre vence o estado do checkout.
+    // O rascunho é preservado para o cliente continuar ajustando depois de olhar o menu.
+    const menuRequested = isMenuRequest(combinedText) || intent.intent === 'menu';
+    if (menuRequested) {
+      if (menuAssets.length) {
+        return menuResult('Claro! 😊 Aqui está nosso cardápio:', menuAssets);
+      }
+
+      if (catalog.length) {
+        const lines = catalog
+          .slice(0, 30)
+          .map(product => `• ${product.name} — ${brl(product.price)}`);
+        return textResult(`Claro! 😊 Nosso cardápio disponível agora:\n\n${lines.join('\n')}`);
+      }
+
+      return textResult('Nosso cardápio está sendo atualizado agora. Me diz o que você procura que eu te ajudo 😊');
+    }
+
+    // Saudação simples abre uma conversa nova somente quando não há checkout ativo.
+    if (!hadDraft && (isGreeting(combinedText) || intent.intent === 'greeting')) {
       if (menuAssets.length) {
         return menuResult('Oi! 😊 Aqui está nosso cardápio:', menuAssets);
       }
-      if (isGreeting(combinedText) || intent.intent === 'greeting') {
-        return textResult(`Oi! 😊 Sou o atendimento do ${store.store_name}. O que você gostaria de pedir?`);
-      }
+      return textResult(`Oi! 😊 Sou o atendimento do ${store.store_name}. O que você gostaria de pedir?`);
     }
 
     // Perguntas comuns são respondidas por código quando possível:
