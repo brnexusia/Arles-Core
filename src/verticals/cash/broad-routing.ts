@@ -53,33 +53,27 @@ export function routeCashInput(input: string): CashBroadRoute {
   const value = normalizeCashText(input);
   if (!value) return null;
 
-  // Ajuda e descoberta do produto.
   if (/\b(ajuda|menu|comandos?|guia|tutorial|instrucoes?|como usar|como uso isso|como mexer|como mexe|como funciona|o que (?:da pra|da para|da|posso) fazer|o que voce faz|me ensina|me explica como usar|quais funcoes)\b/.test(value)) {
     return { kind: 'rewrite', text: 'ajuda' };
   }
 
-  // Planos, cobrança e reativação. Evita confundir com um lançamento comum "paguei ...".
   if (/^(?:quais? (?:sao )?os )?(?:planos?|precos?|valores?)(?: do arles cash)?[?.! ]*$/.test(value) ||
       /\b(quanto custa o arles|quanto custa usar|como assino|quero assinar|assinatura do arles|quero reativar|como reativo|renovar assinatura)\b/.test(value)) {
     return { kind: 'plans' };
   }
 
-  // Trial/status de acesso.
   if (/\b(trial|teste gratis|periodo gratuito|quantos dias faltam|quando (?:acaba|termina|vence) (?:meu )?(?:trial|teste)|meu plano atual|status da assinatura)\b/.test(value)) {
     return { kind: 'trial' };
   }
 
-  // Categorias automáticas.
   if (/\b(quais categorias|categorias disponiveis|categorias que existem|como categoriza|como voce categoriza|lista de categorias)\b/.test(value)) {
     return { kind: 'categories' };
   }
 
-  // Agenda de relatórios automáticos.
-  if (/\b(quando (?:manda|envia|recebo|chega) (?:o |os )?relatorio|horario (?:do|dos) relatorio|relatorios automaticos|agenda (?:do|dos) relatorio)\b/.test(value)) {
+  if (/\b(quando (?:manda|envia|recebo|chega) (?:o |os )?relatorios?|horario (?:do|dos) relatorios?|relatorios automaticos|agenda (?:do|dos) relatorios?)\b/.test(value)) {
     return { kind: 'schedule' };
   }
 
-  // Relatórios: famílias semanais e mensais.
   if (/\b(relatorio|fechamento|balanco|resumo|resultado|como foi)\b.*\b(semana|semanal)\b/.test(value) ||
       /\b(semana|semanal)\b.*\b(relatorio|fechamento|balanco|resumo)\b/.test(value)) {
     return { kind: 'rewrite', text: 'relatório semanal' };
@@ -89,29 +83,24 @@ export function routeCashInput(input: string): CashBroadRoute {
     return { kind: 'rewrite', text: 'relatório mensal' };
   }
 
-  // Resumo/balanço com período explícito vira consulta completa do período.
   const period = periodSuffix(value);
   if (period && /\b(resumo|fechamento|balanco|panorama|movimentacoes?|movimentos?|resultado|como foi|o que rolou|o que teve|total do dia|saldo do dia|saldo de)\b/.test(value)) {
     return { kind: 'rewrite', text: `quais foram meus registros ${period}?` };
   }
 
-  // "Resumo do dia" sem dizer "hoje".
   if (/\b(resumo|fechamento|balanco|panorama)\b.*\b(do|meu|o) dia\b/.test(value)) {
     return { kind: 'rewrite', text: 'quais foram meus registros hoje?' };
   }
 
-  // Saldo/visão geral sem período específico.
   if (/^(?:meu )?(?:saldo|balanco|resumo)(?: atual)?[?.! ]*$/.test(value) ||
       /\b(quanto (?:tenho|sobrou)|como estao minhas financas|como estao as financas|como vao minhas financas|como to de grana|qual minha situacao financeira|situacao financeira|panorama financeiro|visao geral financeira|meu dinheiro agora|quanto tenho disponivel)\b/.test(value)) {
     return { kind: 'rewrite', text: 'saldo' };
   }
 
-  // Histórico geral. Se houver período, é consulta e não apenas últimos registros.
   if (!hasPeriod(value) && /\b(historico|minhas ultimas movimentacoes|meus ultimos lancamentos|registros recentes|o que registrei|o que lancei|ultimos registros|ver meus registros|mostrar meus registros)\b/.test(value)) {
     return { kind: 'rewrite', text: 'histórico' };
   }
 
-  // Consultas em linguagem cotidiana.
   if (/\bquanto\s+(?:que\s+)?(?:saiu|foi gasto|foi embora|desembolsei|torrei)\b/.test(value)) {
     return { kind: 'rewrite', text: value.replace(/\bquanto\s+(?:que\s+)?(?:saiu|foi gasto|foi embora|desembolsei|torrei)\b/, 'quanto gastei') };
   }
@@ -131,7 +120,6 @@ export function routeCashInput(input: string): CashBroadRoute {
     return { kind: 'rewrite', text: `maior gasto ${period ?? 'este mês'}` };
   }
 
-  // Edição natural do último registro. Só assume "último" quando há linguagem explícita de correção.
   if (/\b(corrige isso|corrigir isso|arruma isso|ajusta isso|altera isso|muda isso)\b/.test(value)) {
     return { kind: 'rewrite', text: 'edita o último' };
   }
@@ -144,7 +132,6 @@ export function routeCashInput(input: string): CashBroadRoute {
     return { kind: 'rewrite', text: `edita o ${safeTargetSuffix(value)}` };
   }
 
-  // Exclusão natural do registro. Nunca trata conta/perfil/dados como lançamento.
   if (!/\b(conta|perfil|cadastro|dados pessoais)\b/.test(value)) {
     if (/\b(apaga isso|remove isso|exclui isso|cancela isso|nao era pra registrar|nao era para registrar|foi engano|lancamento duplicado|registro duplicado)\b/.test(value)) {
       return { kind: 'rewrite', text: 'apaga o último' };
