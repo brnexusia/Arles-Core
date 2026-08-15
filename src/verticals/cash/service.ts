@@ -1,6 +1,7 @@
 import { db } from '../../infrastructure/db.js';
 import { env } from '../../config/env.js';
 import type { CashSummary, CashTransactionInput, CashTransactionType } from './types.js';
+import { currentMonthWindow, isoBrazil } from './time.js';
 
 function cleanPhone(value: string): string {
   return value.replace(/\D/g, '').slice(0, 20);
@@ -24,6 +25,27 @@ function validAmount(value: unknown): number {
   return Math.round(amount * 100) / 100;
 }
 
+function planMonths(planKey: string): number {
+  if (planKey === 'cash_monthly') return 1;
+  if (planKey === 'cash_semiannual') return 6;
+  if (planKey === 'cash_annual') return 12;
+  throw new Error('CASH_PLAN_INVALID');
+}
+
+function addMonths(date: Date, months: number): Date {
+  const result = new Date(date);
+  result.setUTCMonth(result.getUTCMonth() + months);
+  return result;
+}
+
+function canonicalPlan(value: string): string | null {
+  const normalized = String(value ?? '').toLowerCase().trim();
+  if (/cash_monthly|mensal|monthly/.test(normalized)) return 'cash_monthly';
+  if (/cash_semiannual|semestral|semiannual|6.?mes/.test(normalized)) return 'cash_semiannual';
+  if (/cash_annual|anual|annual|12.?mes/.test(normalized)) return 'cash_annual';
+  return null;
+}
+
 export class CashService {
   private async refreshMonthlyUsage(companyId: string): Promise<void> {
     await db.query(
@@ -36,6 +58,24 @@ export class CashService {
        where id=$1`,
       [companyId]
     );
+  }
+
+  paymentLinks() {
+    return {
+      monthly: env.cashPaymentMonthlyUrl,
+      semiannual: env.cashPaymentSemiannualUrl,
+      annual: env.cashPaymentAnnualUrl
+    };
+  }
+
+  paymentMenu(): string {
+    const links = this.paymentLinks();
+    const lines = [
+      '📌 Mensal: R$4,99/mês' + (links.monthly ? `\n👉 ${links.monthly}` : ''),
+      '📌 Semestral: R$24,90 (= R$4,15/mês)' + (links.semiannual ? `\n👉 ${links.semiannual}` : ''),
+      '🏆 Anual — Mais popular: R$39,90 (= R$3,33/mês — 2 meses grátis 🎁)' + (links.annual ? `\n👉 ${links.annual}` : '')
+    ];
+    return lines.join('\n\n');
   }
 
   async rememberOwnerPhone(companyId: string, phone: string): Promise<void> {
@@ -52,20 +92,88 @@ export class CashService {
 
   async settings(companyId: string) {
     const result = await db.query(
-      `select owner_phone,weekly_report_enabled,monthly_report_enabled
-       from cash_settings where company_id=$1 limit 1`,
+      `select
+         cs.owner_phone,cs.owner_name,cs.onboarding_state,cs.onboarding_completed_at,
+         cs.weekly_report_enabled,cs.monthly_report_enabled,
+         c.subscription_status,c.access_active,c.trial_started_at,c.trial_ends_at,
+         c.subscription_current_period_end,c.plan_key
+       from companies c
+       left join cash_settings cs on cs.company_id=c.id
+       where c.id=$1 limit 1`,
       [companyId]
     );
-    const settings = result.rows[0] ?? {
-      owner_phone: null,
-      weekly_report_enabled: true,
-      monthly_report_enabled: true
-    };
+    const row = result.rows[0];
+    if (!row) throw new Error('COMPANY_NOT_FOUND');
     return {
-      ...settings,
+      owner_phone: row.owner_phone ?? null,
+      owner_name: row.owner_name ?? null,
+      onboarding_state: row.onboarding_state ?? 'active',
+      onboarding_completed_at: row.onboarding_completed_at ?? null,
+      weekly_report_enabled: row.weekly_report_enabled !== false,
+      monthly_report_enabled: row.monthly_report_enabled !== false,
+      subscription_status: String(row.subscription_status ?? 'expired'),
+      access_active: row.access_active === true,
+      trial_started_at: row.trial_started_at ? new Date(row.trial_started_at) : null,
+      trial_ends_at: row.trial_ends_at ? new Date(row.trial_ends_at) : null,
+      subscription_current_period_end: row.subscription_current_period_end
+        ? new Date(row.subscription_current_period_end)
+        : null,
+      plan_key: row.plan_key ?? null,
       official_phone: env.cashOfficialNumber || null,
       managed_by_arles: true
     };
+  }
+
+  async completeOnboarding(companyId: string, name: string) {
+    const cleanName = name.trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (cleanName.length < 2) throw new Error('CASH_NAME_INVALID');
+
+    const result = await db.query(
+      `update cash_settings set
+         owner_name=$2,onboarding_state='active',onboarding_completed_at=now(),updated_at=now()
+       where company_id=$1
+       returning owner_phone,owner_name,onboarding_state,onboarding_completed_at`,
+      [companyId, cleanName]
+    );
+    if (!result.rows[0]) throw new Error('CASH_SETTINGS_NOT_FOUND');
+
+    await db.query(
+      `update company_verticals set onboarding_completed=true,updated_at=now()
+       where company_id=$1 and vertical_id='cash'`,
+      [companyId]
+    );
+    return result.rows[0];
+  }
+
+  async accessState(companyId: string) {
+    const settings = await this.settings(companyId);
+    const now = Date.now();
+    const trialActive =
+      settings.subscription_status === 'trial' &&
+      !!settings.trial_ends_at &&
+      settings.trial_ends_at.getTime() > now;
+    const paidActive =
+      settings.subscription_status === 'active' &&
+      (!settings.subscription_current_period_end || settings.subscription_current_period_end.getTime() > now);
+
+    if (settings.subscription_status === 'trial' && settings.trial_ends_at && !trialActive) {
+      await db.query(
+        `update companies set subscription_status='expired',access_active=false,updated_at=now()
+         where id=$1 and subscription_status='trial'`,
+        [companyId]
+      );
+      return { ...settings, subscription_status: 'expired', access_active: false, hasAccess: false };
+    }
+
+    return { ...settings, hasAccess: trialActive || paidActive };
+  }
+
+  async expireTrial(companyId: string): Promise<void> {
+    await db.query(
+      `update companies set subscription_status='expired',access_active=false,updated_at=now()
+       where id=$1 and subscription_status='trial' and trial_ends_at <= now()`,
+      [companyId]
+    );
   }
 
   async saveSettings(companyId: string, body: Record<string, unknown>) {
@@ -95,7 +203,7 @@ export class CashService {
          weekly_report_enabled=excluded.weekly_report_enabled,
          monthly_report_enabled=excluded.monthly_report_enabled,
          updated_at=now()
-       returning owner_phone,weekly_report_enabled,monthly_report_enabled`,
+       returning owner_phone,owner_name,onboarding_state,weekly_report_enabled,monthly_report_enabled`,
       [companyId, phone, weekly, monthly]
     );
     return {
@@ -156,6 +264,19 @@ export class CashService {
        order by transaction_date desc,created_at desc
        limit $5 offset $6`,
       [companyId, type, from, to, limit, offset]
+    );
+    return result.rows;
+  }
+
+  async listRecent(companyId: string, phone: string, limit = 5) {
+    const normalized = cleanPhone(phone);
+    const result = await db.query(
+      `select id::text,type,amount::float8,category,merchant,description,transaction_date,created_at
+       from cash_transactions
+       where company_id=$1 and ($2::text='' or user_phone=$2)
+       order by transaction_date desc,created_at desc
+       limit $3`,
+      [companyId, normalized, Math.max(1, Math.min(20, limit))]
     );
     return result.rows;
   }
@@ -249,16 +370,13 @@ export class CashService {
   }
 
   async overview(companyId: string) {
-    const today = new Date();
-    const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))
-      .toISOString().slice(0, 10);
-    const todayIso = today.toISOString().slice(0, 10);
+    const period = currentMonthWindow();
     const [summary, recent, settings] = await Promise.all([
-      this.summary(companyId, monthStart, todayIso),
+      this.summary(companyId, period.from, period.to),
       this.listTransactions(companyId, { limit: 8 }),
       this.settings(companyId)
     ]);
-    return { period: { from: monthStart, to: todayIso }, summary, recent, settings };
+    return { period, summary, recent, settings };
   }
 
   async companyChannel(companyId: string) {
@@ -267,6 +385,103 @@ export class CashService {
       [companyId]
     );
     return result.rows[0] ?? null;
+  }
+
+  async applyExternalPayment(input: {
+    eventId: string;
+    provider: string;
+    phone?: string;
+    companyId?: string;
+    plan: string;
+    status: string;
+    amountCents?: number | null;
+    payload?: Record<string, unknown>;
+  }) {
+    const eventId = input.eventId.trim();
+    const provider = input.provider.trim().toLowerCase() || 'external';
+    const phone = cleanPhone(input.phone ?? '');
+    const planKey = canonicalPlan(input.plan);
+    const status = input.status.toLowerCase().trim();
+    if (!eventId) throw new Error('CASH_PAYMENT_EVENT_INVALID');
+    if (!planKey) throw new Error('CASH_PLAN_INVALID');
+
+    const approved = /approved|paid|complete|completed|purchase_approved|active/.test(status);
+    const revoked = /refund|refunded|chargeback|canceled|cancelled|expired/.test(status);
+    if (!approved && !revoked) return { ignored: true };
+
+    const client = await db.connect();
+    try {
+      await client.query('begin');
+      await client.query(`select pg_advisory_xact_lock(hashtext($1))`, [`cash-payment:${eventId}`]);
+
+      const seen = await client.query(`select 1 from cash_payment_events where id=$1 limit 1`, [eventId]);
+      if (seen.rowCount) {
+        await client.query('commit');
+        return { duplicate: true };
+      }
+
+      const found = await client.query<{ id: string; subscription_current_period_end: Date | null }>(
+        `select c.id::text,c.subscription_current_period_end
+         from companies c
+         left join cash_settings cs on cs.company_id=c.id
+         where coalesce(c.active_vertical_id,c.vertical)='cash'
+           and (
+             ($1::text <> '' and c.id::text=$1)
+             or ($2::text <> '' and right(regexp_replace(coalesce(cs.owner_phone,''),'[^0-9]','','g'),11)=right($2,11))
+           )
+         order by case when c.id::text=$1 then 0 else 1 end
+         limit 1`,
+        [input.companyId?.trim() ?? '', phone]
+      );
+      const company = found.rows[0];
+      if (!company) throw new Error('CASH_PAYMENT_ACCOUNT_NOT_FOUND');
+
+      if (approved) {
+        const now = new Date();
+        const currentEnd = company.subscription_current_period_end
+          ? new Date(company.subscription_current_period_end)
+          : null;
+        const base = currentEnd && currentEnd.getTime() > now.getTime() ? currentEnd : now;
+        const periodEnd = addMonths(base, planMonths(planKey));
+        await client.query(
+          `update companies set
+             subscription_status='active',access_active=true,plan_key=$2,
+             subscription_started_at=coalesce(subscription_started_at,now()),
+             subscription_current_period_end=$3,cancel_at_period_end=false,updated_at=now()
+           where id=$1`,
+          [company.id, planKey, periodEnd]
+        );
+      } else if (revoked) {
+        await client.query(
+          `update companies set subscription_status='canceled',access_active=false,updated_at=now()
+           where id=$1`,
+          [company.id]
+        );
+      }
+
+      await client.query(
+        `insert into cash_payment_events(id,provider,company_id,owner_phone,plan_key,status,amount_cents,payload)
+         values($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+        [
+          eventId,
+          provider,
+          company.id,
+          phone || null,
+          planKey,
+          status,
+          Number.isInteger(input.amountCents) ? input.amountCents : null,
+          JSON.stringify(input.payload ?? {})
+        ]
+      );
+
+      await client.query('commit');
+      return { companyId: company.id, active: approved, planKey };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 
