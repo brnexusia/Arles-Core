@@ -89,6 +89,8 @@ const MONTHS: Record<string, number> = {
   dezembro: 12
 };
 
+const MONTH_PATTERN = Object.keys(MONTHS).join('|');
+
 const CATEGORY_ALIASES: Array<[RegExp, (typeof CATEGORIES)[number]]> = [
   [/\balimentacao\b/, 'Alimentação'],
   [/\btransporte\b/, 'Transporte'],
@@ -208,6 +210,24 @@ function parsePeriod(text: string): { from: string; to: string; label: string; e
     };
   }
 
+  const namedMonthRange = value.match(new RegExp(`\\b(?:entre|de|do)\\s+(?:o\\s+)?(?:dia\\s*)?(\\d{1,2})\\s+(?:e|ate|a|ao)\\s+(?:o\\s+)?(?:dia\\s*)?(\\d{1,2})\\s+de\\s+(${MONTH_PATTERN})(?:\\s+de\\s+(\\d{4}))?\\b`));
+  if (namedMonthRange) {
+    const first = Number(namedMonthRange[1]);
+    const last = Number(namedMonthRange[2]);
+    const monthName = namedMonthRange[3]!;
+    const month = MONTHS[monthName]!;
+    const year = namedMonthRange[4] ? Number(namedMonthRange[4]) : now.year;
+    const max = daysInMonth(year, month);
+    if (first >= 1 && last >= first && last <= max) {
+      return {
+        from: iso(year, month, first),
+        to: iso(year, month, last),
+        label: `de ${String(first).padStart(2, '0')}/${String(month).padStart(2, '0')} a ${String(last).padStart(2, '0')}/${String(month).padStart(2, '0')}`,
+        explicit: true
+      };
+    }
+  }
+
   const betweenDays = value.match(/\b(?:entre|do)\s+(?:o\s+)?dia\s*(\d{1,2})\s+(?:e|ate|ao)\s+(?:o\s+)?(?:dia\s*)?(\d{1,2})\b/);
   if (betweenDays) {
     const first = Number(betweenDays[1]);
@@ -242,7 +262,7 @@ function parsePeriod(text: string): { from: string; to: string; label: string; e
     if (validIso(day)) return { from: day, to: day, label: formatBrazilDate(day), explicit: true };
   }
 
-  const monthMatch = value.match(new RegExp(`\\b(${Object.keys(MONTHS).join('|')})(?:\\s+de\\s+(\\d{4}))?\\b`));
+  const monthMatch = value.match(new RegExp(`\\b(${MONTH_PATTERN})(?:\\s+de\\s+(\\d{4}))?\\b`));
   if (monthMatch) {
     const month = MONTHS[monthMatch[1]!]!;
     const year = monthMatch[2] ? Number(monthMatch[2]) : now.year;
@@ -294,6 +314,9 @@ function sortFrom(text: string): { sort: CashQuerySort; limit: number } {
 
 function cleanupTerm(raw: string): string {
   return raw
+    .replace(new RegExp(`\\s+(?:em\\s+)?(?:${MONTH_PATTERN})(?:\\s+de\\s+\\d{4})?.*$`, 'i'), '')
+    .replace(/\s+em\s+20\d{2}.*$/i, '')
+    .replace(/\s+(?:em|de)\s+\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?.*$/i, '')
     .replace(/\b(hoje|ontem|anteontem|agora|este mes|esse mes|mes atual|mes passado|ultimo mes|esta semana|essa semana|semana passada|este ano|esse ano|ano atual)\b.*$/i, '')
     .replace(/\b(?:acima de|mais de|maior que|abaixo de|menos de|menor que|entre)\b.*$/i, '')
     .replace(/[?!.]+$/g, '')
@@ -343,8 +366,9 @@ export function deterministicCashQuery(text: string): CashQueryFilters | null {
 function canonicalAiFilters(parsed: z.infer<typeof AiQuerySchema>, fallback: CashQueryFilters | null): CashQueryFilters | null {
   if (!parsed.is_query) return fallback;
   const defaultPeriod = currentMonthWindow();
-  const from = validIso(parsed.from) ? parsed.from : fallback?.from ?? defaultPeriod.from;
-  const to = validIso(parsed.to) ? parsed.to : fallback?.to ?? defaultPeriod.to;
+  let from = validIso(parsed.from) ? parsed.from : fallback?.from ?? defaultPeriod.from;
+  let to = validIso(parsed.to) ? parsed.to : fallback?.to ?? defaultPeriod.to;
+  if (from > to) [from, to] = [to, from];
   return {
     type: parsed.type,
     from,
