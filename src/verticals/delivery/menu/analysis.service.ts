@@ -19,7 +19,6 @@ export type MenuInputImage = {
   mime: string;
   label?: string;
   isOriginal?: boolean;
-  sourceIndex?: number;
 };
 
 type MenuAnalysisJob =
@@ -30,7 +29,6 @@ type MenuAnalysisJob =
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 28 * 1024 * 1024;
-const MAX_ANALYSIS_IMAGES = 36;
 const JOB_TTL_SECONDS = 15 * 60;
 
 const schema = {
@@ -173,12 +171,6 @@ Não duplique itens por causa dos recortes.
 Cada produto deve ficar na categoria SEMÂNTICA correta (ex.: Pizzas, Pizzas Doces, Bebidas).
 NUNCA use tamanho/volume como categoria: "Pizzas M", "Pizzas G" e "Pizzas GG" devem ser um produto em "Pizzas" com variações M/G/GG.
 Extraia nome, descrição/ingredientes, preço, disponibilidade e variações/tamanhos.
-Leia listas em duas ou mais colunas respeitando o alinhamento horizontal entre nome, descrição e preço.
-Não associe ao produto o preço da linha de cima ou de baixo. Em dúvida, preserve o produto com price=null.
-Remova apenas números usados como índice visual (ex.: "01 -"); preserve números que façam parte real do nome, quantidade ou tamanho.
-Preços com vírgula são decimais brasileiros: "15,90" significa 15.90.
-"A partir de R$ X" usa X como preço base. Promoção só vira preço quando estiver claramente ligada ao produto.
-Combos devem manter no campo description os itens/acompanhamentos que os compõem.
 Não invente informações que não estejam visíveis.
 Ignore telefone, endereço, Instagram, slogans e textos promocionais que não sejam produtos.
 Se não houver descrição visível, use "".
@@ -199,9 +191,6 @@ function rawBase64(data: string): string {
 
 function validateImages(images: MenuInputImage[]): void {
   if (!images.length) throw new Error('Nenhuma imagem recebida.');
-  if (images.length > MAX_ANALYSIS_IMAGES) {
-    throw new Error('Foram gerados recortes demais. Envie menos fotos por análise.');
-  }
   let total = 0;
 
   for (const image of images) {
@@ -226,71 +215,6 @@ function jobKey(companyId: string, jobId: string): string {
 
 async function saveJob(companyId: string, jobId: string, job: MenuAnalysisJob): Promise<void> {
   await redis.set(jobKey(companyId, jobId), JSON.stringify(job), 'EX', JOB_TTL_SECONDS);
-}
-
-function chunkImages(images: MenuInputImage[], size: number): MenuInputImage[][] {
-  const chunks: MenuInputImage[][] = [];
-  for (let index = 0; index < images.length; index += size) {
-    chunks.push(images.slice(index, index + size));
-  }
-  return chunks;
-}
-
-function menuOutline(menu: MenuResult): string {
-  return JSON.stringify({
-    categories: menu.categories.map(category => ({
-      name: category.name,
-      products: category.products.map(product => product.name)
-    }))
-  });
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
-): Promise<Array<R | null>> {
-  const results: Array<R | null> = Array(items.length).fill(null);
-  let cursor = 0;
-
-  async function worker(): Promise<void> {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      try {
-        results[index] = await mapper(items[index]!, index);
-      } catch (error) {
-        console.warn(`[MENU ANALYSIS] leitura regional ${index + 1} falhou`, error);
-      }
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, () => worker())
-  );
-  return results;
-}
-
-function pricingAuditImages(images: MenuInputImage[]): MenuInputImage[] {
-  const originals = images.filter(image => image.isOriginal);
-  const detailCandidates = images.filter(image =>
-    !image.isOriginal && /rodap|inferior|direit|esquerd|coluna|lateral/i.test(String(image.label ?? ''))
-  );
-  const selected = [...originals, ...detailCandidates];
-  const seen = new Set<string>();
-  return selected.filter(image => {
-    const key = String(image.label ?? `${image.sourceIndex}:${image.isOriginal}`);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 12);
-}
-
-function countProductsWithoutPrice(menu: MenuResult): number {
-  return menu.categories.reduce(
-    (total, category) => total + category.products.filter(product => product.price === null).length,
-    0
-  );
 }
 
 async function callOpenAI(
@@ -365,8 +289,7 @@ async function callPricingAudit(
         `5. standalone_products deve conter itens independentes que podem ter sido omitidos na leitura inicial.\n` +
         `6. Se houver um acréscimo explícito ligado a um sabor (ex.: Carne de Sol +R$5), coloque em surcharges.\n` +
         `7. Não invente preço nem produto. Se um texto for só título/promocional, não crie produto.\n` +
-        `8. Para refrigerante com Lata/1L/2L, prefira UM produto com variações, salvo se a arte realmente mostrar marcas com preços próprios.\n` +
-        `9. Se um produto da leitura inicial estiver com price=null ou preço diferente do claramente visível, inclua-o em standalone_products com categoria, nome e preço corrigidos.`
+        `8. Para refrigerante com Lata/1L/2L, prefira UM produto com variações, salvo se a arte realmente mostrar marcas com preços próprios.`
     }
   ];
 
@@ -413,87 +336,49 @@ async function callPricingAudit(
 async function analyze(images: MenuInputImage[]): Promise<MenuResult> {
   const originals = images.filter(image => image.isOriginal);
   const firstPassImages = originals.length ? originals : images.slice(0, 1);
-  const enlargedRegions = images.filter(image => !image.isOriginal && !firstPassImages.includes(image));
 
   const baseline = await callOpenAI(
     firstPassImages,
-    `Faça a LEITURA ESTRUTURAL do cardápio completo.
-Identifique todas as páginas, categorias, colunas e blocos de produtos antes de extrair.
-Percorra cada coluna de cima para baixo e depois avance para a próxima coluna.
-Se M/G/GG ou volumes aparecerem separados da lista de sabores, trate como variações, nunca como categorias.
-Não pule um produto só porque o preço está pequeno: nesse caso use price=null.`
+    'Faça uma leitura estrutural completa. Identifique TODAS as categorias e produtos. Se M/G/GG aparecerem separados da lista de sabores, trate como variações, nunca como categorias.'
   );
 
-  const regionBatches = chunkImages(enlargedRegions, 3);
-  const recoveredRegions = await mapWithConcurrency(regionBatches, 3, (batch, index) =>
-    callOpenAI(
-      batch,
-      `Esta é a LEITURA REGIONAL ${index + 1} de ${regionBatches.length}. Os recortes estão ampliados e podem se sobrepor.
-Extraia TODOS os produtos legíveis nestas regiões, linha por linha, inclusive os sem preço legível.
-Não é necessário repetir itens que não aparecem nestes recortes.
-Use os títulos de categoria visíveis; quando o título estiver fora do recorte, use esta estrutura já encontrada apenas como contexto:
-${menuOutline(baseline)}
-Não transforme tamanho, volume, código ou preço em categoria. Não crie telefone, endereço ou chamada promocional como produto.`
-    )
-  );
-
-  const successfulRegions = recoveredRegions.filter((result): result is MenuResult => result !== null);
-  let merged = mergeMenuResults(baseline, ...successfulRegions);
-
-  let gapAudit: MenuResult | null = null;
+  let audit: MenuResult | null = null;
   try {
-    gapAudit = await callOpenAI(
-      firstPassImages,
-      `Faça a AUDITORIA FINAL DE COBERTURA na imagem completa.
-Esta lista já foi obtida da imagem completa e dos recortes:
-${menuOutline(merged)}
-
-Devolva SOMENTE produtos ausentes, categorias ausentes ou fatos visíveis que precisam ser corrigidos.
-Se nada estiver faltando, devolva {"categories":[]}.
-Confira obrigatoriamente: cada coluna, topo, centro, rodapé, bebidas, sobremesas, adicionais, porções e combos.
-Não repita toda a lista e não invente nada.`
+    audit = await callOpenAI(
+      images,
+      `Faça uma auditoria de COBERTURA usando a imagem completa e todos os recortes ampliados.\n` +
+      `A primeira leitura foi:\n${JSON.stringify(baseline)}\n\n` +
+      `Devolva o cardápio COMPLETO corrigido. Faça checklist visual: topo, meio, rodapé, esquerda e direita. ` +
+      `Procure sabores omitidos, Pizzas Doces, refrigerantes, sucos, águas, adicionais e combos. ` +
+      `Tamanhos como M/G/GG e volumes como 1L/2L são VARIAÇÕES e não categorias.`
     );
-    merged = mergeMenuResults(merged, gapAudit);
   } catch (error) {
-    console.warn('[MENU ANALYSIS] auditoria final de cobertura falhou; mantendo leituras regionais', error);
+    console.warn('[MENU ANALYSIS] auditoria de cobertura falhou; usando leitura inicial', error);
   }
+
+  let merged = audit ? mergeMenuResults(baseline, audit) : baseline;
 
   let pricingAudit: MenuPricingAudit | null = null;
   try {
-    pricingAudit = await callPricingAudit(pricingAuditImages(images), merged);
+    pricingAudit = await callPricingAudit(images, merged);
     merged = applyPricingAudit(merged, pricingAudit);
   } catch (error) {
     console.warn('[MENU ANALYSIS] auditoria de preços/rodapé falhou; mantendo cobertura principal', error);
   }
 
   const baselineCount = countMenuProducts(baseline);
-  const regionalCount = successfulRegions.reduce((total, result) => total + countMenuProducts(result), 0);
-  const gapCount = gapAudit ? countMenuProducts(gapAudit) : 0;
+  const auditCount = audit ? countMenuProducts(audit) : 0;
   const mergedCount = countMenuProducts(merged);
   const pricingGroups = pricingAudit?.global_variation_groups.length ?? 0;
   const recoveredStandalone = pricingAudit?.standalone_products.length ?? 0;
-  const productsWithoutPrice = countProductsWithoutPrice(merged);
-  const sourceImages = new Set(
-    images.map((image, index) => image.sourceIndex ?? (image.isOriginal ? index : 0))
-  ).size;
-  const passesCompleted = 1 + successfulRegions.length + Number(gapAudit !== null) + Number(pricingAudit !== null);
 
   console.log(
-    `[MENU ANALYSIS] baseline=${baselineCount} regional=${regionalCount} gap=${gapCount} final=${mergedCount} ` +
-    `categories=${merged.categories.length} region_batches=${successfulRegions.length}/${regionBatches.length} ` +
-    `price_groups=${pricingGroups} standalone_recovered=${recoveredStandalone} missing_price=${productsWithoutPrice}`
+    `[MENU ANALYSIS] baseline=${baselineCount} coverage=${auditCount} final=${mergedCount} ` +
+    `categories=${merged.categories.length} price_groups=${pricingGroups} standalone_recovered=${recoveredStandalone}`
   );
 
   if (!mergedCount) throw new Error('Nenhum produto foi identificado no cardápio.');
-  return {
-    ...merged,
-    analysis: {
-      sourceImages,
-      regionsAnalyzed: images.length,
-      passesCompleted,
-      productsWithoutPrice
-    }
-  };
+  return merged;
 }
 
 export class MenuAnalysisService {

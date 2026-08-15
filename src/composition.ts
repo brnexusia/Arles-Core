@@ -5,7 +5,6 @@ import { registerAdminRoutes } from './admin/admin.routes.js';
 import { registerPlatformRoutes } from './platform/platform.routes.js';
 import { moduleRegistry } from './platform/modules/registry.js';
 import { deliveryModule } from './verticals/delivery/module.js';
-import { beautyModule } from './verticals/beauty/module.js';
 import { registerVertical } from './verticals/router.js';
 import type { VerticalModule as LegacyVerticalModule } from './verticals/vertical.js';
 import type { VerticalModule as PlatformVerticalModule } from './platform/modules/contract.js';
@@ -31,10 +30,8 @@ function platformAdapter(module: LegacyVerticalModule): PlatformVerticalModule {
 
 export async function composeApplication(app: FastifyInstance): Promise<void> {
   if (!composed) {
-    for (const vertical of [deliveryModule, beautyModule]) {
-      registerVertical(vertical);
-      moduleRegistry.register(platformAdapter(vertical));
-    }
+    registerVertical(deliveryModule);
+    moduleRegistry.register(platformAdapter(deliveryModule));
     composed = true;
   }
 
