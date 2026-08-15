@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
+import { evolution } from '../../whatsapp/evolution.client.js';
+import { env } from '../../config/env.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
+import { isoBrazil } from './time.js';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -38,7 +41,96 @@ function route(
   });
 }
 
+function nested(body: Record<string, any>, paths: string[]): unknown {
+  for (const path of paths) {
+    let value: any = body;
+    let found = true;
+    for (const key of path.split('.')) {
+      if (value == null || typeof value !== 'object' || !(key in value)) {
+        found = false;
+        break;
+      }
+      value = value[key];
+    }
+    if (found && value != null && String(value).trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function centsFrom(body: Record<string, any>): number | null {
+  const cents = Number(nested(body, ['amount_cents', 'data.amount_cents', 'purchase.price.value_cents']));
+  if (Number.isInteger(cents) && cents >= 0) return cents;
+  const amount = Number(nested(body, ['amount', 'price', 'data.amount', 'purchase.price.value']));
+  if (Number.isFinite(amount) && amount >= 0) return Math.round(amount * 100);
+  return null;
+}
+
+function planFrom(body: Record<string, any>, amountCents: number | null): string {
+  const explicit = String(nested(body, [
+    'plan_key', 'plan', 'product_name', 'offer_name',
+    'product.name', 'data.plan', 'data.product.name', 'purchase.product.name'
+  ]) ?? '').trim();
+  if (explicit) return explicit;
+  if (amountCents === 499) return 'cash_monthly';
+  if (amountCents === 2490) return 'cash_semiannual';
+  if (amountCents === 3990) return 'cash_annual';
+  return '';
+}
+
 export async function registerCashRoutes(app: FastifyInstance) {
+  // Webhook público para Kirvano/Hotmart (ou um adaptador externo).
+  // A autenticação é feita por segredo próprio, sem sessão de usuário.
+  app.post('/webhooks/cash/payment', async (request, reply) => {
+    try {
+      if (!env.cashPaymentWebhookSecret) {
+        return reply.code(503).send({ error: 'CASH_PAYMENT_WEBHOOK_NOT_CONFIGURED' });
+      }
+      const auth = String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
+      const headerSecret = String(request.headers['x-cash-webhook-secret'] ?? '').trim();
+      if (auth !== env.cashPaymentWebhookSecret && headerSecret !== env.cashPaymentWebhookSecret) {
+        return reply.code(401).send({ error: 'CASH_PAYMENT_WEBHOOK_UNAUTHORIZED' });
+      }
+
+      const body = (request.body ?? {}) as Record<string, any>;
+      const query = (request.query ?? {}) as Record<string, unknown>;
+      const amountCents = centsFrom(body);
+      const result = await cashService.applyExternalPayment({
+        eventId: String(nested(body, [
+          'event_id', 'id', 'webhook_id', 'transaction_id',
+          'data.id', 'data.transaction_id', 'purchase.transaction'
+        ]) ?? '').trim(),
+        provider: String(body.provider ?? query.provider ?? 'external'),
+        phone: String(nested(body, [
+          'phone', 'customer_phone', 'buyer_phone',
+          'customer.phone', 'buyer.phone', 'data.customer.phone', 'data.buyer.phone',
+          'purchase.buyer.phone'
+        ]) ?? ''),
+        companyId: String(nested(body, ['company_id', 'data.company_id']) ?? ''),
+        plan: planFrom(body, amountCents),
+        status: String(nested(body, [
+          'status', 'event', 'event_type', 'data.status', 'purchase.status'
+        ]) ?? ''),
+        amountCents,
+        payload: body
+      });
+
+      if ('companyId' in result && result.companyId && result.active && env.cashEvolutionInstance) {
+        const settings = await cashService.settings(result.companyId);
+        if (settings.owner_phone) {
+          await evolution.sendText({
+            instanceName: env.cashEvolutionInstance,
+            to: settings.owner_phone,
+            text: '✅ Pagamento confirmado! Seu Arles Cash está ativo novamente. Seu histórico continua aqui com você.'
+          });
+        }
+      }
+
+      return reply.send({ ok: true, ...result });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
   route(app, 'GET', '/internal/verticals/cash/overview',
     async (_request, reply, companyId) => reply.send({ data: await cashService.overview(companyId) }));
 
@@ -57,7 +149,7 @@ export async function registerCashRoutes(app: FastifyInstance) {
         category: String(body.category ?? 'Outros'),
         merchant: String(body.merchant ?? ''),
         description: String(body.description ?? ''),
-        transactionDate: String(body.transaction_date ?? new Date().toISOString().slice(0, 10))
+        transactionDate: String(body.transaction_date ?? isoBrazil())
       }
     });
     await cashReports.ensureScheduled(companyId);
@@ -90,4 +182,3 @@ export async function registerCashRoutes(app: FastifyInstance) {
     return reply.send({ data });
   });
 }
-
