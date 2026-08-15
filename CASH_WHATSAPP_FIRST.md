@@ -12,7 +12,7 @@
 
 ```env
 CASH_EVOLUTION_INSTANCE=instancia-oficial-ja-conectada
-CASH_OFFICIAL_NUMBER=5571999999999
+CASH_OFFICIAL_NUMBER=5575999622157
 
 CASH_PAYMENT_MONTHLY_URL=https://checkout.exemplo/mensal
 CASH_PAYMENT_SEMIANNUAL_URL=https://checkout.exemplo/semestral
@@ -57,7 +57,7 @@ Payload normalizado recomendado para um adaptador Kirvano/Hotmart/n8n:
   "event_id": "evt_123",
   "provider": "kirvano",
   "status": "approved",
-  "phone": "5571999999999",
+  "phone": "5575999622157",
   "plan_key": "cash_annual",
   "amount_cents": 3990
 }
@@ -85,7 +85,7 @@ Mantenha `JOB_WORKER_INTERVAL_MS` habilitado no Core.
 No projeto `Arles-Cash`, configure:
 
 ```env
-VITE_CASH_WHATSAPP_NUMBER=5571999999999
+VITE_CASH_WHATSAPP_NUMBER=5575999622157
 ```
 
 A CTA abre:
