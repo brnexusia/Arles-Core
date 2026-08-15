@@ -38,7 +38,16 @@ export async function getCashCompanyByOwnerPhone(
   if (normalized.length < 10) return null;
 
   const result = await db.query<Company>(
-    `select ${COMPANY_SELECT.replaceAll(/\b(id|name|slug|active_vertical_id|vertical|evolution_instance|subscription_status|access_active|trial_ends_at|timezone)\b/g, 'c.$1')}
+    `select
+       c.id,
+       c.name,
+       c.slug,
+       coalesce(c.active_vertical_id,c.vertical) as vertical,
+       c.evolution_instance,
+       c.subscription_status,
+       c.access_active,
+       c.trial_ends_at,
+       c.timezone
      from cash_settings cs
      join companies c on c.id = cs.company_id
      where coalesce(c.active_vertical_id, c.vertical) = 'cash'
@@ -109,7 +118,7 @@ export async function getOrCreateCashCompanyByOwnerPhone(phone: string): Promise
 
     await client.query(
       `insert into cash_settings(company_id,owner_phone,onboarding_state)
-       values($1,$2,'awaiting_name')`,
+       values($1,$2,'welcome')`,
       [companyId, normalized]
     );
 
