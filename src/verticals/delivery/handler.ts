@@ -34,7 +34,7 @@ import {
   getSession,
   saveSession
 } from './repository.js';
-import type { DeliveryDraft, DeliveryProduct, DeliveryState } from './types.js';
+import type { DeliveryDraft, DeliveryProduct, DeliveryState, PaymentMethod } from './types.js';
 import { deliveryConfig } from './config.js';
 
 function textResult(text: string, extra: Partial<VerticalResult> = {}): VerticalResult {
@@ -72,6 +72,23 @@ function paymentQuestion(paymentMethods: string | null): string {
   const normalized = String(paymentMethods ?? '').trim();
   if (!normalized) return 'E como você prefere pagar: Pix, dinheiro ou cartão? 😊';
   return `E como você prefere pagar? Temos ${normalized}. 😊`;
+}
+
+function configuredPaymentMethods(value: string | null): PaymentMethod[] {
+  const configured = norm(value);
+  if (!configured) return ['pix', 'cash', 'card'];
+
+  const methods: PaymentMethod[] = [];
+  if (/\bpix\b/.test(configured)) methods.push('pix');
+  if (/\b(dinheiro|especie|cash)\b/.test(configured)) methods.push('cash');
+  if (/\b(cartao|credito|debito|maquininha)\b/.test(configured)) methods.push('card');
+
+  return methods.length ? methods : ['pix', 'cash', 'card'];
+}
+
+function paymentMethodAllowed(method: PaymentMethod, configured: string | null): boolean {
+  if (!method) return false;
+  return configuredPaymentMethods(configured).includes(method);
 }
 
 function deterministicQuestionAnswer(input: {
@@ -297,7 +314,24 @@ export class DeliveryHandler implements VerticalHandler {
       draft.client_name = customer!.name;
     }
 
+    // Sessões antigas também não podem carregar uma forma de pagamento que a loja não aceita.
+    if (draft.payment_method && !paymentMethodAllowed(draft.payment_method, store.payment_methods)) {
+      draft.payment_method = '';
+      draft.change_for = null;
+    }
+
     const directProducts = safeProductMatches(combinedText, catalog);
+
+    // Encerramento pós-pedido é determinístico e acontece antes da IA.
+    // Assim “obrigada/obrigado/valeu” nunca é reinterpretado como uma nova saudação.
+    if (recentConfirmed && !hadDraft && directProducts.length === 0) {
+      if (isThanks(combinedText)) {
+        return textResult('Por nada 😊 Seu pedido já está confirmado. Bom apetite!');
+      }
+      if (isConfirmation(combinedText)) {
+        return textResult('Seu pedido já foi confirmado 😊 Não precisa confirmar novamente.');
+      }
+    }
 
     // Caminhos óbvios não precisam gastar IA.
     if (isMenuRequest(combinedText)) {
@@ -355,15 +389,6 @@ export class DeliveryHandler implements VerticalHandler {
     if (intent.intent === 'cancel' && hadDraft && !recentConfirmed) {
       await saveSession({ companyId: company.id, phone: message.phone, state: 'idle', draft: null });
       return textResult('Certo, cancelei esse pedido em andamento. Se quiser começar outro, é só me dizer o que vai querer 😊');
-    }
-
-    if (recentConfirmed && !hadDraft && directProducts.length === 0) {
-      if (isThanks(combinedText)) {
-        return textResult('Por nada 😊 Seu pedido já está confirmado. Qualquer coisa, é só chamar.');
-      }
-      if (isConfirmation(combinedText)) {
-        return textResult('Seu pedido já foi confirmado 😊 Não precisa confirmar novamente.');
-      }
     }
 
     if (!hadDraft && intent.intent === 'question') {
@@ -500,7 +525,14 @@ export class DeliveryHandler implements VerticalHandler {
 
     stage = stageForDraft(draft);
     if (stage === 'waiting_payment') {
-      draft.payment_method = detectPayment(combinedText) || intent.payment_method || draft.payment_method;
+      const requestedPayment = detectPayment(combinedText) || intent.payment_method;
+      if (requestedPayment && !paymentMethodAllowed(requestedPayment, store.payment_methods)) {
+        draft.payment_method = '';
+        draft.change_for = null;
+        await saveSession({ companyId: company.id, phone: message.phone, state: 'waiting_payment', draft });
+        return textResult(`Essa forma de pagamento não está disponível. ${paymentQuestion(store.payment_methods)}`);
+      }
+      draft.payment_method = requestedPayment || draft.payment_method;
     }
 
     stage = stageForDraft(draft);
