@@ -1,4 +1,9 @@
-import { getCompanyByInstance, getOrCreateCashCompanyByOwnerPhone, companyCanUseEngine } from './company.repository.js';
+import {
+  companyCanUseEngine,
+  getCashCompanyByOwnerPhone,
+  getCompanyByInstance,
+  getOrCreateCashCompanyByOwnerPhone
+} from './company.repository.js';
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
   bufferTextMessage,
@@ -44,6 +49,16 @@ export class ArlesEngine {
 
     const cashShared = this.isCashSharedInstance(message.instanceName);
     if (cashShared) {
+      // Ecos de mensagens que saíram pelo número central nunca criam uma nova conta.
+      if (message.fromMe) {
+        const existingCash = await getCashCompanyByOwnerPhone(message.phone);
+        return {
+          company: existingCash,
+          cashShared: true,
+          route: existingCash ? 'cash-shared' : 'none'
+        };
+      }
+
       // WhatsApp-first: um número remetente é uma conta. Se for o primeiro contato,
       // a conta e o trial são criados automaticamente, sem cadastro/painel.
       const cashAccount = await getOrCreateCashCompanyByOwnerPhone(message.phone);
@@ -205,7 +220,7 @@ export class ArlesEngine {
     const company = resolved.company;
 
     if (!company) {
-      console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
+      if (!message.fromMe) console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
       return;
     }
 
@@ -219,7 +234,13 @@ export class ArlesEngine {
       return;
     }
 
-    // Mensagem escrita manualmente pela loja pausa a IA por 1h.
+    // O número central do Cash é gerenciado pelo próprio produto. Ecos de relatórios,
+    // avisos e confirmações não podem pausar o assistente.
+    if (message.fromMe && resolved.cashShared && company.vertical === 'cash') {
+      return;
+    }
+
+    // Nas demais verticais, mensagem escrita manualmente pela loja pausa a IA por 1h.
     // Mensagens enviadas pelo próprio Arles possuem marcador curto e são ignoradas.
     if (message.fromMe) {
       const wasSystem = await consumeSystemSending(company.id, message.phone);
