@@ -25,12 +25,19 @@ const CATEGORY_CANONICAL: Record<string, string> = {
 };
 
 export function normalizeCashText(value: string): string {
-  return value
+  const normalized = value
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim()
     .replace(/\s+/g, ' ');
+
+  // Variações naturais de pedido de ajuda devem cair no mesmo comando interno.
+  if (/^(?:quais(?: sao)? os comandos|quais comandos|que comandos (?:tem|existem)|me mostra os comandos)[!.? ]*$/.test(normalized)) {
+    return 'comandos';
+  }
+
+  return normalized;
 }
 
 export function asksHowToManage(text: string): boolean {

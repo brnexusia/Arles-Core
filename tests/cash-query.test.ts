@@ -6,7 +6,7 @@ process.env.EVOLUTION_BASE_URL ||= 'https://evolution.invalid';
 process.env.EVOLUTION_API_KEY ||= 'test-key';
 
 const { deterministicCashQuery } = await import('../src/verticals/cash/query.js');
-const { currentMonthWindow, dateIsoOffset } = await import('../src/verticals/cash/time.js');
+const { currentMonthWindow, dateIsoOffset, isoBrazil } = await import('../src/verticals/cash/time.js');
 
 describe('cash natural query', () => {
   it('consulta tudo que gastou ontem', () => {
@@ -15,6 +15,21 @@ describe('cash natural query', () => {
       from: dateIsoOffset(-1),
       to: dateIsoOffset(-1),
       periodLabel: 'ontem'
+    });
+  });
+
+  it('reconhece pergunta natural pelos registros de hoje', () => {
+    expect(deterministicCashQuery('Quais foram meus registro de hoje?')).toMatchObject({
+      type: 'all',
+      from: isoBrazil(),
+      to: isoBrazil(),
+      periodLabel: 'hoje'
+    });
+    expect(deterministicCashQuery('Quais foram meus registros de hoje?')).toMatchObject({
+      type: 'all',
+      from: isoBrazil(),
+      to: isoBrazil(),
+      periodLabel: 'hoje'
     });
   });
 
