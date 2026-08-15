@@ -1,4 +1,5 @@
 import { db } from '../../infrastructure/db.js';
+import { env } from '../../config/env.js';
 import type { CashSummary, CashTransactionInput, CashTransactionType } from './types.js';
 
 function cleanPhone(value: string): string {
@@ -55,15 +56,34 @@ export class CashService {
        from cash_settings where company_id=$1 limit 1`,
       [companyId]
     );
-    return result.rows[0] ?? {
+    const settings = result.rows[0] ?? {
       owner_phone: null,
       weekly_report_enabled: true,
       monthly_report_enabled: true
+    };
+    return {
+      ...settings,
+      official_phone: env.cashOfficialNumber || null,
+      managed_by_arles: true
     };
   }
 
   async saveSettings(companyId: string, body: Record<string, unknown>) {
     const phone = cleanPhone(String(body.owner_phone ?? '')) || null;
+    if (phone) {
+      const duplicate = await db.query(
+        `select 1
+         from cash_settings
+         where company_id <> $1
+           and (
+             regexp_replace(coalesce(owner_phone,''),'[^0-9]','','g') = $2
+             or right(regexp_replace(coalesce(owner_phone,''),'[^0-9]','','g'),11) = right($2,11)
+           )
+         limit 1`,
+        [companyId, phone]
+      );
+      if (duplicate.rowCount) throw new Error('CASH_PHONE_ALREADY_REGISTERED');
+    }
     const weekly = body.weekly_report_enabled !== false;
     const monthly = body.monthly_report_enabled !== false;
     const result = await db.query(
@@ -78,7 +98,11 @@ export class CashService {
        returning owner_phone,weekly_report_enabled,monthly_report_enabled`,
       [companyId, phone, weekly, monthly]
     );
-    return result.rows[0];
+    return {
+      ...result.rows[0],
+      official_phone: env.cashOfficialNumber || null,
+      managed_by_arles: true
+    };
   }
 
   async createTransaction(input: {
@@ -112,7 +136,6 @@ export class CashService {
       ]
     );
     await this.refreshMonthlyUsage(input.companyId);
-    if (input.phone) await this.rememberOwnerPhone(input.companyId, input.phone);
     return result.rows[0];
   }
 

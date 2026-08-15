@@ -12,6 +12,14 @@ function deterministicInstance(companyId: string): string {
 }
 
 export class PlatformService {
+  private async vertical(companyId: string): Promise<string> {
+    const result = await db.query<{ vertical: string }>(
+      `select coalesce(active_vertical_id,vertical) as vertical from companies where id=$1 limit 1`,
+      [companyId]
+    );
+    return String(result.rows[0]?.vertical ?? '');
+  }
+
   async company(companyId: string) {
     const result = await db.query(
       `select id::text,name,vertical,store_info_completed,whatsapp_completed,
@@ -178,6 +186,14 @@ export class PlatformService {
   }
 
   async channelStatus(companyId: string) {
+    if ((await this.vertical(companyId)) === 'cash') {
+      return {
+        status: env.cashEvolutionInstance ? 'managed' : 'unconfigured',
+        phoneNumber: env.cashOfficialNumber || null,
+        managedByArles: true
+      };
+    }
+
     const company = await db.query<{ evolution_instance: string }>(
       `select evolution_instance from companies where id=$1 limit 1`,
       [companyId]
@@ -221,6 +237,10 @@ export class PlatformService {
   }
 
   async connectChannel(companyId: string) {
+    if ((await this.vertical(companyId)) === 'cash') {
+      throw new Error('CASH_WHATSAPP_MANAGED_BY_ARLES');
+    }
+
     const company = await db.query<{ evolution_instance: string }>(
       `select evolution_instance from companies where id=$1 limit 1`,
       [companyId]
@@ -261,6 +281,10 @@ export class PlatformService {
   }
 
   async disconnectChannel(companyId: string) {
+    if ((await this.vertical(companyId)) === 'cash') {
+      throw new Error('CASH_WHATSAPP_MANAGED_BY_ARLES');
+    }
+
     const company = await db.query<{ evolution_instance: string }>(
       `select evolution_instance from companies where id=$1 limit 1`,
       [companyId]

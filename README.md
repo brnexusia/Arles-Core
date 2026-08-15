@@ -1,4 +1,4 @@
-# Arles Core v2.2.0
+# Arles Core v2.2.1
 
 Motor multi-tenant e multi-vertical do ecossistema Arles.
 
@@ -30,7 +30,9 @@ Uma vertical implementa `VerticalModule` e declara:
 - rotas internas opcionais;
 - tarefas agendadas, onboarding e navegacao opcionais.
 
-Os modulos oficiais sao registrados pela composicao em `src/composition.ts`.
+Os modulos oficiais sao registrados pelo bootstrap compartilhado. O Delivery mantém
+o roteamento conversacional estável por instância, enquanto o Cash usa um canal
+central da Arles e resolve a conta pelo número remetente cadastrado.
 O engine, autenticacao e billing nao dependem das regras internas de nenhuma
 vertical. O worker global executa tarefas declaradas por cada modulo, como os
 resumos semanais e mensais do Cash.
@@ -78,8 +80,22 @@ ou billing voltem a importar a implementacao do Delivery.
 1. Atualize as variaveis conforme `.env.example`.
 2. Implante o Core antes dos aplicativos Delivery, Beauty ou Cash.
 3. O comando de producao aplica as migrations antes de iniciar.
-4. Valide `GET /health` e confirme a versao `2.2.0`.
+4. Valide `GET /health` e confirme a versao `2.2.1`.
 5. Implante o aplicativo da vertical que sera usada.
 
 As migrations sao registradas com checksum. Nao edite migrations ja aplicadas;
 adicione uma nova migration para mudancas futuras.
+
+
+## WhatsApp: Delivery x Cash
+
+Os dois produtos usam modelos diferentes e não devem ser misturados:
+
+- **Delivery:** cada empresa conecta a própria instância Evolution. O webhook encontra
+  a empresa pelo `evolution_instance`.
+- **Cash:** a Arles mantém uma única instância central. O cliente somente cadastra
+  o próprio número, e o webhook encontra a conta Cash pelo `cash_settings.owner_phone`.
+
+Para o Cash, configure `CASH_EVOLUTION_INSTANCE`, `CASH_OFFICIAL_NUMBER` e
+`CASH_SIGNUP_URL`. `CASH_EVOLUTION_INSTANCE` deve apontar para a instância que já
+está conectada na Evolution; não é necessário reconectar ou gerar QR Code por cliente.

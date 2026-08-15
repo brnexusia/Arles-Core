@@ -1,4 +1,5 @@
 import { evolution } from '../../whatsapp/evolution.client.js';
+import { env } from '../../config/env.js';
 import { platformJobService } from '../../platform/jobs/job.service.js';
 import type { ModuleJobContext } from '../../platform/modules/contract.js';
 import { cashService } from './service.js';
@@ -84,12 +85,11 @@ export class CashReports {
   async weekly(context: ModuleJobContext): Promise<void> {
     const settings = await cashService.settings(context.companyId);
     if (settings.weekly_report_enabled && settings.owner_phone) {
-      const channel = await cashService.companyChannel(context.companyId);
-      if (channel?.evolution_instance) {
+      if (env.cashEvolutionInstance) {
         const window = weeklyWindow();
         const summary = await cashService.summary(context.companyId, window.from, window.to);
         await evolution.sendText({
-          instanceName: channel.evolution_instance,
+          instanceName: env.cashEvolutionInstance,
           to: settings.owner_phone,
           text: formatCashSummary('Seu resumo da semana', summary)
         });
@@ -101,12 +101,11 @@ export class CashReports {
   async monthly(context: ModuleJobContext): Promise<void> {
     const settings = await cashService.settings(context.companyId);
     if (settings.monthly_report_enabled && settings.owner_phone) {
-      const channel = await cashService.companyChannel(context.companyId);
-      if (channel?.evolution_instance) {
+      if (env.cashEvolutionInstance) {
         const window = previousMonthWindow();
         const summary = await cashService.summary(context.companyId, window.from, window.to);
         await evolution.sendText({
-          instanceName: channel.evolution_instance,
+          instanceName: env.cashEvolutionInstance,
           to: settings.owner_phone,
           text: formatCashSummary('Seu resumo do mês', summary)
         });

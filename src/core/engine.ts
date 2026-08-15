@@ -1,4 +1,4 @@
-import { getCompanyByInstance, companyCanUseEngine } from './company.repository.js';
+import { getCashCompanyByOwnerPhone, getCompanyByInstance, companyCanUseEngine } from './company.repository.js';
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
   bufferTextMessage,
@@ -20,20 +20,48 @@ import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
 
 export class ArlesEngine {
+  private isCashSharedInstance(instanceName: string): boolean {
+    return Boolean(env.cashEvolutionInstance && instanceName === env.cashEvolutionInstance);
+  }
+
+  private outboundInstance(company: Company, message?: NormalizedMessage): string {
+    if (company.vertical === 'cash' && env.cashEvolutionInstance) {
+      return env.cashEvolutionInstance;
+    }
+    return message?.instanceName || company.evolution_instance;
+  }
+
+  private async replyUnknownCashSender(message: NormalizedMessage): Promise<void> {
+    if (!env.cashSignupUrl || message.fromMe) return;
+    const onceKey = `arles:cash:unknown:${message.messageId || message.phone}`;
+    const fresh = await redis.set(onceKey, '1', 'EX', 86400, 'NX');
+    if (!fresh) return;
+
+    await evolution.sendText({
+      instanceName: env.cashEvolutionInstance,
+      to: message.replyJid || message.phone,
+      text: [
+        'Olá! Este é o Arles Cash. 💰',
+        'Seu número ainda não está cadastrado.',
+        `Crie sua conta aqui: ${env.cashSignupUrl}`
+      ].join('\n')
+    });
+  }
+
   private async sendActions(company: Company, message: NormalizedMessage, actions: OutgoingAction[]): Promise<void> {
     for (const action of actions) {
       await markSystemSending(company.id, message.phone);
 
       if (action.type === 'text') {
         await evolution.sendText({
-          instanceName: company.evolution_instance,
+          instanceName: this.outboundInstance(company, message),
           to: message.replyJid || message.phone,
           text: action.text
         });
         await logOutgoing({ companyId: company.id, phone: message.phone, body: action.text });
       } else {
         await evolution.sendImage({
-          instanceName: company.evolution_instance,
+          instanceName: this.outboundInstance(company, message),
           to: message.replyJid || message.phone,
           mediaUrl: action.mediaUrl,
           caption: action.caption,
@@ -61,7 +89,7 @@ export class ArlesEngine {
       await scheduleFollowup({
         companyId: company.id,
         phone: message.phone,
-        instanceName: company.evolution_instance,
+        instanceName: this.outboundInstance(company, message),
         replyJid: message.replyJid || message.phone,
         sourceMessageId: message.messageId,
         text: result.followup.text
@@ -76,7 +104,7 @@ export class ArlesEngine {
   ): Promise<{ text?: string; result?: VerticalResult }> {
     try {
       const media = await evolution.getMediaBase64({
-        instanceName: company.evolution_instance,
+        instanceName: this.outboundInstance(company, message),
         messageId: message.messageId
       });
 
@@ -113,7 +141,7 @@ export class ArlesEngine {
   ): Promise<string | null> {
     try {
       const media = await evolution.getMediaBase64({
-        instanceName: company.evolution_instance,
+        instanceName: this.outboundInstance(company, message),
         messageId: message.messageId
       });
 
@@ -150,9 +178,17 @@ export class ArlesEngine {
     if (message.isGroup || message.isBroadcast) return;
     if (message.event && !isMessageUpsert(message.event)) return;
 
-    const company = await getCompanyByInstance(message.instanceName);
+    const cashShared = this.isCashSharedInstance(message.instanceName);
+    const company = cashShared
+      ? await getCashCompanyByOwnerPhone(message.phone)
+      : await getCompanyByInstance(message.instanceName);
+
     if (!company) {
-      console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
+      if (cashShared) {
+        await this.replyUnknownCashSender(message);
+      } else {
+        console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
+      }
       return;
     }
 

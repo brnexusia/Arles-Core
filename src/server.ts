@@ -6,7 +6,12 @@ import { arlesEngine } from './core/engine.js';
 import { getMediaByToken } from './media/media.repository.js';
 import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
 import { startPlatformJobWorker, stopPlatformJobWorker } from './platform/jobs/job.worker.js';
-import { composeApplication } from './composition.js';
+import { registerAuthRoutes } from './auth/auth.routes.js';
+import { registerBillingRoutes } from './billing/billing.routes.js';
+import { registerAdminRoutes } from './admin/admin.routes.js';
+import { registerPlatformRoutes } from './platform/platform.routes.js';
+import { registerBuiltInVerticals } from './verticals/index.js';
+import { registerBuiltInPlatformModules } from './composition.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
@@ -23,7 +28,7 @@ function authorized(request: { headers: Record<string, unknown> }): boolean {
 app.get('/health', async () => {
   await checkDb();
   await redis.ping();
-  return { ok: true, service: 'arles-engine', version: '2.2.0' };
+  return { ok: true, service: 'arles-engine', version: '2.2.1' };
 });
 
 app.get('/media/:token', async (request, reply) => {
@@ -64,7 +69,14 @@ app.post('/internal/conversations/resume', async (request, reply) => {
   return reply.send({ ok: true });
 });
 
-await composeApplication(app);
+// Bootstrap explícito: mantém o caminho de inicialização que já era estável no Delivery,
+ // e adiciona o registry global sem trocar o roteador conversacional.
+registerBuiltInPlatformModules();
+await registerAuthRoutes(app);
+await registerBillingRoutes(app);
+await registerAdminRoutes(app);
+await registerPlatformRoutes(app);
+await registerBuiltInVerticals(app);
 
 startFollowupWorker();
 startPlatformJobWorker();

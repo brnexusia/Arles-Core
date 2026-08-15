@@ -48,7 +48,6 @@ export class CashHandler implements VerticalHandler {
     const { company, message, combinedText } = context;
     const normalized = combinedText.toLowerCase().trim();
 
-    await cashService.rememberOwnerPhone(company.id, message.phone);
     const settings = await cashService.settings(company.id);
     if (settings.owner_phone && !samePhone(settings.owner_phone, message.phone)) {
       return null;

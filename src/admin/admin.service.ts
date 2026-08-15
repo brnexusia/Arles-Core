@@ -82,7 +82,7 @@ export class AdminService {
           c.monthly_contacts_used,
           c.trial_ends_at,
           c.subscription_current_period_end,
-          wc.status as whatsapp_status,
+          case when coalesce(c.active_vertical_id,c.vertical)='cash' then 'managed' else wc.status end as whatsapp_status,
           c.created_at
         from companies c
         left join auth_users u on u.company_id = c.id and u.role = 'user'

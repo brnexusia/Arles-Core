@@ -16,10 +16,10 @@ export const cashModule: VerticalModule = {
   },
   onboardingSteps: [
     {
-      key: 'cash.whatsapp',
+      key: 'cash.authorized-phone',
       scope: 'capability',
       capabilityKey: 'cash.transactions',
-      title: 'Conectar WhatsApp',
+      title: 'Número autorizado',
       order: 10
     }
   ],
