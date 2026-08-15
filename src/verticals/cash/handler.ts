@@ -103,6 +103,17 @@ export class CashHandler implements VerticalHandler {
       }
       const completed = await cashService.completeOnboarding(company.id, combinedText);
       await cashReports.ensureScheduled(company.id);
+      const accessAfterName = await cashService.accessState(company.id);
+      if (!accessAfterName.hasAccess) {
+        return text([
+          `Perfeito, ${completed.owner_name}!`,
+          'Seu perfil está pronto, mas o trial de 7 dias iniciado no primeiro contato já encerrou.',
+          '',
+          'Seus dados continuam salvos. Para ativar o Arles Cash:',
+          '',
+          cashService.paymentMenu()
+        ].join('\n'));
+      }
       return text([
         `Perfeito, ${completed.owner_name}! 🎉`,
         'Seu trial gratuito de 7 dias está ativo.',
