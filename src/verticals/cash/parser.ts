@@ -3,89 +3,103 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { CashTransactionInput, CashTransactionType } from './types.js';
+import { brazilParts, dateIsoOffset, isoBrazil } from './time.js';
+
+const CATEGORIES = [
+  'Alimentação',
+  'Transporte',
+  'Saúde',
+  'Moradia',
+  'Educação',
+  'Pessoal',
+  'Receita',
+  'Outros'
+] as const;
 
 const ParsedTransactionSchema = z.object({
   is_transaction: z.boolean(),
   type: z.enum(['income', 'expense']),
   amount: z.number().positive().nullable(),
-  category: z.string(),
+  category: z.enum(CATEGORIES),
   merchant: z.string(),
   description: z.string(),
   transaction_date: z.string()
 });
 
-const EXPENSE = /\b(gastei|paguei|comprei|despesa|saiu|debitei|custou|pague|gasto)\b/i;
-const INCOME = /\b(recebi|ganhei|entrou|vendi|receita|faturei|depositaram|pix recebido)\b/i;
-
-function isoToday(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function localDateOffset(days: number): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
+const EXPENSE = /\b(gastei|gstei|gasto|paguei|pgei|comprei|despesa|saiu|debitei|custou|pague)\b/i;
+const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
 
 function amountFrom(text: string): number | null {
-  const matches = [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
+  const matches = [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
   for (const match of matches) {
     const before = text.slice(Math.max(0, (match.index ?? 0) - 8), match.index ?? 0);
     const after = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 5);
     if (/\bdia\s*$/i.test(before) || /[\/-]\s*$/.test(before) || /^\s*[\/-]\s*\d/.test(after)) continue;
     const raw = match[1]!;
-    const normalized = raw.includes(',')
+    const normalized = /^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(raw)
       ? raw.replace(/\./g, '').replace(',', '.')
-      : /^\d{1,3}(?:\.\d{3})+$/.test(raw)
-        ? raw.replace(/\./g, '')
-        : raw;
+      : raw.replace(',', '.');
     const value = Number(normalized);
     if (Number.isFinite(value) && value > 0) return Math.round(value * 100) / 100;
   }
   return null;
 }
 
-function transactionType(text: string): CashTransactionType | null {
-  if (EXPENSE.test(text)) return 'expense';
+function transactionType(text: string, amount: number | null): CashTransactionType | null {
   if (INCOME.test(text)) return 'income';
-  return null;
+  if (EXPENSE.test(text)) return 'expense';
+  if (!amount) return null;
+
+  // Frases curtas como “farmácia 45” e “120 no almoço” são despesas por padrão.
+  const usefulText = text.replace(/[\d.,R$\s]/gi, '');
+  return usefulText.length >= 2 ? 'expense' : null;
 }
 
 function dateFrom(text: string): string {
-  if (/\bontem\b/i.test(text)) return localDateOffset(-1);
-  if (/\banteontem\b/i.test(text)) return localDateOffset(-2);
+  if (/\bontem\b/i.test(text)) return dateIsoOffset(-1);
+  if (/\banteontem\b/i.test(text)) return dateIsoOffset(-2);
+  if (/\bhoje\b/i.test(text)) return isoBrazil();
+
   const explicit = text.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/);
-  if (!explicit) return isoToday();
+  if (!explicit) return isoBrazil();
+
+  const now = brazilParts();
   const yearRaw = explicit[3];
-  const year = yearRaw ? Number(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw) : new Date().getUTCFullYear();
+  const year = yearRaw ? Number(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw) : now.year;
   const month = Number(explicit[2]);
   const day = Number(explicit[1]);
   const date = new Date(Date.UTC(year, month - 1, day));
-  return Number.isNaN(date.getTime()) ? isoToday() : date.toISOString().slice(0, 10);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return isoBrazil();
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function categoryFrom(text: string, type: CashTransactionType): string {
+export function categoryFrom(text: string, type: CashTransactionType): string {
+  if (type === 'income') return 'Receita';
   const value = text.toLowerCase();
-  if (/mercado|supermercado|feira|alimento|comida/.test(value)) return 'Alimentação';
-  if (/uber|99|gasolina|combustível|combustivel|ônibus|onibus|transporte/.test(value)) return 'Transporte';
-  if (/aluguel|condomínio|condominio|luz|energia|água|agua|internet/.test(value)) return 'Moradia';
-  if (/farmácia|farmacia|médico|medico|consulta|remédio|remedio/.test(value)) return 'Saúde';
-  if (/curso|livro|escola|faculdade/.test(value)) return 'Educação';
-  if (/salário|salario|pagamento|cliente|venda|serviço|servico/.test(value)) {
-    return type === 'income' ? 'Vendas e serviços' : 'Trabalho';
-  }
-  return type === 'income' ? 'Outras receitas' : 'Outras despesas';
+
+  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|ifood|delivery/.test(value)) return 'Alimentação';
+  if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem/.test(value)) return 'Transporte';
+  if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio/.test(value)) return 'Saúde';
+  if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
+  if (/escola|curso|livro|faculdade|mensalidade/.test(value)) return 'Educação';
+  if (/salão|salao|academia|roupa|sapato|shopping/.test(value)) return 'Pessoal';
+  return 'Outros';
 }
 
 function merchantFrom(text: string): string {
   const withoutDate = text.replace(/\b(hoje|ontem|anteontem)\b/gi, '');
-  const match = withoutDate.match(/\b(?:no|na|em|para o|para a)\s+([^,.]+?)(?:\s+(?:por|de)\s+r?\$?\s*\d|$)/i);
+  const match = withoutDate.match(/\b(?:no|na|em|para o|para a|de)\s+([^,.]+?)(?:\s+(?:por|de)\s+r?\$?\s*\d|$)/i);
   return (match?.[1] ?? '').trim().slice(0, 120);
 }
 
 export function deterministicCashParse(text: string): CashTransactionInput | null {
-  const type = transactionType(text);
   const amount = amountFrom(text);
+  const type = transactionType(text, amount);
   if (!type || !amount) return null;
   return {
     type,
@@ -112,12 +126,15 @@ export class CashParser {
           {
             role: 'system',
             content: [
-              'Você extrai um único lançamento financeiro de mensagens em português do Brasil.',
+              'Você interpreta um único lançamento financeiro doméstico em português brasileiro.',
+              'Tolere erros de digitação, abreviações e gírias, por exemplo: “gstei 80 mrcado”.',
               'expense é dinheiro que saiu; income é dinheiro que entrou.',
-              'Não invente valor. Se não houver lançamento e valor claros, is_transaction=false.',
-              'merchant é onde ocorreu ou quem pagou. category deve ser curta e útil.',
-              `Hoje é ${isoToday()}. Converta hoje, ontem e datas relativas para YYYY-MM-DD.`,
-              'description deve preservar uma observação útil enviada pelo usuário.'
+              'Frases como “120 no almoço” ou “farmácia 45” são despesas.',
+              'Não invente valor. Se não houver lançamento e valor identificáveis, is_transaction=false.',
+              'Use SOMENTE estas categorias: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Receita, Outros.',
+              'Toda entrada/receita deve usar a categoria Receita.',
+              'merchant é o local/pessoa quando estiver claro; description preserva uma observação útil.',
+              `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
           { role: 'user', content: text }
@@ -129,12 +146,12 @@ export class CashParser {
       return {
         type: parsed.type,
         amount: Math.round(parsed.amount * 100) / 100,
-        category: parsed.category.trim() || categoryFrom(text, parsed.type),
+        category: parsed.type === 'income' ? 'Receita' : parsed.category,
         merchant: parsed.merchant.trim(),
         description: parsed.description.trim() || text.trim(),
         transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
           ? parsed.transaction_date
-          : isoToday()
+          : isoBrazil()
       };
     } catch (error) {
       console.error('[CashParser] falha na IA:', error);
