@@ -54,7 +54,7 @@ export function routeCashInput(input: string): CashBroadRoute {
   if (!value) return null;
 
   // Ajuda e descoberta do produto.
-  if (/\b(ajuda|menu|comandos?|guia|tutorial|instrucoes?|como usar|como mexer|como funciona|o que (?:da|posso) fazer|o que voce faz|me ensina|me explica como usar|quais funcoes)\b/.test(value)) {
+  if (/\b(ajuda|menu|comandos?|guia|tutorial|instrucoes?|como usar|como uso isso|como mexer|como mexe|como funciona|o que (?:da pra|da para|da|posso) fazer|o que voce faz|me ensina|me explica como usar|quais funcoes)\b/.test(value)) {
     return { kind: 'rewrite', text: 'ajuda' };
   }
 
@@ -102,7 +102,7 @@ export function routeCashInput(input: string): CashBroadRoute {
 
   // Saldo/visão geral sem período específico.
   if (/^(?:meu )?(?:saldo|balanco|resumo)(?: atual)?[?.! ]*$/.test(value) ||
-      /\b(quanto (?:tenho|sobrou)|como (?:estao|minhas) financas|como to de grana|situacao financeira|panorama financeiro|visao geral financeira|meu dinheiro agora|quanto tenho disponivel)\b/.test(value)) {
+      /\b(quanto (?:tenho|sobrou)|como estao minhas financas|como estao as financas|como vao minhas financas|como to de grana|qual minha situacao financeira|situacao financeira|panorama financeiro|visao geral financeira|meu dinheiro agora|quanto tenho disponivel)\b/.test(value)) {
     return { kind: 'rewrite', text: 'saldo' };
   }
 
