@@ -26,7 +26,7 @@ const ParsedTransactionSchema = z.object({
   transaction_date: z.string()
 });
 
-const EXPENSE = /\b(gastei|gstei|gasto|paguei|pgei|comprei|despesa|saiu|debitei|custou|pague)\b/i;
+const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague)\b/i;
 const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
 
 function amountFrom(text: string): number | null {
@@ -116,8 +116,15 @@ export class CashParser {
 
   async parse(text: string): Promise<CashTransactionInput | null> {
     const deterministic = deterministicCashParse(text);
-    if (deterministic) return deterministic;
-    if (!this.client) return null;
+
+    // Quando a regra determinística já sabe o tipo e a categoria, ela é a fonte mais barata/segura.
+    // Se caiu em “Outros” com linguagem possivelmente abreviada, deixa a IA tentar refinar.
+    const deterministicIsStrong = Boolean(
+      deterministic &&
+      (deterministic.type === 'income' || deterministic.category !== 'Outros')
+    );
+    if (deterministicIsStrong) return deterministic;
+    if (!this.client) return deterministic;
 
     try {
       const response = await this.client.responses.parse({
@@ -142,7 +149,7 @@ export class CashParser {
         text: { format: zodTextFormat(ParsedTransactionSchema, 'cash_transaction') }
       });
       const parsed = response.output_parsed;
-      if (!parsed?.is_transaction || !parsed.amount) return null;
+      if (!parsed?.is_transaction || !parsed.amount) return deterministic;
       return {
         type: parsed.type,
         amount: Math.round(parsed.amount * 100) / 100,
@@ -155,7 +162,7 @@ export class CashParser {
       };
     } catch (error) {
       console.error('[CashParser] falha na IA:', error);
-      return null;
+      return deterministic;
     }
   }
 }
