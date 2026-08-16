@@ -65,14 +65,16 @@ function iso(value: Date | null): string | null {
   return value ? new Date(value).toISOString() : null;
 }
 
-function normalizedEmail(value: unknown): string {
+function normalizedEmail(value: unknown): string | null {
   const email = String(value ?? '').trim().toLowerCase();
+  if (!email) return null;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('ADMIN_EMAIL_INVALID');
   return email;
 }
 
-function normalizedPhone(value: unknown): string {
+function normalizedPhone(value: unknown): string | null {
   const phone = String(value ?? '').replace(/\D/g, '').slice(0, 20);
+  if (!phone) return null;
   if (phone.length < 10) throw new Error('ADMIN_PHONE_INVALID');
   return phone;
 }
@@ -310,8 +312,8 @@ export class AdminService {
     try {
       await client.query('begin');
 
-      const exists = await client.query(
-        `select c.id
+      const exists = await client.query<{ subscription_status: string }>(
+        `select c.id, c.subscription_status
          from companies c
          left join company_verticals cv
            on cv.company_id = c.id
@@ -325,45 +327,54 @@ export class AdminService {
          limit 1`,
         [companyId]
       );
-      if (!exists.rowCount) throw new Error('ADMIN_USER_NOT_FOUND');
+      const current = exists.rows[0];
+      if (!current) throw new Error('ADMIN_USER_NOT_FOUND');
 
-      const name = String(body.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+      // Edição parcial: campos vazios não impedem mudanças de assinatura, como vitalício.
+      const cleanName = String(body.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+      const name = cleanName || null;
       const email = normalizedEmail(body.email);
       const phone = normalizedPhone(body.phone);
-      const status = String(body.subscriptionStatus ?? 'expired');
+      const status = body.subscriptionStatus == null
+        ? current.subscription_status
+        : String(body.subscriptionStatus);
       if (!allowedStatus.has(status)) throw new Error('ADMIN_STATUS_INVALID');
 
       const lifetime = body.lifetimeAccess === true;
       const trialEndsAt = adminDate(body.trialEndsAt);
       const subscriptionEndsAt = adminDate(body.subscriptionEndsAt);
 
-      const emailDuplicate = await client.query(
-        `select 1
-         from auth_users
-         where email_normalized = $1
-           and company_id <> $2
-         limit 1`,
-        [email, companyId]
-      );
-      if (emailDuplicate.rowCount) throw new Error('ADMIN_EMAIL_IN_USE');
+      if (email) {
+        const emailDuplicate = await client.query(
+          `select 1
+           from auth_users
+           where email_normalized = $1
+             and company_id <> $2
+           limit 1`,
+          [email, companyId]
+        );
+        if (emailDuplicate.rowCount) throw new Error('ADMIN_EMAIL_IN_USE');
+      }
 
-      const phoneDuplicate = await client.query(
-        `select 1
-         from cash_settings
-         where company_id <> $1
-           and right(regexp_replace(coalesce(owner_phone, ''), '[^0-9]', '', 'g'), 11)
-               = right($2, 11)
-         limit 1`,
-        [companyId, phone]
-      );
-      if (phoneDuplicate.rowCount) throw new Error('ADMIN_PHONE_IN_USE');
+      if (phone) {
+        const phoneDuplicate = await client.query(
+          `select 1
+           from cash_settings
+           where company_id <> $1
+             and right(regexp_replace(coalesce(owner_phone, ''), '[^0-9]', '', 'g'), 11)
+                 = right($2, 11)
+           limit 1`,
+          [companyId, phone]
+        );
+        if (phoneDuplicate.rowCount) throw new Error('ADMIN_PHONE_IN_USE');
+      }
 
       await client.query(
         `update auth_users
-         set name = $2,
-             email = $3,
-             email_normalized = $3,
-             phone = $4,
+         set name = coalesce($2, name),
+             email = coalesce($3, email),
+             email_normalized = coalesce($3, email_normalized),
+             phone = coalesce($4, phone),
              updated_at = now()
          where company_id = $1 and role = 'user'`,
         [companyId, name, email, phone]
@@ -373,8 +384,8 @@ export class AdminService {
         `insert into cash_settings(company_id, owner_phone, owner_name)
          values($1, $2, $3)
          on conflict(company_id) do update set
-           owner_phone = excluded.owner_phone,
-           owner_name = excluded.owner_name,
+           owner_phone = coalesce(excluded.owner_phone, cash_settings.owner_phone),
+           owner_name = coalesce(excluded.owner_name, cash_settings.owner_name),
            updated_at = now()`,
         [companyId, phone, name]
       );
@@ -427,6 +438,62 @@ export class AdminService {
 
       await client.query('commit');
       return { ok: true, companyId };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteCashUser(companyId: string) {
+    const client = await db.connect();
+    try {
+      await client.query('begin');
+
+      const company = await client.query(
+        `select c.id
+         from companies c
+         where c.id = $1
+           and (
+             coalesce(c.active_vertical_id, c.vertical) = 'cash'
+             or exists(
+               select 1
+               from company_verticals cv
+               where cv.company_id = c.id
+                 and cv.vertical_id = 'cash'
+                 and cv.enabled = true
+             )
+           )
+         for update`,
+        [companyId]
+      );
+      if (!company.rowCount) throw new Error('ADMIN_USER_NOT_FOUND');
+
+      const usage = await client.query<{ count: string }>(
+        `select count(*)::text as count
+         from cash_transactions
+         where company_id = $1`,
+        [companyId]
+      );
+      const deletedRecords = Number(usage.rows[0]?.count ?? 0);
+
+      // Estas tabelas preservariam referências após a exclusão da empresa;
+      // removemos explicitamente para que a conta seja realmente apagada.
+      await client.query('delete from cash_payment_events where company_id = $1', [companyId]);
+      await client.query('delete from billing_payments where company_id = $1', [companyId]);
+      await client.query('delete from trial_entitlements where company_id = $1', [companyId]);
+
+      // As demais estruturas do tenant, incluindo auth_users, auth_sessions,
+      // cash_settings e cash_transactions, usam ON DELETE CASCADE.
+      const deleted = await client.query(
+        'delete from companies where id = $1 returning id::text',
+        [companyId]
+      );
+      if (!deleted.rowCount) throw new Error('ADMIN_USER_NOT_FOUND');
+
+      await client.query('commit');
+      return { ok: true, companyId, deletedRecords };
     } catch (error) {
       await client.query('rollback');
       throw error;
