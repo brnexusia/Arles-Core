@@ -7,6 +7,7 @@ process.env.EVOLUTION_API_KEY ||= 'test-key';
 
 const { cashTypingDelayMs, EVOLUTION_WEBHOOK_EVENTS } = await import('../src/whatsapp/evolution.client.js');
 const { normalizeEvolutionPresence } = await import('../src/whatsapp/normalize.js');
+const { cashSilenceRemainingMs } = await import('../src/whatsapp/cash-timing.js');
 
 describe('cash typing effect', () => {
   it('mantém respostas curtas rápidas, mas perceptíveis', () => {
@@ -73,5 +74,73 @@ describe('cash typing effect', () => {
     });
 
     expect(normalized?.phone).toBe('5575888888888');
+  });
+
+  it('mantém a janela inteira em 5s enquanto o lead está digitando', () => {
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: 1_000,
+      now: 4_900,
+      silenceMs: 5_000,
+      typing: true
+    })).toBe(5_000);
+  });
+
+  it('reinicia 5s quando o lead para e reinicia novamente se voltar a digitar', () => {
+    // Parou de digitar agora: nova janela completa.
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: 10_000,
+      now: 10_000,
+      silenceMs: 5_000,
+      typing: false
+    })).toBe(5_000);
+
+    // Dois segundos de silêncio consumiram apenas 2s da janela.
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: 10_000,
+      now: 12_000,
+      silenceMs: 5_000,
+      typing: false
+    })).toBe(3_000);
+
+    // Voltou a digitar: a janela volta imediatamente para 5s completos.
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: 12_000,
+      now: 14_000,
+      silenceMs: 5_000,
+      typing: true
+    })).toBe(5_000);
+
+    // Parou novamente: mais uma nova janela completa de 5s.
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: 14_000,
+      now: 14_000,
+      silenceMs: 5_000,
+      typing: false
+    })).toBe(5_000);
+  });
+
+  it('considera uma nova mensagem como nova atividade e só libera após 5s de silêncio', () => {
+    const secondMessageAt = 20_000;
+
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: secondMessageAt,
+      now: secondMessageAt,
+      silenceMs: 5_000,
+      typing: false
+    })).toBe(5_000);
+
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: secondMessageAt,
+      now: secondMessageAt + 4_999,
+      silenceMs: 5_000,
+      typing: false
+    })).toBe(1);
+
+    expect(cashSilenceRemainingMs({
+      lastActivityAt: secondMessageAt,
+      now: secondMessageAt + 5_000,
+      silenceMs: 5_000,
+      typing: false
+    })).toBe(0);
   });
 });
