@@ -159,7 +159,7 @@ export class CashAccessHandler implements VerticalHandler {
           '',
           await cashPaymentMenuForCompany(company.id),
           '',
-          'Assim que a Cakto confirmar o pagamento, seu acesso é liberado automaticamente aqui no WhatsApp.'
+          'Assim que o pagamento for confirmado, seu acesso é liberado automaticamente aqui no WhatsApp.'
         ].join('\n'));
       }
 
@@ -178,7 +178,7 @@ export class CashAccessHandler implements VerticalHandler {
         `update cash_settings set onboarding_state='awaiting_email',updated_at=now() where company_id=$1`,
         [company.id]
       );
-      return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar seus pagamentos na Cakto.');
+      return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
     // FAQ previsível não precisa consumir IA. Respostas institucionais e de uso comum
