@@ -92,7 +92,12 @@ export function routeCashInput(input: string): CashBroadRoute {
     return { kind: 'rewrite', text: 'quais foram meus registros hoje?' };
   }
 
-  if (/^(?:meu )?(?:saldo|balanco|resumo)(?: atual)?[?.! ]*$/.test(value) ||
+  // Lista/resumo sem período considera somente hoje.
+  if (/^(?:meu\s+)?(?:resumo|lista)(?:\s+(?:de\s+)?(?:gastos|despesas|registros|lancamentos|movimentacoes))?[?.! ]*$/.test(value)) {
+    return { kind: 'rewrite', text: 'quais foram meus registros hoje?' };
+  }
+
+  if (/^(?:meu )?(?:saldo|balanco)(?: atual)?[?.! ]*$/.test(value) ||
       /\b(quanto (?:tenho|sobrou)|como estao minhas financas|como estao as financas|como vao minhas financas|como to de grana|qual minha situacao financeira|situacao financeira|panorama financeiro|visao geral financeira|meu dinheiro agora|quanto tenho disponivel)\b/.test(value)) {
     return { kind: 'rewrite', text: 'saldo' };
   }
@@ -117,7 +122,7 @@ export function routeCashInput(input: string): CashBroadRoute {
     return { kind: 'rewrite', text: `quais foram meus registros ${period}?` };
   }
   if (/\b(onde gastei mais|em que gastei mais|qual compra foi mais cara|compra mais cara)\b/.test(value)) {
-    return { kind: 'rewrite', text: `maior gasto ${period ?? 'este mês'}` };
+    return { kind: 'rewrite', text: `maior gasto ${period ?? 'hoje'}` };
   }
 
   if (/\b(corrige isso|corrigir isso|arruma isso|ajusta isso|altera isso|muda isso)\b/.test(value)) {
