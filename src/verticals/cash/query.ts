@@ -40,6 +40,7 @@ export interface CashQueryFilters {
   sort: CashQuerySort;
   limit: number;
   periodLabel: string;
+  compact: boolean;
 }
 
 interface CashQueryResultRow {
@@ -143,6 +144,12 @@ function looksLikeQuery(text: string): boolean {
   if (/\b(maior(?:es)?|menor(?:es)?|mais caro|mais cara)\b.*\b(gast|despes|compr)\w*/.test(value)) return true;
   if (/^(gastos|despesas|compras|receitas|entradas|recebimentos)\b/.test(value)) return true;
   return false;
+}
+
+function compactListRequest(text: string): boolean {
+  const value = normalize(text);
+  return /\b(lista|listar|liste|quais foram|me mostra|mostra|resumo)\b/.test(value)
+    && /\b(gast|despes|compr|receit|entrada|saida|registro|registo|lancamento|moviment)\w*/.test(value);
 }
 
 function typeFrom(text: string): CashQueryType {
@@ -285,8 +292,9 @@ function parsePeriod(text: string): { from: string; to: string; label: string; e
     }
   }
 
-  const period = currentMonthWindow();
-  return { ...period, label: 'este mês', explicit: false };
+  // Sem período citado, consultas e listas consideram apenas hoje.
+  const today = isoBrazil();
+  return { from: today, to: today, label: 'hoje', explicit: false };
 }
 
 function amountFilters(text: string): { minAmount: number | null; maxAmount: number | null } {
@@ -359,15 +367,16 @@ export function deterministicCashQuery(text: string): CashQueryFilters | null {
     maxAmount: amounts.maxAmount,
     sort: ordering.sort,
     limit: ordering.limit,
-    periodLabel: period.label
+    periodLabel: period.label,
+    compact: compactListRequest(text)
   };
 }
 
 function canonicalAiFilters(parsed: z.infer<typeof AiQuerySchema>, fallback: CashQueryFilters | null): CashQueryFilters | null {
   if (!parsed.is_query) return fallback;
-  const defaultPeriod = currentMonthWindow();
-  let from = validIso(parsed.from) ? parsed.from : fallback?.from ?? defaultPeriod.from;
-  let to = validIso(parsed.to) ? parsed.to : fallback?.to ?? defaultPeriod.to;
+  const today = isoBrazil();
+  let from = validIso(parsed.from) ? parsed.from : fallback?.from ?? today;
+  let to = validIso(parsed.to) ? parsed.to : fallback?.to ?? today;
   if (from > to) [from, to] = [to, from];
   return {
     type: parsed.type,
@@ -379,7 +388,8 @@ function canonicalAiFilters(parsed: z.infer<typeof AiQuerySchema>, fallback: Cas
     maxAmount: parsed.max_amount ?? fallback?.maxAmount ?? null,
     sort: parsed.sort,
     limit: Math.min(100, Math.max(1, parsed.limit)),
-    periodLabel: fallback?.periodLabel ?? (from === defaultPeriod.from && to === defaultPeriod.to ? 'este mês' : `${formatBrazilDate(from)} a ${formatBrazilDate(to)}`)
+    periodLabel: fallback?.periodLabel ?? (from === today && to === today ? 'hoje' : `${formatBrazilDate(from)} a ${formatBrazilDate(to)}`),
+    compact: fallback?.compact ?? false
   };
 }
 
@@ -452,7 +462,7 @@ function rowDescription(row: CashQueryResultRow): string {
   const merchant = String(row.merchant ?? '').trim();
   if (description) return description;
   if (merchant) return merchant;
-  return row.category;
+  return row.type === 'income' ? 'Receita' : 'Lançamento';
 }
 
 function header(filters: CashQueryFilters, result: CashQueryResult): string[] {
@@ -475,7 +485,32 @@ function header(filters: CashQueryFilters, result: CashQueryResult): string[] {
   return lines;
 }
 
+function compactResult(filters: CashQueryFilters, result: CashQueryResult): VerticalResult {
+  if (!result.count) {
+    return { actions: [{ type: 'text', text: `Não encontrei registros em ${filters.periodLabel}.` }] };
+  }
+
+  const lines = result.rows.map(row =>
+    `• ${rowDescription(row)} — ${brl(Number(row.amount))} · ${formatBrazilDate(String(row.transaction_date))}`
+  );
+  const chunks: string[] = [];
+  let current = `📋 ${filters.periodLabel.charAt(0).toUpperCase()}${filters.periodLabel.slice(1)}:`;
+  for (const line of lines) {
+    if ((current + '\n' + line).length > 3000) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current += `\n${line}`;
+    }
+  }
+  if (result.truncated) current += `\n\nMostrando ${result.rows.length} de ${result.count} registros.`;
+  chunks.push(current);
+  return { actions: chunks.map(value => ({ type: 'text' as const, text: value })) };
+}
+
 function formatResult(filters: CashQueryFilters, result: CashQueryResult): VerticalResult {
+  if (filters.compact) return compactResult(filters, result);
+
   if (!result.count) {
     const subject = filters.type === 'income' ? 'receitas' : filters.type === 'expense' ? 'gastos' : 'registros';
     const extra = filters.term ? ` com “${filters.term}”` : filters.category ? ` em ${filters.category}` : '';
@@ -511,13 +546,13 @@ export class CashQueryEngine {
     if (!looksLikeQuery(text)) return null;
     if (!this.client) return deterministic;
 
-    // Consultas simples e completas não precisam gastar IA.
-    if (deterministic && (deterministic.term || deterministic.category || /\b(hoje|ontem|anteontem|semana|mes|mês|ano|dia)\b/i.test(text))) {
+    // Listas/resumos e consultas com filtros claros não precisam gastar IA.
+    if (deterministic && (deterministic.compact || deterministic.term || deterministic.category || /\b(hoje|ontem|anteontem|semana|mes|mês|ano|dia)\b/i.test(text))) {
       return deterministic;
     }
 
     try {
-      const currentMonth = currentMonthWindow();
+      const today = isoBrazil();
       const response = await this.client.responses.parse({
         model: env.openaiModel,
         input: [
@@ -530,7 +565,8 @@ export class CashQueryEngine {
               'term é loja, pessoa, produto ou descrição pesquisada, por exemplo SHEIN, mercado, salário, blusinha. Não use termos genéricos como gasto/despesa.',
               'category só pode ser uma das categorias fornecidas e deve ser usada quando o usuário citar a categoria explicitamente.',
               'Interprete datas no fuso America/Sao_Paulo e retorne from/to em YYYY-MM-DD.',
-              `Hoje é ${isoBrazil()}. Se o usuário NÃO disser período, use o mês atual: ${currentMonth.from} a ${currentMonth.to}.`,
+              `Hoje é ${today}. Se o usuário NÃO disser período, use SOMENTE hoje: ${today} a ${today}.`,
+              'Só amplie para semana, mês, ano ou intervalo quando o usuário citar esse período.',
               'Para “maior gasto” use sort=amount_desc e limit=1; “menor gasto” amount_asc e limit=1; caso contrário recent e limit=100.',
               'Filtros de valor podem preencher min_amount e max_amount.',
               'Não invente filtros que não estejam implícitos na pergunta.'
