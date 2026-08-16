@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { db } from '../../infrastructure/db.js';
 
 const CODE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -6,6 +7,10 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function cleanPhone(value: string): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
+}
+
+function right11(value: string): string {
+  return cleanPhone(value).slice(-11);
 }
 
 export function normalizeCashEmail(value: string): string {
@@ -64,7 +69,10 @@ function generateActivationCode(): string {
 }
 
 export function extractActivationCode(input: string): string | null {
-  const match = String(input ?? '').trim().toUpperCase().match(/^(?:C[ÓO]DIGO\s*[:=-]?\s*)?(CASH[- ]?[A-HJ-NP-Z2-9]{8})[!. ]*$/i);
+  const match = String(input ?? '')
+    .trim()
+    .toUpperCase()
+    .match(/^(?:C[ÓO]DIGO\s*[:=-]?\s*)?(CASH[- ]?[A-HJ-NP-Z2-9]{8})[!. ]*$/i);
   if (!match?.[1]) return null;
   const compact = match[1].replace(/\s+/g, '-');
   return compact.startsWith('CASH-') ? compact : `CASH-${compact.slice(4)}`;
@@ -88,7 +96,7 @@ type AccountRow = {
   owner_email: string | null;
 };
 
-async function findAccount(client: any, input: { companyId?: string; phone?: string; email?: string }): Promise<AccountRow | null> {
+async function findAccount(client: PoolClient, input: { companyId?: string; phone?: string; email?: string }): Promise<AccountRow | null> {
   const phone = cleanPhone(input.phone ?? '');
   const email = normalizeCashEmail(input.email ?? '');
   const result = await client.query<AccountRow>(
@@ -113,11 +121,14 @@ async function findAccount(client: any, input: { companyId?: string; phone?: str
   return result.rows[0] ?? null;
 }
 
-async function issueCode(client: any, input: {
+async function issueCode(client: PoolClient, input: {
   eventId: string;
   company: AccountRow;
   planKey: string;
 }): Promise<{ activationCode: string; expiresAt: Date }> {
+  const accountPhone = cleanPhone(input.company.owner_phone ?? '');
+  if (accountPhone.length < 10) throw new Error('CASH_PAYMENT_ACCOUNT_PHONE_MISSING');
+
   const activationCode = generateActivationCode();
   const expiresAt = new Date(Date.now() + CODE_TTL_MS);
   const hash = codeHash(activationCode);
@@ -133,7 +144,7 @@ async function issueCode(client: any, input: {
     [
       input.eventId,
       input.company.id,
-      cleanPhone(input.company.owner_phone ?? ''),
+      accountPhone,
       normalizeCashEmail(input.company.owner_email ?? '') || null,
       input.planKey,
       hash,
@@ -233,7 +244,7 @@ export class CashActivationService {
       }
 
       // Em retry do webhook, rotacionamos um código ainda não usado. Isso permite
-      // recuperar um envio de WhatsApp que tenha falhado sem manter código em texto no banco.
+      // recuperar um envio de WhatsApp que tenha falhado sem guardar código em texto no banco.
       const issued = await issueCode(client, { eventId, company, planKey });
       await client.query('commit');
       return {
@@ -319,11 +330,6 @@ export class CashActivationService {
       client.release();
     }
   }
-}
-
-function right11(value: string): string {
-  const normalized = cleanPhone(value);
-  return normalized.slice(-11);
 }
 
 export const cashActivation = new CashActivationService();
