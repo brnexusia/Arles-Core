@@ -6,7 +6,7 @@ process.env.EVOLUTION_BASE_URL ||= 'https://evolution.invalid';
 process.env.EVOLUTION_API_KEY ||= 'test-key';
 
 const { deterministicCashQuery } = await import('../src/verticals/cash/query.js');
-const { currentMonthWindow, dateIsoOffset, isoBrazil } = await import('../src/verticals/cash/time.js');
+const { dateIsoOffset, isoBrazil } = await import('../src/verticals/cash/time.js');
 
 describe('cash natural query', () => {
   it('consulta tudo que gastou ontem', () => {
@@ -18,33 +18,41 @@ describe('cash natural query', () => {
     });
   });
 
-  it('reconhece pergunta natural pelos registros de hoje', () => {
+  it('reconhece pergunta natural pelos registros de hoje como lista compacta', () => {
     expect(deterministicCashQuery('Quais foram meus registro de hoje?')).toMatchObject({
       type: 'all',
       from: isoBrazil(),
       to: isoBrazil(),
-      periodLabel: 'hoje'
+      periodLabel: 'hoje',
+      compact: true
     });
     expect(deterministicCashQuery('Quais foram meus registros de hoje?')).toMatchObject({
       type: 'all',
       from: isoBrazil(),
       to: isoBrazil(),
-      periodLabel: 'hoje'
+      periodLabel: 'hoje',
+      compact: true
     });
   });
 
-  it('usa o mês atual quando a pesquisa por loja não informa data', () => {
-    const period = currentMonthWindow();
+  it('usa somente hoje quando nenhuma data é informada', () => {
     expect(deterministicCashQuery('Quanto gastei na SHEIN?')).toMatchObject({
       type: 'expense',
-      from: period.from,
-      to: period.to,
+      from: isoBrazil(),
+      to: isoBrazil(),
       term: 'SHEIN',
-      periodLabel: 'este mês'
+      periodLabel: 'hoje'
+    });
+    expect(deterministicCashQuery('Quais foram meus gastos?')).toMatchObject({
+      type: 'expense',
+      from: isoBrazil(),
+      to: isoBrazil(),
+      periodLabel: 'hoje',
+      compact: true
     });
   });
 
-  it('separa a loja do mês nomeado', () => {
+  it('respeita mês explicitamente citado', () => {
     const result = deterministicCashQuery('Quanto gastei na SHEIN em julho?');
     expect(result).toMatchObject({
       type: 'expense',
@@ -59,7 +67,8 @@ describe('cash natural query', () => {
       type: 'expense',
       category: 'Alimentação',
       term: null,
-      periodLabel: 'este mês'
+      periodLabel: 'este mês',
+      compact: true
     });
   });
 
