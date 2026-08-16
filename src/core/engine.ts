@@ -6,6 +6,7 @@ import {
 } from './company.repository.js';
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
+  bufferCashTextMessage,
   bufferTextMessage,
   consumeSystemSending,
   isConversationPaused,
@@ -303,7 +304,7 @@ export class ArlesEngine {
     }
 
     // Depois que o Cash já mostrou o resumo de um lançamento, a decisão do usuário
-    // precisa ser imediata. Sim, não e edição do resumo não passam pelo debounce de 15s.
+    // precisa ser imediata. Sim, não e edição do resumo não passam pelo agrupamento.
     if (company.vertical === 'cash' && module.handlePendingInteraction) {
       const immediate = await module.handlePendingInteraction({ company, message, combinedText: messageText });
       if (immediate) {
@@ -312,15 +313,22 @@ export class ArlesEngine {
       }
     }
 
-    const combinedText = await bufferTextMessage({
-      companyId: company.id,
-      phone: message.phone,
-      messageId: message.messageId,
-      text: messageText,
-      // O Cash usa debounce longo para juntar mensagens picadas do usuário. Delivery
-      // e as demais verticais preservam a latência curta que já usam hoje.
-      waitMs: company.vertical === 'cash' ? env.cashMessageBufferMs : env.messageBufferMs
-    });
+    const combinedText = company.vertical === 'cash'
+      ? await bufferCashTextMessage({
+          companyId: company.id,
+          phone: message.phone,
+          messageId: message.messageId,
+          text: messageText,
+          silenceMs: env.cashMessageSilenceMs
+        })
+      : await bufferTextMessage({
+          companyId: company.id,
+          phone: message.phone,
+          messageId: message.messageId,
+          text: messageText,
+          waitMs: env.messageBufferMs
+        });
+
     if (!combinedText) {
       console.info(`[Arles] Buffer aguardando/consumido por outra mensagem: company=${company.id} phone=*${phoneTail}`);
       return;
