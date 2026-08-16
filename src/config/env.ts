@@ -41,10 +41,16 @@ export const env = {
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
   cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5575999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
+
+  // Checkouts Cakto. O Core acrescenta nome, e-mail, telefone e sck da conta
+  // dinamicamente antes de enviar o link no WhatsApp.
   cashPaymentMonthlyUrl: process.env.CASH_PAYMENT_MONTHLY_URL?.trim() ?? '',
   cashPaymentSemiannualUrl: process.env.CASH_PAYMENT_SEMIANNUAL_URL?.trim() ?? '',
   cashPaymentAnnualUrl: process.env.CASH_PAYMENT_ANNUAL_URL?.trim() ?? '',
   cashPaymentWebhookSecret: process.env.CASH_PAYMENT_WEBHOOK_SECRET?.trim() ?? '',
+  cashCaktoMonthlyOfferId: process.env.CASH_CAKTO_MONTHLY_OFFER_ID?.trim() ?? '',
+  cashCaktoSemiannualOfferId: process.env.CASH_CAKTO_SEMIANNUAL_OFFER_ID?.trim() ?? '',
+  cashCaktoAnnualOfferId: process.env.CASH_CAKTO_ANNUAL_OFFER_ID?.trim() ?? '',
 
   publicBaseUrl: (process.env.PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
   internalApiKey: process.env.INTERNAL_API_KEY?.trim() ?? '',
