@@ -43,13 +43,18 @@ export const env = {
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
 
   // Checkouts Cakto. O Core acrescenta nome, e-mail, telefone e sck da conta
-  // dinamicamente antes de enviar o link no WhatsApp.
-  cashPaymentMonthlyUrl: process.env.CASH_PAYMENT_MONTHLY_URL?.trim() ?? '',
-  cashPaymentSemiannualUrl: process.env.CASH_PAYMENT_SEMIANNUAL_URL?.trim() ?? '',
-  cashPaymentAnnualUrl: process.env.CASH_PAYMENT_ANNUAL_URL?.trim() ?? '',
+  // dinamicamente antes de redirecionar o cliente para a Cakto.
+  cashPaymentMonthlyUrl:
+    process.env.CASH_PAYMENT_MONTHLY_URL?.trim() || 'https://pay.cakto.com.br/y2bhspu_1043142',
+  cashPaymentQuarterlyUrl:
+    process.env.CASH_PAYMENT_QUARTERLY_URL?.trim() || 'https://pay.cakto.com.br/gh5iq23_1043146',
+  cashPaymentAnnualUrl:
+    process.env.CASH_PAYMENT_ANNUAL_URL?.trim() || 'https://pay.cakto.com.br/uw7bctc_1043148',
+  cashPaymentPublicBaseUrl:
+    (process.env.CASH_PAYMENT_PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
   cashPaymentWebhookSecret: process.env.CASH_PAYMENT_WEBHOOK_SECRET?.trim() ?? '',
   cashCaktoMonthlyOfferId: process.env.CASH_CAKTO_MONTHLY_OFFER_ID?.trim() ?? '',
-  cashCaktoSemiannualOfferId: process.env.CASH_CAKTO_SEMIANNUAL_OFFER_ID?.trim() ?? '',
+  cashCaktoQuarterlyOfferId: process.env.CASH_CAKTO_QUARTERLY_OFFER_ID?.trim() ?? '',
   cashCaktoAnnualOfferId: process.env.CASH_CAKTO_ANNUAL_OFFER_ID?.trim() ?? '',
 
   publicBaseUrl: (process.env.PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
