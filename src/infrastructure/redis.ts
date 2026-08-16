@@ -11,6 +11,7 @@ const key = {
   dedupe: (companyId: string, messageId: string) => `arles:dedupe:${companyId}:${messageId}`,
   lock: (companyId: string, phone: string) => `arles:lock:${companyId}:${phone}`,
   buffer: (companyId: string, phone: string) => `arles:buffer:${companyId}:${phone}`,
+  bufferLatest: (companyId: string, phone: string) => `arles:buffer-latest:${companyId}:${phone}`,
   paused: (companyId: string, phone: string) => `arles:paused:${companyId}:${phone}`,
   systemSending: (companyId: string, phone: string) => `arles:system-sending:${companyId}:${phone}`,
   lastInbound: (companyId: string, phone: string) => `arles:last-inbound:${companyId}:${phone}`,
@@ -65,34 +66,65 @@ export async function bufferTextMessage(input: {
   if (waitMs <= 0) return input.text;
 
   const bufferKey = key.buffer(input.companyId, input.phone);
+  const latestKey = key.bufferLatest(input.companyId, input.phone);
   const payload: BufferedTextMessage = { id: input.messageId, text: input.text };
+  const payloadJson = JSON.stringify(payload);
+  const ttlSeconds = Math.max(10, Math.ceil(waitMs / 1000) + 30);
 
-  await redis.rpush(bufferKey, JSON.stringify(payload));
-  // O TTL precisa sobreviver à janela inteira. Antes era fixo em 10s e quebraria
-  // um debounce de 15s. Mantemos margem para mensagens consecutivas.
-  await redis.expire(bufferKey, Math.max(10, Math.ceil(waitMs / 1000) + 30));
+  // Enfileirar a mensagem e marcar quem é a mais recente precisa ser uma operação
+  // atômica. Sem isso, o consumidor anterior pode apagar uma mensagem que acabou
+  // de chegar entre um LRANGE e um DEL.
+  await redis.eval(
+    `
+      redis.call('RPUSH', KEYS[1], ARGV[1])
+      redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+      redis.call('EXPIRE', KEYS[1], ARGV[3])
+      return 1
+    `,
+    2,
+    bufferKey,
+    latestKey,
+    payloadJson,
+    input.messageId,
+    String(ttlSeconds)
+  );
+
   await sleep(waitMs);
 
-  const rows: string[] = await redis.lrange(bufferKey, 0, -1);
-  const parsed: BufferedTextMessage[] = rows
-    .map((row: string): BufferedTextMessage => {
+  // O consumo também é atômico: somente a mensagem que continua sendo a última
+  // após a janela de silêncio pode retirar o lote. Se outra chegou, esta execução
+  // sai sem tocar no buffer e a nova mensagem reinicia os 15s normalmente.
+  const rawRows = await redis.eval(
+    `
+      if redis.call('GET', KEYS[2]) ~= ARGV[1] then
+        return false
+      end
+      local rows = redis.call('LRANGE', KEYS[1], 0, -1)
+      redis.call('DEL', KEYS[1])
+      redis.call('DEL', KEYS[2])
+      return rows
+    `,
+    2,
+    bufferKey,
+    latestKey,
+    input.messageId
+  );
+
+  if (!Array.isArray(rawRows) || !rawRows.length) return null;
+
+  const parsed: BufferedTextMessage[] = rawRows
+    .map((row: unknown): BufferedTextMessage => {
+      const raw = String(row ?? '');
       try {
-        const value = JSON.parse(row) as Partial<BufferedTextMessage>;
+        const value = JSON.parse(raw) as Partial<BufferedTextMessage>;
         return { id: String(value.id ?? ''), text: String(value.text ?? '') };
       } catch {
-        return { id: '', text: row };
+        return { id: '', text: raw };
       }
     })
     .filter(item => item.text.trim().length > 0);
 
   if (!parsed.length) return null;
-  const last = parsed[parsed.length - 1];
-  // Cada mensagem dorme sua própria janela. Só a mensagem mais recente pode
-  // consumir o lote; se outra chegou no meio, esta execução encerra e a nova
-  // reinicia a contagem a partir dela.
-  if (!last || last.id !== input.messageId) return null;
-
-  await redis.del(bufferKey);
   return parsed.map(item => item.text.trim()).filter(Boolean).join('\n');
 }
 

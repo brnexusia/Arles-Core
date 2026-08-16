@@ -12,15 +12,64 @@ function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
 }
 
-function looksLikeName(value: string): boolean {
-  const clean = String(value ?? '').trim().replace(/\s+/g, ' ');
-  if (clean.length < 2 || clean.length > 80 || /\d/.test(clean)) return false;
-  if (!/^[A-Za-zÀ-ÖØ-öø-ÿ'´` -]+$/.test(clean)) return false;
-  return !/^(oi|ola|olá|quero começar|quero comecar|ajuda|menu|saldo|resumo|historico|histórico)$/i.test(clean);
+function cleanName(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/^["'“”]+|["'“”.,!?;:]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
 }
 
-function cleanName(value: string): string {
-  return String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
+function nameKey(value: string): string {
+  return cleanName(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function looksLikeName(value: string): boolean {
+  const clean = cleanName(value);
+  if (clean.length < 2 || clean.length > 80 || /\d/.test(clean)) return false;
+  if (!/^[A-Za-zÀ-ÖØ-öø-ÿ'´` -]+$/.test(clean)) return false;
+  if (clean.split(/\s+/).length > 6) return false;
+  return !/^(oi|ola|olá|oii+|quero começar|quero comecar|ajuda|menu|saldo|resumo|historico|histórico|certo|ok|okay|beleza|entendi|obrigado|obrigada|valeu|tudo bem|sim|não|nao)$/i.test(clean);
+}
+
+export function extractCashOnboardingName(value: string): string | null {
+  const lines = String(value ?? '')
+    .split(/\r?\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const candidates: Array<{ name: string; explicit: boolean }> = [];
+  for (const line of lines) {
+    const explicitMatch = line.match(/^(?:meu nome\s+(?:é|e)|eu sou|sou|me chamo)\s+(.+)$/i);
+    const candidate = cleanName(explicitMatch?.[1] ?? line);
+    if (!looksLikeName(candidate)) continue;
+    candidates.push({ name: candidate, explicit: Boolean(explicitMatch) });
+  }
+
+  if (!candidates.length) return null;
+
+  // Se a pessoa repetiu “Stefane” / “Meu nome é Stefane” durante o debounce,
+  // isso continua sendo uma única resposta, não dois nomes nem duas interações.
+  const unique = new Map<string, { name: string; explicit: boolean }>();
+  for (const candidate of candidates) {
+    const key = nameKey(candidate.name);
+    const current = unique.get(key);
+    if (!current || candidate.explicit) unique.set(key, candidate);
+  }
+
+  if (unique.size === 1) return [...unique.values()][0]!.name;
+
+  // Em um lote misto, uma frase explícita como “meu nome é Stefane” vence outros
+  // trechos curtos que por acaso também contenham apenas letras.
+  const explicit = [...unique.values()].filter(candidate => candidate.explicit);
+  if (explicit.length === 1) return explicit[0]!.name;
+
+  // Mais de um nome diferente no mesmo lote é ambíguo; melhor perguntar novamente
+  // do que gravar um dado incorreto.
+  return null;
 }
 
 function normalizeEmail(value: string): string {
@@ -122,10 +171,10 @@ export class CashAccessHandler implements VerticalHandler {
     }
 
     if (state.onboarding_state === 'awaiting_name') {
-      if (!looksLikeName(combinedText)) {
+      const name = extractCashOnboardingName(combinedText);
+      if (!name) {
         return text('Antes de começar, me diz seu nome 😊');
       }
-      const name = cleanName(combinedText);
       await saveName(company.id, name);
       return text([
         `Perfeito, ${name}! 😊`,
