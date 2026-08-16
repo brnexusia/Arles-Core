@@ -12,6 +12,13 @@ async function errorBody(response: Response): Promise<string> {
   return (await response.text().catch(() => '')).slice(0, 800);
 }
 
+export function cashTypingDelayMs(text: string): number {
+  const length = String(text ?? '').trim().length;
+  // Curto o bastante para não atrapalhar respostas rápidas, mas perceptível no WhatsApp.
+  // Respostas maiores ficam um pouco mais tempo como “digitando…”, sem parecer artificiais.
+  return Math.min(1800, Math.max(800, Math.round(length * 10)));
+}
+
 export interface EvolutionMedia {
   base64: string;
   mimeType: string;
@@ -98,10 +105,21 @@ export class EvolutionClient {
 
   async sendText(input: { instanceName: string; to: string; text: string }): Promise<void> {
     const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendTextPath, input.instanceName);
+    const body: { number: string; text: string; delay?: number } = {
+      number: numberFromJid(input.to),
+      text: input.text
+    };
+
+    // A Evolution exibe presença “composing” durante o delay do sendText.
+    // Aplicamos isso somente à instância central do Arles Cash para não alterar Delivery.
+    if (env.cashEvolutionInstance && input.instanceName === env.cashEvolutionInstance) {
+      body.delay = cashTypingDelayMs(input.text);
+    }
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ number: numberFromJid(input.to), text: input.text })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
