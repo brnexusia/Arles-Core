@@ -120,6 +120,19 @@ export function descriptionFrom(text: string): string {
   return (value || text.trim()).slice(0, 500);
 }
 
+function hasItemEnumeration(text: string): boolean {
+  const clean = String(text ?? '').trim();
+  return /[,;]/.test(clean) || /\b\w+\s+e\s+\w+\b/i.test(clean);
+}
+
+function specificDescription(text: string, aiDescription: string, deterministic: CashTransactionInput | null): string {
+  const ai = aiDescription.trim();
+  const source = descriptionFrom(text).trim();
+  const generic = /\b(itens? diversos?|compras? diversas?|coisas? diversas?|varios itens|vários itens)\b/i.test(ai);
+  if (source && (generic || hasItemEnumeration(text))) return source.slice(0, 500);
+  return (ai || deterministic?.description || source).slice(0, 500);
+}
+
 export function deterministicCashParse(text: string): CashTransactionInput | null {
   const amount = amountFrom(text);
   const type = transactionType(text, amount);
@@ -186,6 +199,8 @@ export class CashParser {
               'Toda entrada usa Receita. Dinheiro guardado usa Reserva.',
               'merchant é loja, pessoa ou local somente quando estiver claro.',
               'description deve ser curta e humana, sem repetir verbo, valor e data.',
+              'Quando o usuário citar vários itens dentro do mesmo gasto, preserve os nomes dos itens na description.',
+              'Nunca troque uma lista explícita por “itens diversos”, “compras diversas”, “coisas diversas” ou equivalente.',
               `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
@@ -201,7 +216,7 @@ export class CashParser {
         amount: Math.round(parsed.amount * 100) / 100,
         category: parsed.type === 'income' ? 'Receita' : parsed.category,
         merchant: parsed.merchant.trim().slice(0, 120),
-        description: parsed.description.trim().slice(0, 500) || deterministic?.description || descriptionFrom(text),
+        description: specificDescription(text, parsed.description, deterministic),
         transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
           ? parsed.transaction_date
           : deterministic?.transactionDate ?? isoBrazil()
