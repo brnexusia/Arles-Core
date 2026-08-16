@@ -125,9 +125,9 @@ function paymentNotification(result: CaktoPaymentResult): string | null {
 
   if (result.renewalRefused) {
     return [
-      '⚠️ A Cakto informou que a renovação não foi confirmada.',
+      '⚠️ A renovação do seu plano não foi confirmada.',
       result.periodEnd ? `Você ainda pode usar o Arles Cash até ${formatBrazilDate(result.periodEnd)}.` : 'Seu acesso atual será mantido até o fim do período já pago.',
-      'Se precisar, mande “planos” para gerar um novo checkout.'
+      'Se precisar, mande “planos” para gerar um novo link de pagamento.'
     ].join('\n');
   }
 
