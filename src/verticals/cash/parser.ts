@@ -84,11 +84,11 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
 
   if (/\b(guardei|reservei|separei|poupança|poupanca|reserva)\b/.test(value)) return 'Reserva';
   if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery/.test(value)) return 'Alimentação';
-  if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem/.test(value)) return 'Transporte';
-  if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio/.test(value)) return 'Saúde';
+  if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem|bicicleta/.test(value)) return 'Transporte';
+  if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio|xarope/.test(value)) return 'Saúde';
   if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
   if (/escola|curso|livro|faculdade|mensalidade/.test(value)) return 'Educação';
-  if (/salão|salao|unha|manicure|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio/.test(value)) return 'Pessoal';
+  if (/salão|salao|unha|manicure|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio|presente/.test(value)) return 'Pessoal';
   return 'Outros';
 }
 
@@ -134,12 +134,6 @@ export class CashParser {
 
   async parse(text: string): Promise<CashTransactionInput | null> {
     const deterministic = deterministicCashParse(text);
-
-    const deterministicIsStrong = Boolean(
-      deterministic &&
-      (deterministic.type === 'income' || deterministic.category !== 'Outros')
-    );
-    if (deterministicIsStrong) return deterministic;
     if (!this.client) return deterministic;
 
     try {
@@ -149,16 +143,17 @@ export class CashParser {
           {
             role: 'system',
             content: [
-              'Você interpreta um único lançamento financeiro doméstico em português brasileiro.',
-              'Tolere erros de digitação, abreviações e gírias, por exemplo: “gstei 80 mrcado”.',
-              'expense é dinheiro que saiu; income é dinheiro que entrou.',
-              '“guardei 300”, “reservei 300” e “separei 300” são despesas da categoria Reserva porque reduzem o dinheiro disponível.',
+              'Você é o extrator principal de lançamentos do Arles Cash em português brasileiro.',
+              'Entenda linguagem natural, erros de digitação, abreviações, gírias e frases curtas.',
+              'Nunca invente valor, data, loja, pessoa ou descrição que não estejam sustentados pela mensagem.',
+              'expense é dinheiro que saiu do disponível; income é dinheiro que entrou.',
+              '“guardei”, “reservei” ou “separei dinheiro” é expense na categoria Reserva.',
               'Frases como “120 no almoço” ou “farmácia 45” são despesas.',
-              'Não invente valor. Se não houver lançamento e valor identificáveis, is_transaction=false.',
-              'Use SOMENTE estas categorias: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
-              'Toda entrada/receita deve usar a categoria Receita.',
-              'merchant é o local/pessoa quando estiver claro.',
-              'description deve ser curta e útil, descrevendo o que foi comprado/recebido sem repetir verbo, valor ou data.',
+              'Se não houver lançamento e valor identificáveis, is_transaction=false.',
+              'Use SOMENTE: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
+              'Toda entrada usa Receita. Dinheiro guardado usa Reserva.',
+              'merchant é loja, pessoa ou local somente quando estiver claro.',
+              'description deve ser curta e humana, sem repetir verbo, valor e data.',
               `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
@@ -168,18 +163,19 @@ export class CashParser {
       });
       const parsed = response.output_parsed;
       if (!parsed?.is_transaction || !parsed.amount) return deterministic;
+
       return {
         type: parsed.type,
         amount: Math.round(parsed.amount * 100) / 100,
         category: parsed.type === 'income' ? 'Receita' : parsed.category,
-        merchant: parsed.merchant.trim(),
-        description: parsed.description.trim() || deterministic?.description || descriptionFrom(text),
+        merchant: parsed.merchant.trim().slice(0, 120),
+        description: parsed.description.trim().slice(0, 500) || deterministic?.description || descriptionFrom(text),
         transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
           ? parsed.transaction_date
-          : isoBrazil()
+          : deterministic?.transactionDate ?? isoBrazil()
       };
     } catch (error) {
-      console.error('[CashParser] falha na IA:', error);
+      console.error('[CashParser] falha na IA; usando fallback determinístico:', error);
       return deterministic;
     }
   }
