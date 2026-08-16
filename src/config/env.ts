@@ -14,6 +14,8 @@ function numberEnv(name: string, fallback: number): number {
   return value;
 }
 
+const defaultQuarterlyCheckout = 'https://pay.cakto.com.br/gh5iq23_1043146';
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: numberEnv('PORT', 3000),
@@ -41,10 +43,26 @@ export const env = {
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
   cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5575999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
-  cashPaymentMonthlyUrl: process.env.CASH_PAYMENT_MONTHLY_URL?.trim() ?? '',
-  cashPaymentSemiannualUrl: process.env.CASH_PAYMENT_SEMIANNUAL_URL?.trim() ?? '',
-  cashPaymentAnnualUrl: process.env.CASH_PAYMENT_ANNUAL_URL?.trim() ?? '',
+
+  // Checkouts Cakto. O Core acrescenta nome, e-mail, telefone e sck da conta
+  // dinamicamente antes de redirecionar o cliente para a Cakto.
+  cashPaymentMonthlyUrl:
+    process.env.CASH_PAYMENT_MONTHLY_URL?.trim() || 'https://pay.cakto.com.br/y2bhspu_1043142',
+  cashPaymentQuarterlyUrl:
+    process.env.CASH_PAYMENT_QUARTERLY_URL?.trim() || defaultQuarterlyCheckout,
+  // Alias legado apenas para manter código antigo compilando durante a migração.
+  cashPaymentSemiannualUrl:
+    process.env.CASH_PAYMENT_SEMIANNUAL_URL?.trim() ||
+    process.env.CASH_PAYMENT_QUARTERLY_URL?.trim() ||
+    defaultQuarterlyCheckout,
+  cashPaymentAnnualUrl:
+    process.env.CASH_PAYMENT_ANNUAL_URL?.trim() || 'https://pay.cakto.com.br/uw7bctc_1043148',
+  cashPaymentPublicBaseUrl:
+    (process.env.CASH_PAYMENT_PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
   cashPaymentWebhookSecret: process.env.CASH_PAYMENT_WEBHOOK_SECRET?.trim() ?? '',
+  cashCaktoMonthlyOfferId: process.env.CASH_CAKTO_MONTHLY_OFFER_ID?.trim() ?? '',
+  cashCaktoQuarterlyOfferId: process.env.CASH_CAKTO_QUARTERLY_OFFER_ID?.trim() ?? '',
+  cashCaktoAnnualOfferId: process.env.CASH_CAKTO_ANNUAL_OFFER_ID?.trim() ?? '',
 
   publicBaseUrl: (process.env.PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
   internalApiKey: process.env.INTERNAL_API_KEY?.trim() ?? '',

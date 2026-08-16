@@ -2,6 +2,7 @@ import { evolution } from '../../whatsapp/evolution.client.js';
 import { env } from '../../config/env.js';
 import { platformJobService } from '../../platform/jobs/job.service.js';
 import type { ModuleJobContext } from '../../platform/modules/contract.js';
+import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashService } from './service.js';
 import type { CashSummary } from './types.js';
 import {
@@ -193,12 +194,15 @@ export class CashReports {
     const settings = await cashService.accessState(context.companyId);
     if (settings.subscription_status !== 'trial' || !settings.owner_phone) return;
     const greeting = settings.owner_name ? `Hey ${settings.owner_name}! 👋` : 'Hey! 👋';
+    const paymentMenu = await cashPaymentMenuForCompany(context.companyId);
     await this.send(settings.owner_phone, [
       greeting,
       'Seu trial acaba em 2 dias.',
       'Para continuar usando o Arles Cash, escolha um plano:',
       '',
-      cashService.paymentMenu()
+      paymentMenu,
+      '',
+      'O pagamento é confirmado pela Cakto e o acesso é liberado automaticamente.'
     ].join('\n'));
   }
 
@@ -217,6 +221,7 @@ export class CashReports {
       summary,
       name: settings.owner_name
     });
+    const paymentMenu = await cashPaymentMenuForCompany(context.companyId);
     await this.send(settings.owner_phone, [
       report,
       '',
@@ -224,7 +229,9 @@ export class CashReports {
       '⏰ Seu trial encerra hoje!',
       'Continue acompanhando suas finanças — escolha seu plano:',
       '',
-      cashService.paymentMenu()
+      paymentMenu,
+      '',
+      'Assim que a Cakto confirmar o pagamento, seu acesso é liberado automaticamente.'
     ].join('\n'));
   }
 
@@ -232,13 +239,16 @@ export class CashReports {
     await cashService.expireTrial(context.companyId);
     const settings = await cashService.settings(context.companyId);
     if (settings.subscription_status === 'active' || !settings.owner_phone) return;
+    const paymentMenu = await cashPaymentMenuForCompany(context.companyId);
     await this.send(settings.owner_phone, [
       '⚠️ Seu trial encerrou.',
       'Seus dados estão salvos e seguros.',
       '',
       'Para reativar, escolha um plano:',
       '',
-      cashService.paymentMenu()
+      paymentMenu,
+      '',
+      'O pagamento é confirmado pela Cakto e seu histórico continua na mesma conta.'
     ].join('\n'));
   }
 }

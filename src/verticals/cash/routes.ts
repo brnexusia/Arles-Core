@@ -2,9 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { evolution } from '../../whatsapp/evolution.client.js';
 import { env } from '../../config/env.js';
+import { caktoPaymentService, cashPlanLabel, type CaktoPaymentResult } from './cakto-payment.js';
+import { resolveCashPaymentAlias } from './checkout.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
-import { isoBrazil } from './time.js';
+import { formatBrazilDate, isoBrazil } from './time.js';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -58,78 +60,165 @@ function nested(body: Record<string, any>, paths: string[]): unknown {
 }
 
 function centsFrom(body: Record<string, any>): number | null {
-  const cents = Number(nested(body, ['amount_cents', 'data.amount_cents', 'purchase.price.value_cents']));
+  const cents = Number(nested(body, [
+    'amount_cents', 'data.amount_cents', 'data.amountCents', 'purchase.price.value_cents'
+  ]));
   if (Number.isInteger(cents) && cents >= 0) return cents;
-  const amount = Number(nested(body, ['amount', 'price', 'data.amount', 'purchase.price.value']));
+
+  const amount = Number(nested(body, [
+    'amount', 'data.amount', 'price', 'data.price', 'purchase.price.value'
+  ]));
   if (Number.isFinite(amount) && amount >= 0) return Math.round(amount * 100);
   return null;
 }
 
-function planFrom(body: Record<string, any>, amountCents: number | null): string {
-  const explicit = String(nested(body, [
-    'plan_key', 'plan', 'product_name', 'offer_name',
-    'product.name', 'data.plan', 'data.product.name', 'purchase.product.name'
-  ]) ?? '').trim();
-  if (explicit) return explicit;
-  if (amountCents === 499) return 'cash_monthly';
-  if (amountCents === 2490) return 'cash_semiannual';
-  if (amountCents === 3990) return 'cash_annual';
-  return '';
+function webhookSecret(request: FastifyRequest, body: Record<string, any>): string[] {
+  return [
+    String(body.secret ?? '').trim(),
+    String(nested(body, ['data.secret', 'fields.secret']) ?? '').trim(),
+    String(request.headers['x-cash-webhook-secret'] ?? '').trim(),
+    String(request.headers['x-webhook-secret'] ?? '').trim(),
+    String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim()
+  ].filter(Boolean);
+}
+
+function publicPaymentResult(result: CaktoPaymentResult) {
+  return {
+    ignored: result.ignored === true,
+    duplicate: result.duplicate === true,
+    companyId: result.companyId,
+    planKey: result.planKey,
+    activated: result.activated === true,
+    revoked: result.revoked === true,
+    canceledAtPeriodEnd: result.canceledAtPeriodEnd === true,
+    renewalRefused: result.renewalRefused === true
+  };
+}
+
+function paymentNotification(result: CaktoPaymentResult): string | null {
+  if (result.activated && result.planKey && result.periodEnd) {
+    return [
+      '✅ Pagamento confirmado!',
+      'Seu Arles Cash já está ativo.',
+      `📌 Plano: ${cashPlanLabel(result.planKey)}`,
+      `📅 Acesso até ${formatBrazilDate(result.periodEnd)}.`,
+      '',
+      'Pode continuar usando normalmente por aqui. 💰'
+    ].join('\n');
+  }
+
+  if (result.revoked) {
+    return [
+      '⚠️ O pagamento do Arles Cash foi estornado ou recebeu chargeback.',
+      'Por segurança, o acesso pago foi pausado.',
+      'Seu histórico financeiro continua salvo.'
+    ].join('\n');
+  }
+
+  if (result.canceledAtPeriodEnd) {
+    return [
+      '✅ Cancelamento da assinatura recebido.',
+      result.periodEnd ? `Seu acesso continua disponível até ${formatBrazilDate(result.periodEnd)}.` : 'Seu acesso continua até o fim do período já pago.',
+      'Seu histórico continuará salvo.'
+    ].join('\n');
+  }
+
+  if (result.renewalRefused) {
+    return [
+      '⚠️ A Cakto informou que a renovação não foi confirmada.',
+      result.periodEnd ? `Você ainda pode usar o Arles Cash até ${formatBrazilDate(result.periodEnd)}.` : 'Seu acesso atual será mantido até o fim do período já pago.',
+      'Se precisar, mande “planos” para gerar um novo checkout.'
+    ].join('\n');
+  }
+
+  return null;
+}
+
+async function caktoWebhook(request: FastifyRequest, reply: FastifyReply) {
+  try {
+    if (!env.cashPaymentWebhookSecret) {
+      return reply.code(503).send({ error: 'CASH_PAYMENT_WEBHOOK_NOT_CONFIGURED' });
+    }
+
+    const body = (request.body ?? {}) as Record<string, any>;
+    const secrets = webhookSecret(request, body);
+    if (!secrets.includes(env.cashPaymentWebhookSecret)) {
+      return reply.code(401).send({ error: 'CASH_PAYMENT_WEBHOOK_UNAUTHORIZED' });
+    }
+
+    const eventType = String(nested(body, ['event', 'event_type', 'type', 'data.event']) ?? '').trim();
+    const orderId = String(nested(body, [
+      'data.id', 'order.id', 'purchase.id', 'purchase.transaction', 'transaction_id', 'id'
+    ]) ?? '').trim();
+    const amountCents = centsFrom(body);
+
+    const result = await caktoPaymentService.process({
+      eventType,
+      orderId,
+      sck: String(nested(body, [
+        'sck', 'data.sck', 'data.tracking.sck', 'data.checkout.sck',
+        'data.order.sck', 'data.source.sck', 'tracking.sck'
+      ]) ?? ''),
+      phone: String(nested(body, [
+        'data.customer.phone', 'customer.phone', 'buyer.phone', 'data.buyer.phone',
+        'phone', 'customer_phone', 'buyer_phone'
+      ]) ?? ''),
+      email: String(nested(body, [
+        'data.customer.email', 'customer.email', 'buyer.email', 'data.buyer.email',
+        'email', 'customer_email', 'buyer_email'
+      ]) ?? ''),
+      offerId: String(nested(body, ['data.offer.id', 'offer.id', 'offer_id']) ?? ''),
+      offerName: String(nested(body, ['data.offer.name', 'offer.name', 'offer_name']) ?? ''),
+      productId: String(nested(body, ['data.product.id', 'product.id', 'product_id']) ?? ''),
+      productName: String(nested(body, ['data.product.name', 'product.name', 'product_name']) ?? ''),
+      subscriptionId: String(nested(body, [
+        'data.subscription.id', 'subscription.id', 'subscription_id'
+      ]) ?? ''),
+      nextPaymentDate: String(nested(body, [
+        'data.subscription.next_payment_date', 'data.subscription.nextPaymentDate',
+        'subscription.next_payment_date', 'data.next_payment_date'
+      ]) ?? ''),
+      amountCents,
+      payload: body
+    });
+
+    // Responde primeiro. A confirmacao no WhatsApp nao deve atrasar o ACK do webhook.
+    reply.send({ ok: true, ...publicPaymentResult(result) });
+
+    const notification = paymentNotification(result);
+    if (notification && result.ownerPhone && env.cashEvolutionInstance) {
+      void evolution.sendText({
+        instanceName: env.cashEvolutionInstance,
+        to: result.ownerPhone,
+        text: notification
+      }).catch(error => {
+        request.log.error({ err: error, companyId: result.companyId }, 'Falha enviando confirmacao Cakto no WhatsApp');
+      });
+    }
+    return reply;
+  } catch (error) {
+    return fail(reply, error);
+  }
 }
 
 export async function registerCashRoutes(app: FastifyInstance) {
-  // Webhook público para Kirvano/Hotmart (ou um adaptador externo).
-  // A autenticação é feita por segredo próprio, sem sessão de usuário.
-  app.post('/webhooks/cash/payment', async (request, reply) => {
-    try {
-      if (!env.cashPaymentWebhookSecret) {
-        return reply.code(503).send({ error: 'CASH_PAYMENT_WEBHOOK_NOT_CONFIGURED' });
-      }
-      const auth = String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
-      const headerSecret = String(request.headers['x-cash-webhook-secret'] ?? '').trim();
-      if (auth !== env.cashPaymentWebhookSecret && headerSecret !== env.cashPaymentWebhookSecret) {
-        return reply.code(401).send({ error: 'CASH_PAYMENT_WEBHOOK_UNAUTHORIZED' });
-      }
-
-      const body = (request.body ?? {}) as Record<string, any>;
-      const query = (request.query ?? {}) as Record<string, unknown>;
-      const amountCents = centsFrom(body);
-      const result = await cashService.applyExternalPayment({
-        eventId: String(nested(body, [
-          'event_id', 'id', 'webhook_id', 'transaction_id',
-          'data.id', 'data.transaction_id', 'purchase.transaction'
-        ]) ?? '').trim(),
-        provider: String(body.provider ?? query.provider ?? 'external'),
-        phone: String(nested(body, [
-          'phone', 'customer_phone', 'buyer_phone',
-          'customer.phone', 'buyer.phone', 'data.customer.phone', 'data.buyer.phone',
-          'purchase.buyer.phone'
-        ]) ?? ''),
-        companyId: String(nested(body, ['company_id', 'data.company_id']) ?? ''),
-        plan: planFrom(body, amountCents),
-        status: String(nested(body, [
-          'status', 'event', 'event_type', 'data.status', 'purchase.status'
-        ]) ?? ''),
-        amountCents,
-        payload: body
-      });
-
-      if ('companyId' in result && result.companyId && result.active && env.cashEvolutionInstance) {
-        const settings = await cashService.settings(result.companyId);
-        if (settings.owner_phone) {
-          await evolution.sendText({
-            instanceName: env.cashEvolutionInstance,
-            to: settings.owner_phone,
-            text: '✅ Pagamento confirmado! Seu Arles Cash está ativo novamente. Seu histórico continua aqui com você.'
-          });
-        }
-      }
-
-      return reply.send({ ok: true, ...result });
-    } catch (error) {
-      return fail(reply, error);
+  // Link curto enviado no WhatsApp. O token nao expoe e-mail, telefone, company_id
+  // nem o endereço da Cakto. Depois do clique, redireciona para o checkout real.
+  app.get('/cash/p/:token', async (request, reply) => {
+    const token = String((request.params as { token?: string }).token ?? '').trim();
+    const target = token ? await resolveCashPaymentAlias(token) : null;
+    if (!target) {
+      return reply.code(410).type('text/plain; charset=utf-8').send(
+        'Este link de pagamento expirou. Volte ao WhatsApp e envie “planos” para gerar um novo link.'
+      );
     }
+    return reply.redirect(target);
   });
+
+  // Endpoint oficial da Cakto. Mantemos o alias antigo por compatibilidade enquanto
+  // a integracao e migrada no painel do provedor.
+  app.post('/webhooks/cash/cakto', caktoWebhook);
+  app.post('/webhooks/cash/payment', caktoWebhook);
 
   route(app, 'GET', '/internal/verticals/cash/overview',
     async (_request, reply, companyId) => reply.send({ data: await cashService.overview(companyId) }));
