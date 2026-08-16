@@ -7,8 +7,10 @@ process.env.EVOLUTION_API_KEY ||= 'test-key';
 
 const {
   isCashRegistrationConfirmation,
-  isCashRegistrationCancellation
+  isCashRegistrationCancellation,
+  isCashRegistrationEditRequest
 } = await import('../src/verticals/cash/confirmation.js');
+const { parseCashEditPatch } = await import('../src/verticals/cash/management.js');
 
 describe('cash confirmation', () => {
   it('aceita confirmações naturais para registrar', () => {
@@ -24,5 +26,13 @@ describe('cash confirmation', () => {
     expect(isCashRegistrationCancellation('não registra')).toBe(true);
     expect(isCashRegistrationConfirmation('quanto gastei hoje?')).toBe(false);
     expect(isCashRegistrationConfirmation('edita o valor')).toBe(false);
+  });
+
+  it('reconhece edição do resumo pendente', () => {
+    expect(isCashRegistrationEditRequest('editar')).toBe(true);
+    expect(isCashRegistrationEditRequest('editar 2 valor 80')).toBe(true);
+    expect(isCashRegistrationEditRequest('categoria Reserva')).toBe(true);
+    expect(parseCashEditPatch('editar 2 valor 80')).toMatchObject({ amount: 80 });
+    expect(parseCashEditPatch('item 1 categoria Reserva')).toMatchObject({ category: 'Reserva' });
   });
 });
