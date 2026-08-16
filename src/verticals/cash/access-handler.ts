@@ -2,6 +2,8 @@ import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
+import { cashConversationHandler } from './conversation.js';
+import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
 import { fastCashFaq } from './fast-faq.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
@@ -179,6 +181,14 @@ export class CashAccessHandler implements VerticalHandler {
         [company.id]
       );
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
+    }
+
+    // Exclusão é uma intenção operacional de alta prioridade. Ela nunca passa pelo
+    // parser de valores: números como “4 registros” não podem virar despesa de R$4.
+    if (isCashDeletionCommand(combinedText)) {
+      const bulk = await handleCashBulkDeletionCommand(context);
+      if (bulk) return bulk;
+      return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
     }
 
     // FAQ previsível não precisa consumir IA. Respostas institucionais e de uso comum
