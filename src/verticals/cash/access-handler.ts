@@ -1,6 +1,6 @@
 import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
-import { cashBroadHandler } from './broad-handler.js';
+import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
@@ -180,7 +180,7 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar seus pagamentos na Cakto.');
     }
 
-    return await personalizePaymentMenu(company.id, await cashBroadHandler.handle(context));
+    return await personalizePaymentMenu(company.id, await cashAiFirstHandler.handle(context));
   }
 }
 

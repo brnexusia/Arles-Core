@@ -4,6 +4,30 @@ function digits(value: string): string {
   return value.replace(/\D/g, '');
 }
 
+function messageText(message: any): string {
+  return String(
+    message?.conversation ??
+    message?.extendedTextMessage?.text ??
+    message?.imageMessage?.caption ??
+    message?.videoMessage?.caption ??
+    message?.documentMessage?.caption ??
+    ''
+  ).trim();
+}
+
+function quotedTextFrom(message: any): string {
+  const contextInfo =
+    message?.extendedTextMessage?.contextInfo ??
+    message?.imageMessage?.contextInfo ??
+    message?.videoMessage?.contextInfo ??
+    message?.documentMessage?.contextInfo ??
+    message?.buttonsResponseMessage?.contextInfo ??
+    message?.listResponseMessage?.contextInfo ??
+    null;
+
+  return messageText(contextInfo?.quotedMessage ?? {});
+}
+
 export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   const body = payload?.body ?? payload ?? {};
   const data = body?.data ?? {};
@@ -52,12 +76,10 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   const text = String(
     typeof body?.message === 'string'
       ? body.message
-      : message?.conversation ??
-        message?.extendedTextMessage?.text ??
-        message?.imageMessage?.caption ??
-        message?.videoMessage?.caption ??
-        ''
+      : messageText(message)
   ).trim();
+
+  const quotedText = quotedTextFrom(message);
 
   let type: NormalizedMessage['type'] = 'unsupported';
 
@@ -87,6 +109,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
     event,
     type,
     text,
+    quotedText: quotedText || undefined,
     raw: payload
   };
 }

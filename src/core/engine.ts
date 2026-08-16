@@ -306,7 +306,10 @@ export class ArlesEngine {
       companyId: company.id,
       phone: message.phone,
       messageId: message.messageId,
-      text: messageText
+      text: messageText,
+      // O Cash usa debounce longo para juntar mensagens picadas do usuário. Delivery
+      // e as demais verticais preservam a latência curta que já usam hoje.
+      waitMs: company.vertical === 'cash' ? env.cashMessageBufferMs : env.messageBufferMs
     });
     if (!combinedText) {
       console.info(`[Arles] Buffer aguardando/consumido por outra mensagem: company=${company.id} phone=*${phoneTail}`);

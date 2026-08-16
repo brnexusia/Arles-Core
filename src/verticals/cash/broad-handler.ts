@@ -7,6 +7,8 @@ import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashConversationHandler } from './conversation.js';
 import { routeCashInput, type CashBroadRoute } from './broad-routing.js';
 import { cashService } from './service.js';
+import { preprocessCashInput } from './smart-input.js';
+import { cashHelpMessage, cashHelpSection } from './help.js';
 import { formatBrazilDate } from './time.js';
 
 const BroadFallbackSchema = z.object({
@@ -57,7 +59,8 @@ function categoriesMessage(): string {
     '🏥 Saúde — farmácia, consulta, exame, remédio...',
     '🏠 Moradia — aluguel, água, luz, internet, condomínio...',
     '📚 Educação — escola, curso, faculdade, livros...',
-    '👤 Pessoal — roupas, academia, salão, shopping...',
+    '👤 Pessoal — roupas, unhas, academia, salão, shopping...',
+    '🏦 Reserva — dinheiro guardado, separado ou poupado...',
     '💰 Receita — salário, freela, recebimentos...',
     '📦 Outros — quando não se encaixar nas anteriores.',
     '',
@@ -148,12 +151,12 @@ async function broadAiFallback(input: string) {
           content: [
             'Você é o roteador de último recurso do Arles Cash no WhatsApp.',
             'Classifique a intenção do usuário em uma das rotas suportadas.',
-            'query: consultar lançamentos, valores, períodos, lojas, categorias ou filtros. rewritten_text deve virar uma pergunta explícita, ex.: “quais foram meus registros hoje?” ou “quanto gastei na SHEIN este mês?”.',
+            'query: consultar lançamentos, valores, períodos, lojas, categorias ou filtros. rewritten_text deve virar uma pergunta explícita.',
             'balance: saldo, balanço ou situação financeira geral.',
             'history: últimos registros sem um período específico.',
             'weekly_report/monthly_report: fechamento ou relatório da semana/mês.',
-            'edit: usuário explicitamente quer corrigir um lançamento. rewritten_text deve conter verbo de edição e alvo seguro, ex.: “edita o último” ou “muda o último para 20 reais”.',
-            'delete: usuário explicitamente quer apagar um lançamento. rewritten_text deve conter verbo de exclusão e alvo seguro, ex.: “apaga o último” ou “remove o 2”. Nunca use delete para conta, cadastro ou dados pessoais.',
+            'edit: usuário explicitamente quer corrigir um lançamento.',
+            'delete: usuário explicitamente quer apagar um lançamento. Nunca use delete para conta, cadastro ou dados pessoais.',
             'undo: restaurar o último lançamento excluído.',
             'help: como usar, funções, comandos ou exemplos.',
             'plans: preço, assinatura, planos ou reativação.',
@@ -181,17 +184,26 @@ async function retryCanonical(context: VerticalContext, rewrittenText: string): 
 
 export class CashBroadHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    const route = routeCashInput(context.combinedText);
+    const guideSection = cashHelpSection(context.combinedText);
+    if (guideSection) return text(cashHelpMessage(guideSection));
 
-    if (route && route.kind !== 'rewrite') return await specialRoute(context, route);
+    const smart = await preprocessCashInput(context);
+    if (smart?.kind === 'result') return smart.result;
+
+    const preparedContext = smart?.kind === 'rewrite'
+      ? { ...context, combinedText: smart.text }
+      : context;
+
+    const route = routeCashInput(preparedContext.combinedText);
+    if (route && route.kind !== 'rewrite') return await specialRoute(preparedContext, route);
 
     const firstContext = route?.kind === 'rewrite'
-      ? { ...context, combinedText: route.text }
-      : context;
+      ? { ...preparedContext, combinedText: route.text }
+      : preparedContext;
     const first = await cashConversationHandler.handle(firstContext);
     if (!isFinalFallback(first)) return first;
 
-    const fallback = await broadAiFallback(context.combinedText);
+    const fallback = await broadAiFallback(preparedContext.combinedText);
 
     if (fallback.intent === 'plans') {
       const paymentMenu = await cashPaymentMenuForCompany(context.company.id);
@@ -200,14 +212,14 @@ export class CashBroadHandler implements VerticalHandler {
     if (fallback.intent === 'trial') return text(await trialMessage(context.company.id));
     if (fallback.intent === 'categories') return text(categoriesMessage());
     if (fallback.intent === 'schedule') return text(scheduleMessage());
+    if (fallback.intent === 'help') return text(cashHelpMessage('menu'));
 
     const canonical: Record<string, string> = {
       balance: 'saldo',
       history: 'histórico',
       weekly_report: 'relatório semanal',
       monthly_report: 'relatório mensal',
-      undo: 'coloca ele de novo',
-      help: 'ajuda'
+      undo: 'coloca ele de novo'
     };
 
     const direct = canonical[fallback.intent];

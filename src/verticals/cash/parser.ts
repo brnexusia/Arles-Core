@@ -12,6 +12,7 @@ const CATEGORIES = [
   'Moradia',
   'Educação',
   'Pessoal',
+  'Reserva',
   'Receita',
   'Outros'
 ] as const;
@@ -26,11 +27,16 @@ const ParsedTransactionSchema = z.object({
   transaction_date: z.string()
 });
 
-const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague)\b/i;
+const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague|guardei|reservei|separei)\b/i;
 const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
+const MOVEMENT = /\b(gastei|gasto|paguei|comprei|guardei|reservei|separei|recebi|ganhei|entrou|vendi|faturei|depositaram)\b/gi;
+
+function amountMatches(text: string): RegExpMatchArray[] {
+  return [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
+}
 
 function amountFrom(text: string): number | null {
-  const matches = [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
+  const matches = amountMatches(text);
   for (const match of matches) {
     const before = text.slice(Math.max(0, (match.index ?? 0) - 8), match.index ?? 0);
     const after = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 5);
@@ -50,7 +56,6 @@ function transactionType(text: string, amount: number | null): CashTransactionTy
   if (EXPENSE.test(text)) return 'expense';
   if (!amount) return null;
 
-  // Frases curtas como “farmácia 45” e “120 no almoço” são despesas por padrão.
   const usefulText = text.replace(/[\d.,R$\s]/gi, '');
   return usefulText.length >= 2 ? 'expense' : null;
 }
@@ -82,12 +87,13 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
   if (type === 'income') return 'Receita';
   const value = text.toLowerCase();
 
-  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|ifood|delivery/.test(value)) return 'Alimentação';
-  if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem/.test(value)) return 'Transporte';
-  if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio/.test(value)) return 'Saúde';
+  if (/\b(guardei|reservei|separei|poupança|poupanca|reserva)\b/.test(value)) return 'Reserva';
+  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery/.test(value)) return 'Alimentação';
+  if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem|bicicleta/.test(value)) return 'Transporte';
+  if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio|xarope/.test(value)) return 'Saúde';
   if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
   if (/escola|curso|livro|faculdade|mensalidade/.test(value)) return 'Educação';
-  if (/salão|salao|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio/.test(value)) return 'Pessoal';
+  if (/salão|salao|unha|manicure|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio|presente/.test(value)) return 'Pessoal';
   return 'Outros';
 }
 
@@ -102,7 +108,7 @@ export function descriptionFrom(text: string): string {
   value = value
     .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
     .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
-    .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
+    .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|guardei|reservei|separei|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
     .replace(/(?:\b(?:por|de)\s+)?(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:[.,]\d{1,2})?(?:\s*reais?)?/gi, ' ')
     .replace(/^\s*(?:um|uma)\s+/i, '')
     .replace(/^\s*(?:no|na|em|de)\s+/i, '')
@@ -128,21 +134,40 @@ export function deterministicCashParse(text: string): CashTransactionInput | nul
   };
 }
 
+export function isStrongDeterministicCashTransaction(
+  text: string,
+  parsed: CashTransactionInput | null = deterministicCashParse(text)
+): boolean {
+  if (!parsed) return false;
+  const clean = text.trim();
+  if (!clean || clean.length > 140 || /\n/.test(clean)) return false;
+
+  // Mais de um valor ou mais de um movimento já merece interpretação semântica.
+  if (amountMatches(clean).length !== 1) return false;
+  const movements = clean.match(MOVEMENT) ?? [];
+  if (movements.length > 1) return false;
+
+  const explicitMovement = EXPENSE.test(clean) || INCOME.test(clean);
+  const compactKnownCategory = clean.split(/\s+/).length <= 8 && parsed.category !== 'Outros';
+
+  // “gastei 50 no mercado”, “recebi 2000 de salário”, “farmácia 45” etc.
+  // ficam 100% em script. Categorias incertas, textos maiores ou formatos fora do
+  // esperado sobem para a IA.
+  return explicitMovement && parsed.category !== 'Outros' || compactKnownCategory;
+}
+
 export class CashParser {
   private readonly client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
 
   async parse(text: string): Promise<CashTransactionInput | null> {
     const deterministic = deterministicCashParse(text);
 
-    // Quando a regra determinística já sabe o tipo e a categoria, ela é a fonte mais barata/segura.
-    // Se caiu em “Outros” com linguagem possivelmente abreviada, deixa a IA tentar refinar.
-    const deterministicIsStrong = Boolean(
-      deterministic &&
-      (deterministic.type === 'income' || deterministic.category !== 'Outros')
-    );
-    if (deterministicIsStrong) return deterministic;
+    // Caminho barato e previsível: lançamento muito direto não consome GPT.
+    if (isStrongDeterministicCashTransaction(text, deterministic)) return deterministic;
     if (!this.client) return deterministic;
 
+    // Saiu um pouco do padrão esperado: a IA assume a interpretação e as regras
+    // determinísticas permanecem como fallback de segurança.
     try {
       const response = await this.client.responses.parse({
         model: env.openaiModel,
@@ -150,15 +175,17 @@ export class CashParser {
           {
             role: 'system',
             content: [
-              'Você interpreta um único lançamento financeiro doméstico em português brasileiro.',
-              'Tolere erros de digitação, abreviações e gírias, por exemplo: “gstei 80 mrcado”.',
-              'expense é dinheiro que saiu; income é dinheiro que entrou.',
+              'Você interpreta lançamentos do Arles Cash em português brasileiro quando a frase saiu do padrão simples coberto por regras.',
+              'Entenda linguagem natural, erros de digitação, abreviações, gírias e frases curtas.',
+              'Nunca invente valor, data, loja, pessoa ou descrição que não estejam sustentados pela mensagem.',
+              'expense é dinheiro que saiu do disponível; income é dinheiro que entrou.',
+              '“guardei”, “reservei” ou “separei dinheiro” é expense na categoria Reserva.',
               'Frases como “120 no almoço” ou “farmácia 45” são despesas.',
-              'Não invente valor. Se não houver lançamento e valor identificáveis, is_transaction=false.',
-              'Use SOMENTE estas categorias: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Receita, Outros.',
-              'Toda entrada/receita deve usar a categoria Receita.',
-              'merchant é o local/pessoa quando estiver claro.',
-              'description deve ser curta e útil, descrevendo o que foi comprado/recebido sem repetir verbo, valor ou data. Exemplo: “comprei uma blusinha na SHEIN de 15 reais” => “blusinha na SHEIN”.',
+              'Se não houver lançamento e valor identificáveis, is_transaction=false.',
+              'Use SOMENTE: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
+              'Toda entrada usa Receita. Dinheiro guardado usa Reserva.',
+              'merchant é loja, pessoa ou local somente quando estiver claro.',
+              'description deve ser curta e humana, sem repetir verbo, valor e data.',
               `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
@@ -168,18 +195,19 @@ export class CashParser {
       });
       const parsed = response.output_parsed;
       if (!parsed?.is_transaction || !parsed.amount) return deterministic;
+
       return {
         type: parsed.type,
         amount: Math.round(parsed.amount * 100) / 100,
         category: parsed.type === 'income' ? 'Receita' : parsed.category,
-        merchant: parsed.merchant.trim(),
-        description: parsed.description.trim() || deterministic?.description || descriptionFrom(text),
+        merchant: parsed.merchant.trim().slice(0, 120),
+        description: parsed.description.trim().slice(0, 500) || deterministic?.description || descriptionFrom(text),
         transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
           ? parsed.transaction_date
-          : isoBrazil()
+          : deterministic?.transactionDate ?? isoBrazil()
       };
     } catch (error) {
-      console.error('[CashParser] falha na IA:', error);
+      console.error('[CashParser] falha na IA; usando fallback determinístico:', error);
       return deterministic;
     }
   }

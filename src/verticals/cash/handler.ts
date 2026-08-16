@@ -3,6 +3,7 @@ import { cashParser } from './parser.js';
 import { cashQuery } from './query.js';
 import { cashReports, formatCashReport, formatCashSummary } from './reports.js';
 import { cashService } from './service.js';
+import { stageCashRegistration } from './confirmation.js';
 import {
   asksHowToManage,
   deletionTarget,
@@ -163,7 +164,6 @@ export class CashHandler implements VerticalHandler {
     const normalized = normalize(combinedText);
     let settings = await cashService.settings(company.id);
 
-    // Primeiro contato: a conta já foi criada pelo número remetente.
     if (settings.onboarding_state === 'welcome') {
       await cashService.beginOnboarding(company.id);
       await cashReports.ensureScheduled(company.id);
@@ -203,8 +203,6 @@ export class CashHandler implements VerticalHandler {
     settings = access;
     if (!access.hasAccess) return text(expiredMessage());
 
-    // Uma edição iniciada por “edita o último” fica aberta por alguns minutos para
-    // aceitar respostas naturais como “o valor foi 18 e foi ontem”.
     const pendingEditId = await getCashEditState(company.id, message.phone);
     if (pendingEditId) {
       if (/^(cancelar|cancela|cancelar edicao|cancelar edição|deixa pra la|deixa pra lá)[!. ]*$/.test(normalized)) {
@@ -242,7 +240,6 @@ export class CashHandler implements VerticalHandler {
       }
     }
 
-    // Perguntas sobre como editar/remover devem ensinar, nunca apagar algo por engano.
     if (asksHowToManage(combinedText)) {
       return text(managementHelpMessage());
     }
@@ -278,8 +275,6 @@ export class CashHandler implements VerticalHandler {
       return text(editPrompt(row));
     }
 
-    // Pesquisa financeira em linguagem natural. A IA, quando necessária, só extrai
-    // filtros; totais e linhas sempre vêm do PostgreSQL.
     const queryResult = await cashQuery.handle(company.id, combinedText);
     if (queryResult) return queryResult;
 
@@ -339,22 +334,9 @@ export class CashHandler implements VerticalHandler {
       ].join('\n'));
     }
 
-    const saved = await cashService.createTransaction({
-      companyId: company.id,
-      phone: message.phone,
-      sourceMessageId: message.messageId,
-      sourceMessage: combinedText,
-      transaction: parsed
-    });
-    await cashReports.ensureScheduled(company.id);
-
-    return text([
-      '✅ Registrado!',
-      `📂 Categoria: ${parsed.category}`,
-      `${parsed.type === 'expense' ? '💸' : '💰'} Valor: ${brl(Number(saved.amount))}`,
-      parsed.description ? `📝 Descrição: ${parsed.description}` : '',
-      `📅 Data: ${formatBrazilDate(parsed.transactionDate)}`
-    ].filter(Boolean).join('\n'));
+    // Última barreira: até o handler legado apenas PREPARA o lançamento.
+    // O PostgreSQL só recebe a transação depois da confirmação explícita do usuário.
+    return await stageCashRegistration(context, [parsed], combinedText);
   }
 }
 
