@@ -1,10 +1,9 @@
 import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashBroadHandler } from './broad-handler.js';
-import { cashActivation, cashPlanLabel, extractActivationCode, isValidCashEmail, normalizeCashEmail } from './activation.js';
+import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
-import { formatBrazilDate } from './time.js';
 
 function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
@@ -19,6 +18,15 @@ function looksLikeName(value: string): boolean {
 
 function cleanName(value: string): string {
   return String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function normalizeEmail(value: string): string {
+  return String(value ?? '').trim().toLowerCase().slice(0, 254);
+}
+
+function isValidEmail(value: string): boolean {
+  const email = normalizeEmail(value);
+  return Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email));
 }
 
 async function onboarding(companyId: string) {
@@ -43,8 +51,8 @@ async function saveName(companyId: string, name: string): Promise<void> {
 }
 
 async function saveEmailAndComplete(companyId: string, email: string): Promise<void> {
-  const normalized = normalizeCashEmail(email);
-  if (!isValidCashEmail(normalized)) throw new Error('CASH_EMAIL_INVALID');
+  const normalized = normalizeEmail(email);
+  if (!isValidEmail(normalized)) throw new Error('CASH_EMAIL_INVALID');
 
   const client = await db.connect();
   try {
@@ -77,41 +85,23 @@ async function saveEmailAndComplete(companyId: string, email: string): Promise<v
   }
 }
 
-function activationError(error: unknown): VerticalResult {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === 'CASH_ACTIVATION_CODE_USED') {
-    return text('Esse código já foi utilizado ✅ Se sua conta não estiver ativa, mande “planos” para conferir a assinatura.');
-  }
-  if (message === 'CASH_ACTIVATION_CODE_EXPIRED') {
-    return text('Esse código de ativação expirou. Ele é válido por 24 horas e só pode ser usado uma vez. Se o pagamento foi aprovado, peça um novo código pelo suporte de cobrança.');
-  }
-  if (message === 'CASH_ACTIVATION_CODE_ACCOUNT_MISMATCH' || message === 'CASH_ACTIVATION_CODE_PHONE_MISMATCH') {
-    return text('Esse código pertence a outra conta/WhatsApp e não pode ser usado aqui.');
-  }
-  return text('Não reconheci esse código de ativação. Confira os caracteres e envie exatamente como recebeu no WhatsApp.');
-}
-
-function appendActivationHint(result: VerticalResult | null): VerticalResult | null {
+async function personalizePaymentMenu(companyId: string, result: VerticalResult | null): Promise<VerticalResult | null> {
   if (!result) return result;
-  const hasPaymentMenu = result.actions.some(action =>
-    action.type === 'text' && /R\$\s*4,99|Planos do Arles Cash|Para reativar, escolha um plano/i.test(action.text)
-  );
-  if (!hasPaymentMenu) return result;
+  const staticMenu = cashService.paymentMenu();
+  if (!result.actions.some(action => action.type === 'text' && action.text.includes(staticMenu))) return result;
+
+  const personalized = await cashPaymentMenuForCompany(companyId);
   return {
     ...result,
-    actions: result.actions.map((action, index) => {
-      if (action.type !== 'text' || index !== result.actions.length - 1) return action;
-      return {
-        ...action,
-        text: `${action.text}\n\n🔐 Após a confirmação do pagamento, você recebe neste WhatsApp um código único de ativação. Envie o código aqui para liberar o período comprado.`
-      };
-    })
+    actions: result.actions.map(action => action.type === 'text'
+      ? { ...action, text: action.text.replace(staticMenu, personalized) }
+      : action)
   };
 }
 
 export class CashAccessHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    const { company, message, combinedText } = context;
+    const { company, combinedText } = context;
     const state = await onboarding(company.id);
 
     if (state.onboarding_state === 'welcome') {
@@ -137,15 +127,16 @@ export class CashAccessHandler implements VerticalHandler {
       return text([
         `Perfeito, ${name}! 😊`,
         'Agora me passa seu melhor e-mail.',
-        'Ele será usado para identificar seus pagamentos e recuperar sua assinatura quando necessário.'
+        'Ele serve para identificar sua compra e recuperar sua assinatura se for necessário.'
       ].join('\n'));
     }
 
     if (state.onboarding_state === 'awaiting_email') {
-      const email = normalizeCashEmail(combinedText);
-      if (!isValidCashEmail(email)) {
+      const email = normalizeEmail(combinedText);
+      if (!isValidEmail(email)) {
         return text('Esse e-mail não parece válido 🤔\nMe envie algo como: nome@email.com');
       }
+
       try {
         await saveEmailAndComplete(company.id, email);
       } catch (error) {
@@ -163,11 +154,14 @@ export class CashAccessHandler implements VerticalHandler {
           `Cadastro concluído, ${name}! ✅`,
           'Seu trial iniciado no primeiro contato já encerrou.',
           '',
-          cashService.paymentMenu(),
+          'Escolha um plano para reativar:',
           '',
-          '🔐 Depois do pagamento, o código de ativação será enviado para este WhatsApp.'
+          await cashPaymentMenuForCompany(company.id),
+          '',
+          'Assim que a Cakto confirmar o pagamento, seu acesso é liberado automaticamente aqui no WhatsApp.'
         ].join('\n'));
       }
+
       return text([
         `Perfeito, ${name}! 🎉`,
         `E-mail cadastrado: ${email}`,
@@ -177,23 +171,16 @@ export class CashAccessHandler implements VerticalHandler {
       ].join('\n'));
     }
 
-    const activationCode = extractActivationCode(combinedText);
-    if (activationCode) {
-      try {
-        const activated = await cashActivation.redeem(company.id, message.phone, activationCode);
-        return text([
-          '✅ Código validado! Seu Arles Cash está ativo.',
-          `📌 Plano: ${cashPlanLabel(activated.planKey)}`,
-          `📅 Acesso até ${formatBrazilDate(activated.periodEnd)}.`,
-          '',
-          'O código foi consumido e não pode ser usado novamente.'
-        ].join('\n'));
-      } catch (error) {
-        return activationError(error);
-      }
+    // Salvaguarda para contas legadas que por algum motivo chegaram ativas sem e-mail.
+    if (state.onboarding_state === 'active' && !state.owner_email) {
+      await db.query(
+        `update cash_settings set onboarding_state='awaiting_email',updated_at=now() where company_id=$1`,
+        [company.id]
+      );
+      return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar seus pagamentos na Cakto.');
     }
 
-    return appendActivationHint(await cashBroadHandler.handle(context));
+    return await personalizePaymentMenu(company.id, await cashBroadHandler.handle(context));
   }
 }
 
