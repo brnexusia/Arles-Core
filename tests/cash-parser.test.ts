@@ -5,7 +5,12 @@ process.env.REDIS_URL ||= 'redis://127.0.0.1:6379';
 process.env.EVOLUTION_BASE_URL ||= 'https://evolution.invalid';
 process.env.EVOLUTION_API_KEY ||= 'test-key';
 
-const { deterministicCashParse, categoryFrom, descriptionFrom } = await import('../src/verticals/cash/parser.js');
+const {
+  deterministicCashParse,
+  isStrongDeterministicCashTransaction,
+  categoryFrom,
+  descriptionFrom
+} = await import('../src/verticals/cash/parser.js');
 
 describe('cash parser', () => {
   it('registra despesa simples no mercado', () => {
@@ -54,6 +59,7 @@ describe('cash parser', () => {
     expect(categoryFrom('faculdade', 'expense')).toBe('Educação');
     expect(categoryFrom('academia', 'expense')).toBe('Pessoal');
     expect(categoryFrom('blusinha na SHEIN', 'expense')).toBe('Pessoal');
+    expect(categoryFrom('guardei dinheiro', 'expense')).toBe('Reserva');
     expect(categoryFrom('qualquer entrada', 'income')).toBe('Receita');
     expect(categoryFrom('coisa diferente', 'expense')).toBe('Outros');
   });
@@ -73,5 +79,18 @@ describe('cash parser', () => {
   it('não inventa lançamento sem valor', () => {
     expect(deterministicCashParse('Fui ao mercado hoje')).toBeNull();
     expect(deterministicCashParse('Gastei no mercado dia 15')).toBeNull();
+  });
+
+  it('mantém lançamentos muito diretos em script sem precisar de IA', () => {
+    expect(isStrongDeterministicCashTransaction('gastei 50 no mercado')).toBe(true);
+    expect(isStrongDeterministicCashTransaction('recebi 2000 de salário')).toBe(true);
+    expect(isStrongDeterministicCashTransaction('farmácia 45')).toBe(true);
+    expect(isStrongDeterministicCashTransaction('guardei 300')).toBe(true);
+  });
+
+  it('manda para a IA quando sai do padrão simples', () => {
+    expect(isStrongDeterministicCashTransaction('fiz umas compras diferentes e acabou saindo 80')).toBe(false);
+    expect(isStrongDeterministicCashTransaction('recebi 600 e depois guardei 300')).toBe(false);
+    expect(isStrongDeterministicCashTransaction('paguei 100 nisso e ela depois me devolveu 20')).toBe(false);
   });
 });
