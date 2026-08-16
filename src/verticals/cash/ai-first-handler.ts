@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashBroadHandler } from './broad-handler.js';
+import { cashHelpMessage, cashHelpSection } from './help.js';
 
 const SemanticSchema = z.object({
   intent: z.enum([
@@ -70,17 +71,18 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
           role: 'system',
           content: [
             'Você é a camada principal de compreensão do Arles Cash, um assistente financeiro pessoal no WhatsApp.',
-            'Sua tarefa é entender a intenção real da mensagem em português brasileiro natural, com erros, gírias, frases incompletas e contexto de mensagem respondida.',
-            'Você NÃO consulta banco, NÃO calcula saldo real e NÃO inventa lançamentos. Apenas classifica e, quando necessário, reescreve a intenção para o motor determinístico executar com segurança.',
-            'transaction: a pessoa está informando um lançamento financeiro novo. Não reescreva; o parser financeiro fará a extração.',
-            'query: quer consultar registros, gastos, receitas, lojas, categorias, períodos, listas ou perguntas sobre o que já registrou. rewritten_text deve ser uma pergunta explícita e curta que preserve filtros e período. Ex.: “tem como fazer uma lista organizada do que eu gastei” => “quais foram meus gastos este mês?”.',
-            'balance: quer saber saldo, quanto sobrou, situação financeira ou balanço geral.',
+            'Entenda português brasileiro natural, erros, gírias, frases incompletas e contexto de mensagem respondida.',
+            'Você NÃO consulta banco, NÃO calcula saldo real e NÃO inventa lançamentos. Apenas classifica e reescreve para o motor seguro executar.',
+            'transaction: a pessoa informa um lançamento novo. Não reescreva; o parser financeiro fará a extração.',
+            'query: quer consultar registros, gastos, receitas, lojas, categorias, períodos ou listas. rewritten_text deve ser uma pergunta explícita e curta preservando filtros.',
+            'balance: quer saber saldo, quanto sobrou ou situação financeira geral.',
             'history: quer ver lançamentos recentes sem filtro específico.',
-            'weekly_report/monthly_report: quer relatório ou fechamento da semana/mês.',
-            'edit: quer explicitamente corrigir um lançamento existente. rewritten_text deve manter alvo e alteração.',
+            'weekly_report/monthly_report: quer relatório/fechamento da semana ou mês.',
+            'edit: quer explicitamente corrigir um lançamento existente.',
             'delete: quer explicitamente apagar um lançamento existente. Nunca use para apagar conta, cadastro, perfil ou dados pessoais.',
             'undo: quer desfazer a última exclusão de lançamento.',
-            'help: quer saber como usar, o que pode fazer ou quais funções existem.',
+            'help: quer aprender como usar alguma função. Se for específico, use rewritten_text como uma destas opções: “ajuda registrar”, “ajuda consultar”, “ajuda editar”, “ajuda relatorios” ou “ajuda planos”. Se for geral, use “ajuda”.',
+            'Importante: “como consulto meus gastos?” é help; “quanto gastei hoje?” é query.',
             'plans: quer preço, assinatura, plano ou pagar.',
             'trial: pergunta sobre teste grátis, período gratuito, validade ou status do trial.',
             'categories: pergunta sobre categorias.',
@@ -88,7 +90,7 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
             'acknowledgement: resposta social curta sem nova ação, como certo, entendi, beleza, obrigado.',
             'unknown: conversa que não cabe com segurança nas funções acima.',
             'Se a pessoa disser que já falou/citou os gastos acima, ou pedir uma lista do que gastou, isso é query — não transforme a frase em termo de busca literal.',
-            'Se houver uma mensagem citada, use-a como contexto, mas não invente nada que não esteja nela.',
+            'Se houver mensagem citada, use-a como contexto, sem inventar conteúdo.',
             quoted ? `Mensagem citada/respondida: ${quoted}` : 'Não há mensagem citada nesta interação.'
           ].join('\n')
         },
@@ -110,7 +112,6 @@ function canonical(intent: SemanticIntent['intent']): string | null {
     weekly_report: 'relatório semanal',
     monthly_report: 'relatório mensal',
     undo: 'coloca ele de novo',
-    help: 'ajuda',
     plans: 'planos',
     trial: 'trial',
     categories: 'categorias',
@@ -121,8 +122,8 @@ function canonical(intent: SemanticIntent['intent']): string | null {
 
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    // Lançamentos claros seguem para o parser financeiro, que também usa IA como
-    // extrator principal. Isso evita uma chamada semântica redundante para “gastei 50”.
+    // Lançamentos claros seguem para o parser financeiro. O parser também usa IA
+    // como extrator semântico, evitando uma chamada duplicada só para classificar.
     if (obviousTransaction(context.combinedText)) {
       return await cashBroadHandler.handle(context);
     }
@@ -134,6 +135,12 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     if (understood.intent === 'acknowledgement') {
       return text('Perfeito 😊 Pode continuar falando comigo do seu jeito.');
+    }
+
+    if (understood.intent === 'help') {
+      const requested = understood.rewritten_text?.trim() || context.combinedText;
+      const section = cashHelpSection(requested) ?? 'menu';
+      return text(cashHelpMessage(section));
     }
 
     if (understood.intent === 'edit' || understood.intent === 'delete') {
