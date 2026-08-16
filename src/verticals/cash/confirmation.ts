@@ -75,6 +75,8 @@ async function clearPending(companyId: string, phone: string): Promise<void> {
   await redis.del(key(companyId, phone));
 }
 
+// Nenhum lançamento novo é persistido aqui. Este passo apenas guarda o resumo
+// temporariamente no Redis para o usuário revisar antes de qualquer INSERT.
 export async function stageCashRegistration(
   context: VerticalContext,
   transactions: CashTransactionInput[],
@@ -118,6 +120,7 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
     ].join('\n'));
   }
 
+  // Somente este ramo, após confirmação explícita, grava no PostgreSQL.
   const saved: CashTransactionInput[] = [];
   for (let index = 0; index < pending.transactions.length; index += 1) {
     const transaction = pending.transactions[index]!;
