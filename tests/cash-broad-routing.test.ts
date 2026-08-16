@@ -19,6 +19,8 @@ describe('cash broad routing', () => {
     expect(rewritten('Fechamento de ontem')).toBe('quais foram meus registros ontem?');
     expect(rewritten('Resumo da semana')).toBe('relatório semanal');
     expect(rewritten('Balanço mensal')).toBe('relatório mensal');
+    expect(rewritten('Resumo')).toBe('quais foram meus registros hoje?');
+    expect(rewritten('Lista de gastos')).toBe('quais foram meus registros hoje?');
   });
 
   it('entende saldo e visão financeira geral', () => {
@@ -39,7 +41,7 @@ describe('cash broad routing', () => {
     expect(rewritten('O que saiu ontem?')).toContain('quais foram minhas despesas');
     expect(rewritten('O que entrou hoje?')).toContain('quais foram minhas receitas');
     expect(rewritten('Movimentações de ontem')).toBe('quais foram meus registros ontem?');
-    expect(rewritten('Onde gastei mais?')).toBe('maior gasto este mês');
+    expect(rewritten('Onde gastei mais?')).toBe('maior gasto hoje');
   });
 
   it('entende correções naturais sem abrir rotas destrutivas para conta', () => {
