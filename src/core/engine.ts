@@ -302,6 +302,16 @@ export class ArlesEngine {
       return;
     }
 
+    // Depois que o Cash já mostrou o resumo de um lançamento, a decisão do usuário
+    // precisa ser imediata. Sim, não e edição do resumo não passam pelo debounce de 15s.
+    if (company.vertical === 'cash' && module.handlePendingInteraction) {
+      const immediate = await module.handlePendingInteraction({ company, message, combinedText: messageText });
+      if (immediate) {
+        await this.applyResult(company, message, immediate);
+        return;
+      }
+    }
+
     const combinedText = await bufferTextMessage({
       companyId: company.id,
       phone: message.phone,

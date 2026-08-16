@@ -2,6 +2,7 @@ import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
+import { fastCashFaq } from './fast-faq.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
 
@@ -158,7 +159,7 @@ export class CashAccessHandler implements VerticalHandler {
           '',
           await cashPaymentMenuForCompany(company.id),
           '',
-          'Assim que a Cakto confirmar o pagamento, seu acesso é liberado automaticamente aqui no WhatsApp.'
+          'Assim que o pagamento for confirmado, seu acesso é liberado automaticamente aqui no WhatsApp.'
         ].join('\n'));
       }
 
@@ -177,8 +178,13 @@ export class CashAccessHandler implements VerticalHandler {
         `update cash_settings set onboarding_state='awaiting_email',updated_at=now() where company_id=$1`,
         [company.id]
       );
-      return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar seus pagamentos na Cakto.');
+      return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
+
+    // FAQ previsível não precisa consumir IA. Respostas institucionais e de uso comum
+    // são resolvidas por script antes de entrar na camada semântica do GPT.
+    const fastFaq = await fastCashFaq(context);
+    if (fastFaq) return fastFaq;
 
     return await personalizePaymentMenu(company.id, await cashAiFirstHandler.handle(context));
   }

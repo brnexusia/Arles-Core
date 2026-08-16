@@ -20,6 +20,7 @@ const CATEGORY_CANONICAL: Record<string, string> = {
   moradia: 'Moradia',
   educacao: 'Educação',
   pessoal: 'Pessoal',
+  reserva: 'Reserva',
   receita: 'Receita',
   outros: 'Outros'
 };
@@ -32,11 +33,9 @@ export function normalizeCashText(value: string): string {
     .trim()
     .replace(/\s+/g, ' ');
 
-  // Variações naturais de pedido de ajuda devem cair no mesmo comando interno.
   if (/^(?:quais(?: sao)? os comandos|quais comandos|que comandos (?:tem|existem)|me mostra os comandos)[!.? ]*$/.test(normalized)) {
     return 'comandos';
   }
-
   return normalized;
 }
 
@@ -50,7 +49,6 @@ export function asksHowToManage(text: string): boolean {
 function explicitIndex(value: string, verbSource: string): number | null {
   const named = value.match(/\b(?:registro|registo|item|numero|n|#)\s*(\d{1,2})\b/);
   if (named) return Number(named[1]);
-
   const direct = value.match(new RegExp(`(?:${verbSource})\\w*\\s+(?:o\\s+)?(\\d{1,2})(?:\\s*[!.?])?$`, 'i'));
   return direct ? Number(direct[1]) : null;
 }
@@ -59,39 +57,27 @@ export function deletionTarget(text: string): CashRecordTarget | null {
   const value = normalizeCashText(text);
   if (asksHowToManage(value)) return null;
   if (/^(errei|foi errado|registrei errado|registei errado)[!. ]*$/.test(value)) return { kind: 'last' };
-
   const verbSource = 'apag|exclu|remov|retir|tir|cancel|delet';
   if (!new RegExp(`(?:${verbSource})\\w*`, 'i').test(value)) return null;
-
   const index = explicitIndex(value, verbSource);
   if (index && index >= 1 && index <= 20) return { kind: 'index', index };
-
-  if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) {
-    return { kind: 'last' };
-  }
+  if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) return { kind: 'last' };
   return null;
 }
 
 export function editTarget(text: string): CashRecordTarget | null {
   const value = normalizeCashText(text);
   if (asksHowToManage(value)) return null;
-
   const verbSource = 'edit|alter|mud|corrig|ajust|troc';
   if (!new RegExp(`(?:${verbSource})\\w*`, 'i').test(value)) return null;
-
   const index = explicitIndex(value, verbSource);
   if (index && index >= 1 && index <= 20) return { kind: 'index', index };
-
-  if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) {
-    return { kind: 'last' };
-  }
+  if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) return { kind: 'last' };
   return null;
 }
 
 function parseMoney(raw: string): number | null {
-  const normalized = raw.includes(',')
-    ? raw.replace(/\./g, '').replace(',', '.')
-    : raw;
+  const normalized = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
   const value = Number(normalized);
   return Number.isFinite(value) && value > 0 ? Math.round(value * 100) / 100 : null;
 }
@@ -101,7 +87,6 @@ function parseExplicitDate(text: string): string | undefined {
   if (/\banteontem\b/.test(value)) return dateIsoOffset(-2);
   if (/\bontem\b/.test(value)) return dateIsoOffset(-1);
   if (/\bhoje\b/.test(value)) return isoBrazil();
-
   const match = text.match(/\b(?:data\s*)?(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/i);
   if (!match) return undefined;
   const nowYear = Number(isoBrazil().slice(0, 4));
@@ -110,32 +95,22 @@ function parseExplicitDate(text: string): string | undefined {
   const month = Number(match[2]);
   const day = Number(match[1]);
   const check = new Date(Date.UTC(year, month - 1, day));
-  if (
-    Number.isNaN(check.getTime()) ||
-    check.getUTCFullYear() !== year ||
-    check.getUTCMonth() !== month - 1 ||
-    check.getUTCDate() !== day
-  ) return undefined;
+  if (Number.isNaN(check.getTime()) || check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return undefined;
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 export function parseCashEditPatch(text: string): CashEditPatch {
   const normalized = normalizeCashText(text);
   const patch: CashEditPatch = {};
-
-  const moneyMatch = text.match(
-    /\b(?:valor(?:\s+foi|\s+era|\s+para)?|pre[cç]o(?:\s+foi|\s+era|\s+para)?|foram|foi|era|custou|fica|para)\s*(?:de|em)?\s*(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)\b/i
-  ) ?? text.match(/\b(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)\s*reais?\b/i);
+  const moneyMatch = text.match(/\b(?:valor(?:\s+foi|\s+era|\s+para)?|pre[cç]o(?:\s+foi|\s+era|\s+para)?|foram|foi|era|custou|fica|para)\s*(?:de|em)?\s*(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)\b/i)
+    ?? text.match(/\b(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)\s*reais?\b/i);
   if (moneyMatch?.[1]) {
     const amount = parseMoney(moneyMatch[1]);
     if (amount) patch.amount = amount;
   }
 
   for (const [key, canonical] of Object.entries(CATEGORY_CANONICAL)) {
-    if (
-      new RegExp(`\\bcategoria\\b.*\\b${key}\\b`, 'i').test(normalized) ||
-      new RegExp(`\\bpara\\s+${key}\\b`, 'i').test(normalized)
-    ) {
+    if (new RegExp(`\\bcategoria\\b.*\\b${key}\\b`, 'i').test(normalized) || new RegExp(`\\bpara\\s+${key}\\b`, 'i').test(normalized)) {
       patch.category = canonical;
       break;
     }
@@ -147,16 +122,11 @@ export function parseCashEditPatch(text: string): CashEditPatch {
     if (patch.type === 'income') patch.category = 'Receita';
   }
 
-  const descriptionMatch = text.match(
-    /\b(?:descri[cç][aã]o|obs(?:erva[cç][aã]o)?|observa[cç][aã]o)\s*(?:para|como|é|e|:|=|-)?\s*(.+)$/i
-  );
-  if (descriptionMatch?.[1]) {
-    patch.description = descriptionMatch[1].trim().replace(/[.!?]+$/, '').slice(0, 500);
-  }
+  const descriptionMatch = text.match(/\b(?:descri[cç][aã]o|obs(?:erva[cç][aã]o)?|observa[cç][aã]o)\s*(?:para|como|é|e|:|=|-)?\s*(.+)$/i);
+  if (descriptionMatch?.[1]) patch.description = descriptionMatch[1].trim().replace(/[.!?]+$/, '').slice(0, 500);
 
   const date = parseExplicitDate(text);
   if (date && /\b(data|hoje|ontem|anteontem|dia)\b/.test(normalized)) patch.transaction_date = date;
-
   return patch;
 }
 

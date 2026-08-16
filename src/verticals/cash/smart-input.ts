@@ -3,7 +3,7 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
-import { cashParser } from './parser.js';
+import { cashParser, descriptionFrom } from './parser.js';
 import { stageCashRegistration } from './confirmation.js';
 import type { CashTransactionInput } from './types.js';
 import { formatBrazilDate, isoBrazil } from './time.js';
@@ -163,9 +163,11 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
             'Não invente valores. Se um gasto foi citado sem valor identificável, include=false.',
             'Use somente: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
             'Toda receita usa Receita. Dinheiro guardado usa Reserva.',
-            'description deve ser curta e específica. merchant só quando houver loja/pessoa/local claro.',
+            'description deve ser curta, específica e preservar os itens citados pelo usuário.',
+            'Se o usuário listar pão, leite, café e frutas, escreva esses itens; NUNCA substitua por “itens diversos”, “compras diversas”, “coisas diversas” ou outro resumo genérico.',
+            'merchant só quando houver loja/pessoa/local claro.',
             `Hoje no fuso do Brasil é ${isoBrazil()}. transaction_date deve ser YYYY-MM-DD.`,
-            'source_text deve conter o trecho da mensagem que sustenta aquele item.'
+            'source_text deve conter o trecho da mensagem que sustenta aquele item, preservando os nomes dos produtos/itens.'
           ].join('\n')
         },
         { role: 'user', content: input }
@@ -181,6 +183,22 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
   }
 }
 
+function hasItemEnumeration(value: string): boolean {
+  const clean = String(value ?? '').trim();
+  return /[,;]/.test(clean) || /\b\w+\s+e\s+\w+\b/i.test(clean);
+}
+
+function specificDescription(item: BatchItem): string {
+  const aiDescription = item.description.trim();
+  const sourceDescription = descriptionFrom(item.source_text).trim();
+  const generic = /\b(itens? diversos?|compras? diversas?|coisas? diversas?|varios itens|vários itens)\b/i.test(aiDescription);
+
+  if (sourceDescription && (generic || hasItemEnumeration(item.source_text))) {
+    return sourceDescription.slice(0, 500);
+  }
+  return (aiDescription || sourceDescription || item.source_text.trim()).slice(0, 500);
+}
+
 function canonicalBatchItem(item: BatchItem): CashTransactionInput | null {
   if (!item.amount || item.amount <= 0) return null;
   return {
@@ -188,7 +206,7 @@ function canonicalBatchItem(item: BatchItem): CashTransactionInput | null {
     amount: Math.round(item.amount * 100) / 100,
     category: item.type === 'income' ? 'Receita' : item.category,
     merchant: item.merchant.trim().slice(0, 120),
-    description: item.description.trim().slice(0, 500) || item.source_text.trim().slice(0, 500),
+    description: specificDescription(item),
     transactionDate: normalizeDate(item.transaction_date)
   };
 }
@@ -244,7 +262,7 @@ export async function preprocessCashInput(context: VerticalContext): Promise<Cas
   }
 
   if (isCashExpenseListRequest(input)) {
-    return { kind: 'rewrite', text: 'quais foram meus gastos este mês?' };
+    return { kind: 'rewrite', text: 'quais foram meus gastos hoje?' };
   }
 
   if (missingAmountExpense(input)) {
@@ -252,7 +270,7 @@ export async function preprocessCashInput(context: VerticalContext): Promise<Cas
   }
 
   // Consultas seguem para o roteador/consulta. Todo possível lançamento novo passa
-  // pelo parser (IA-first) e vira apenas um resumo pendente; nada é salvo aqui.
+  // pelo parser híbrido e vira apenas um resumo pendente; nada é salvo aqui.
   if (!looksLikeFinancialQuery(input)) {
     const parsed = await cashParser.parse(source);
     if (parsed) {

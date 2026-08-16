@@ -34,16 +34,8 @@ describe('cash parser', () => {
   });
 
   it('aceita despesas curtas sem verbo', () => {
-    expect(deterministicCashParse('farmácia 45')).toMatchObject({
-      type: 'expense',
-      amount: 45,
-      category: 'Saúde'
-    });
-    expect(deterministicCashParse('120 no almoço')).toMatchObject({
-      type: 'expense',
-      amount: 120,
-      category: 'Alimentação'
-    });
+    expect(deterministicCashParse('farmácia 45')).toMatchObject({ type: 'expense', amount: 45, category: 'Saúde' });
+    expect(deterministicCashParse('120 no almoço')).toMatchObject({ type: 'expense', amount: 120, category: 'Alimentação' });
   });
 
   it('aceita inteiro, vírgula e ponto decimal', () => {
@@ -74,6 +66,15 @@ describe('cash parser', () => {
       description: 'blusinha na SHEIN'
     });
     expect(descriptionFrom('Gastei 85,56 no mercado agora')).toBe('mercado');
+  });
+
+  it('preserva os itens citados em uma compra', () => {
+    const description = descriptionFrom('Gastei 80 em pão, leite, café e frutas hoje');
+    expect(description).toContain('pão');
+    expect(description).toContain('leite');
+    expect(description).toContain('café');
+    expect(description).toContain('frutas');
+    expect(description.toLowerCase()).not.toContain('itens diversos');
   });
 
   it('não inventa lançamento sem valor', () => {

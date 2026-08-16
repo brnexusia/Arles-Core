@@ -27,6 +27,7 @@ function validAmount(value: unknown): number {
 
 function planMonths(planKey: string): number {
   if (planKey === 'cash_monthly') return 1;
+  if (planKey === 'cash_quarterly') return 3;
   if (planKey === 'cash_semiannual') return 6;
   if (planKey === 'cash_annual') return 12;
   throw new Error('CASH_PLAN_INVALID');
@@ -41,6 +42,7 @@ function addMonths(date: Date, months: number): Date {
 function canonicalPlan(value: string): string | null {
   const normalized = String(value ?? '').toLowerCase().trim();
   if (/cash_monthly|mensal|monthly/.test(normalized)) return 'cash_monthly';
+  if (/cash_quarterly|trimestral|quarterly|3.?mes/.test(normalized)) return 'cash_quarterly';
   if (/cash_semiannual|semestral|semiannual|6.?mes/.test(normalized)) return 'cash_semiannual';
   if (/cash_annual|anual|annual|12.?mes/.test(normalized)) return 'cash_annual';
   return null;
@@ -63,6 +65,8 @@ export class CashService {
   paymentLinks() {
     return {
       monthly: env.cashPaymentMonthlyUrl,
+      quarterly: env.cashPaymentQuarterlyUrl,
+      // Mantido apenas para compatibilidade com dados/eventos antigos.
       semiannual: env.cashPaymentSemiannualUrl,
       annual: env.cashPaymentAnnualUrl
     };
@@ -71,9 +75,9 @@ export class CashService {
   paymentMenu(): string {
     const links = this.paymentLinks();
     const lines = [
-      '📌 Mensal: R$4,99/mês' + (links.monthly ? `\n👉 ${links.monthly}` : ''),
-      '📌 Semestral: R$24,90 (= R$4,15/mês)' + (links.semiannual ? `\n👉 ${links.semiannual}` : ''),
-      '🏆 Anual — Mais popular: R$39,90 (= R$3,33/mês — 2 meses grátis 🎁)' + (links.annual ? `\n👉 ${links.annual}` : '')
+      '💳 Mensal: R$5,00/mês' + (links.monthly ? `\n👉 ${links.monthly}` : ''),
+      '🔥 Trimestral: R$13,50 por 3 meses (= R$4,50/mês)' + (links.quarterly ? `\n👉 ${links.quarterly}` : ''),
+      '🏆 Anual — Melhor escolha: R$39,90 por 12 meses (= R$3,33/mês)' + (links.annual ? `\n👉 ${links.annual}` : '')
     ];
     return lines.join('\n\n');
   }
