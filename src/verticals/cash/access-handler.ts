@@ -46,31 +46,34 @@ async function saveEmailAndComplete(companyId: string, email: string): Promise<v
   const normalized = normalizeCashEmail(email);
   if (!isValidCashEmail(normalized)) throw new Error('CASH_EMAIL_INVALID');
 
-  const duplicate = await db.query(
-    `select 1 from cash_settings
-     where company_id<>$1 and lower(coalesce(owner_email,''))=$2
-     limit 1`,
-    [companyId, normalized]
-  );
-  if (duplicate.rowCount) throw new Error('CASH_EMAIL_ALREADY_REGISTERED');
-
-  await db.query('begin');
+  const client = await db.connect();
   try {
-    await db.query(
+    await client.query('begin');
+    const duplicate = await client.query(
+      `select 1 from cash_settings
+       where company_id<>$1 and lower(coalesce(owner_email,''))=$2
+       limit 1`,
+      [companyId, normalized]
+    );
+    if (duplicate.rowCount) throw new Error('CASH_EMAIL_ALREADY_REGISTERED');
+
+    await client.query(
       `update cash_settings set
          owner_email=$2,onboarding_state='active',onboarding_completed_at=now(),updated_at=now()
        where company_id=$1`,
       [companyId, normalized]
     );
-    await db.query(
+    await client.query(
       `update company_verticals set onboarding_completed=true,updated_at=now()
        where company_id=$1 and vertical_id='cash'`,
       [companyId]
     );
-    await db.query('commit');
+    await client.query('commit');
   } catch (error) {
-    await db.query('rollback');
+    await client.query('rollback');
     throw error;
+  } finally {
+    client.release();
   }
 }
 
