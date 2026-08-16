@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authService } from '../auth/auth.service.js';
 import { env } from '../config/env.js';
 import { adminService } from './admin.service.js';
+import { cashOverviewWithOwnerEmail, updateCashUserWithOwnerEmail } from './cash-admin.bridge.js';
 
 function internalAuthorized(request: FastifyRequest): boolean {
   if (!env.internalApiKey) return false;
@@ -67,7 +68,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/internal/admin/cash/overview', async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     try {
-      return reply.send({ data: await adminService.cashOverview() });
+      return reply.send({ data: await cashOverviewWithOwnerEmail() });
     } catch (error) {
       return adminError(request, reply, error);
     }
@@ -78,7 +79,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { companyId } = request.params as { companyId: string };
       const body = (request.body ?? {}) as Record<string, unknown>;
-      return reply.send({ data: await adminService.updateCashUser(companyId, body) });
+      return reply.send({ data: await updateCashUserWithOwnerEmail(companyId, body) });
     } catch (error) {
       return adminError(request, reply, error);
     }
