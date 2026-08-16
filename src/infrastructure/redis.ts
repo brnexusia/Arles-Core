@@ -12,6 +12,7 @@ const key = {
   lock: (companyId: string, phone: string) => `arles:lock:${companyId}:${phone}`,
   buffer: (companyId: string, phone: string) => `arles:buffer:${companyId}:${phone}`,
   bufferLatest: (companyId: string, phone: string) => `arles:buffer-latest:${companyId}:${phone}`,
+  cashTyping: (phone: string) => `arles:cash-typing:${phone}`,
   paused: (companyId: string, phone: string) => `arles:paused:${companyId}:${phone}`,
   systemSending: (companyId: string, phone: string) => `arles:system-sending:${companyId}:${phone}`,
   lastInbound: (companyId: string, phone: string) => `arles:last-inbound:${companyId}:${phone}`,
@@ -20,6 +21,8 @@ const key = {
 };
 
 const FOLLOWUP_ZSET = 'arles:followups:due';
+const CASH_TYPING_TTL_MS = 12_000;
+const CASH_TYPING_POLL_MS = 250;
 
 export async function onceMessage(companyId: string, messageId: string): Promise<boolean> {
   if (!messageId) return true;
@@ -55,25 +58,31 @@ function sleep(ms: number): Promise<void> {
 
 type BufferedTextMessage = { id: string; text: string };
 
-export async function bufferTextMessage(input: {
+function parseBufferedRows(rawRows: unknown[]): BufferedTextMessage[] {
+  return rawRows
+    .map((row: unknown): BufferedTextMessage => {
+      const raw = String(row ?? '');
+      try {
+        const value = JSON.parse(raw) as Partial<BufferedTextMessage>;
+        return { id: String(value.id ?? ''), text: String(value.text ?? '') };
+      } catch {
+        return { id: '', text: raw };
+      }
+    })
+    .filter(item => item.text.trim().length > 0);
+}
+
+async function enqueueBufferedText(input: {
   companyId: string;
   phone: string;
   messageId: string;
   text: string;
-  waitMs?: number;
-}): Promise<string | null> {
-  const waitMs = Math.max(0, Number(input.waitMs ?? env.messageBufferMs));
-  if (waitMs <= 0) return input.text;
-
+  ttlSeconds: number;
+}): Promise<{ bufferKey: string; latestKey: string }> {
   const bufferKey = key.buffer(input.companyId, input.phone);
   const latestKey = key.bufferLatest(input.companyId, input.phone);
   const payload: BufferedTextMessage = { id: input.messageId, text: input.text };
-  const payloadJson = JSON.stringify(payload);
-  const ttlSeconds = Math.max(10, Math.ceil(waitMs / 1000) + 30);
 
-  // Enfileirar a mensagem e marcar quem é a mais recente precisa ser uma operação
-  // atômica. Sem isso, o consumidor anterior pode apagar uma mensagem que acabou
-  // de chegar entre um LRANGE e um DEL.
   await redis.eval(
     `
       redis.call('RPUSH', KEYS[1], ARGV[1])
@@ -84,16 +93,32 @@ export async function bufferTextMessage(input: {
     2,
     bufferKey,
     latestKey,
-    payloadJson,
+    JSON.stringify(payload),
     input.messageId,
-    String(ttlSeconds)
+    String(input.ttlSeconds)
   );
+
+  return { bufferKey, latestKey };
+}
+
+export async function bufferTextMessage(input: {
+  companyId: string;
+  phone: string;
+  messageId: string;
+  text: string;
+  waitMs?: number;
+}): Promise<string | null> {
+  const waitMs = Math.max(0, Number(input.waitMs ?? env.messageBufferMs));
+  if (waitMs <= 0) return input.text;
+
+  const ttlSeconds = Math.max(10, Math.ceil(waitMs / 1000) + 30);
+  const { bufferKey, latestKey } = await enqueueBufferedText({ ...input, ttlSeconds });
 
   await sleep(waitMs);
 
   // O consumo também é atômico: somente a mensagem que continua sendo a última
   // após a janela de silêncio pode retirar o lote. Se outra chegou, esta execução
-  // sai sem tocar no buffer e a nova mensagem reinicia os 15s normalmente.
+  // sai sem tocar no buffer e a nova mensagem reinicia a janela normalmente.
   const rawRows = await redis.eval(
     `
       if redis.call('GET', KEYS[2]) ~= ARGV[1] then
@@ -111,21 +136,107 @@ export async function bufferTextMessage(input: {
   );
 
   if (!Array.isArray(rawRows) || !rawRows.length) return null;
-
-  const parsed: BufferedTextMessage[] = rawRows
-    .map((row: unknown): BufferedTextMessage => {
-      const raw = String(row ?? '');
-      try {
-        const value = JSON.parse(raw) as Partial<BufferedTextMessage>;
-        return { id: String(value.id ?? ''), text: String(value.text ?? '') };
-      } catch {
-        return { id: '', text: raw };
-      }
-    })
-    .filter(item => item.text.trim().length > 0);
-
+  const parsed = parseBufferedRows(rawRows);
   if (!parsed.length) return null;
   return parsed.map(item => item.text.trim()).filter(Boolean).join('\n');
+}
+
+export function isCashActiveTypingPresence(presence: string): boolean {
+  const value = String(presence ?? '').trim().toLowerCase();
+  return value === 'composing' || value === 'recording';
+}
+
+export async function setCashTypingPresence(phone: string, presence: string): Promise<void> {
+  const normalizedPhone = String(phone ?? '').replace(/\D/g, '');
+  if (!normalizedPhone) return;
+
+  if (isCashActiveTypingPresence(presence)) {
+    // TTL é somente uma rede de segurança. Normalmente a Evolution envia `paused`
+    // quando o usuário para; se esse evento se perder, o Cash não fica preso para sempre.
+    await redis.set(key.cashTyping(normalizedPhone), '1', 'PX', CASH_TYPING_TTL_MS);
+    return;
+  }
+
+  await redis.del(key.cashTyping(normalizedPhone));
+}
+
+export async function isCashTyping(phone: string): Promise<boolean> {
+  const normalizedPhone = String(phone ?? '').replace(/\D/g, '');
+  if (!normalizedPhone) return false;
+  return Boolean(await redis.get(key.cashTyping(normalizedPhone)));
+}
+
+export async function bufferCashTextMessage(input: {
+  companyId: string;
+  phone: string;
+  messageId: string;
+  text: string;
+  silenceMs?: number;
+}): Promise<string | null> {
+  const silenceMs = Math.max(0, Number(input.silenceMs ?? env.cashMessageSilenceMs));
+  if (silenceMs <= 0) return input.text;
+
+  // O buffer precisa sobreviver a uma digitação longa. O TTL alto evita perder o lote,
+  // enquanto o TTL curto da presença impede travamento se o WhatsApp não enviar `paused`.
+  const ttlSeconds = Math.max(300, Math.ceil(silenceMs / 1000) + 60);
+  const { bufferKey, latestKey } = await enqueueBufferedText({ ...input, ttlSeconds });
+  const typingKey = key.cashTyping(input.phone.replace(/\D/g, ''));
+  let quietSince = Date.now();
+
+  while (true) {
+    await sleep(CASH_TYPING_POLL_MS);
+
+    const latest = await redis.get(latestKey);
+    if (latest !== input.messageId) return null;
+
+    if (await redis.get(typingKey)) {
+      quietSince = 0;
+      continue;
+    }
+
+    if (!quietSince) quietSince = Date.now();
+    if (Date.now() - quietSince < silenceMs) continue;
+
+    // A checagem final da presença e o consumo do lote são atômicos. Se o usuário
+    // voltar a digitar exatamente nesse instante, nada é consumido e seguimos esperando.
+    const raw = await redis.eval(
+      `
+        if redis.call('GET', KEYS[2]) ~= ARGV[1] then
+          return cjson.encode({ state = 'superseded' })
+        end
+        if redis.call('EXISTS', KEYS[3]) == 1 then
+          return cjson.encode({ state = 'typing' })
+        end
+        local rows = redis.call('LRANGE', KEYS[1], 0, -1)
+        redis.call('DEL', KEYS[1])
+        redis.call('DEL', KEYS[2])
+        return cjson.encode({ state = 'ready', rows = rows })
+      `,
+      3,
+      bufferKey,
+      latestKey,
+      typingKey,
+      input.messageId
+    );
+
+    let result: { state?: string; rows?: unknown[] } = {};
+    try {
+      result = JSON.parse(String(raw ?? '{}')) as { state?: string; rows?: unknown[] };
+    } catch {
+      result = {};
+    }
+
+    if (result.state === 'superseded') return null;
+    if (result.state === 'typing') {
+      quietSince = 0;
+      continue;
+    }
+    if (result.state !== 'ready' || !Array.isArray(result.rows)) return null;
+
+    const parsed = parseBufferedRows(result.rows);
+    if (!parsed.length) return null;
+    return parsed.map(item => item.text.trim()).filter(Boolean).join('\n');
+  }
 }
 
 export async function pauseConversation(companyId: string, phone: string, seconds = env.humanPauseSeconds): Promise<void> {
