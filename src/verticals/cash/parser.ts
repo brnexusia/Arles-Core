@@ -133,6 +133,9 @@ export class CashParser {
   private readonly client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
 
   async parse(text: string): Promise<CashTransactionInput | null> {
+    // A IA é a interpretação principal. O parser determinístico é calculado em
+    // paralelo como rede de segurança e só assume se a API não estiver disponível,
+    // falhar ou recusar a mensagem por falta de dados suficientes.
     const deterministic = deterministicCashParse(text);
     if (!this.client) return deterministic;
 
