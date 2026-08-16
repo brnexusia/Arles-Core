@@ -1,5 +1,6 @@
 import type { VerticalModule } from '../vertical.js';
 import { cashAccessHandler } from './access-handler.js';
+import { handleCashPendingConfirmation } from './confirmation.js';
 import { cashReports } from './reports.js';
 import { registerCashRoutes } from './routes.js';
 
@@ -9,6 +10,7 @@ export const cashModule: VerticalModule = {
   version: '2.0.0',
   capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings'],
   handle: context => cashAccessHandler.handle(context),
+  handlePendingInteraction: context => handleCashPendingConfirmation(context),
   registerRoutes: registerCashRoutes,
   jobs: {
     'cash.weekly-summary': context => cashReports.weekly(context),
