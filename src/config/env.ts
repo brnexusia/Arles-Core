@@ -43,8 +43,11 @@ export const env = {
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
   cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5575999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
-  // Debounce exclusivo do Cash: cada nova mensagem reinicia a janela.
+  // Janela antiga mantida só por compatibilidade com deploys existentes.
   cashMessageBufferMs: numberEnv('CASH_MESSAGE_BUFFER_MS', 15000),
+  // Novo comportamento: enquanto houver presença `composing`, espera; depois de parar,
+  // processa após este período de silêncio. Não depende da variável legada de 15s.
+  cashMessageSilenceMs: numberEnv('CASH_MESSAGE_SILENCE_MS', 5000),
 
   // Checkouts Cakto. O Core acrescenta nome, e-mail, telefone e sck da conta
   // dinamicamente antes de redirecionar o cliente para a Cakto.
