@@ -9,6 +9,18 @@ ALTER TABLE cash_settings
   ADD CONSTRAINT cash_settings_onboarding_state_check
   CHECK (onboarding_state IN ('welcome', 'awaiting_name', 'awaiting_email', 'active'));
 
+-- Usuarios Cash que ja existiam antes desta migration passam uma unica vez pela
+-- coleta de e-mail. O historico, trial e demais dados permanecem intactos.
+UPDATE cash_settings
+SET onboarding_state = CASE
+      WHEN owner_name IS NULL OR btrim(owner_name) = '' THEN 'awaiting_name'
+      ELSE 'awaiting_email'
+    END,
+    onboarding_completed_at = NULL,
+    updated_at = now()
+WHERE onboarding_state = 'active'
+  AND (owner_email IS NULL OR btrim(owner_email) = '');
+
 -- O e-mail ajuda na conciliacao de pagamento quando o provedor nao devolver o sck.
 -- Um mesmo e-mail nao pode representar duas contas Cash distintas.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_settings_owner_email_unique
