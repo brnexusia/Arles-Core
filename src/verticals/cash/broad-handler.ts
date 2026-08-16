@@ -7,6 +7,7 @@ import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashConversationHandler } from './conversation.js';
 import { routeCashInput, type CashBroadRoute } from './broad-routing.js';
 import { cashService } from './service.js';
+import { preprocessCashInput } from './smart-input.js';
 import { formatBrazilDate } from './time.js';
 
 const BroadFallbackSchema = z.object({
@@ -57,7 +58,8 @@ function categoriesMessage(): string {
     '🏥 Saúde — farmácia, consulta, exame, remédio...',
     '🏠 Moradia — aluguel, água, luz, internet, condomínio...',
     '📚 Educação — escola, curso, faculdade, livros...',
-    '👤 Pessoal — roupas, academia, salão, shopping...',
+    '👤 Pessoal — roupas, unhas, academia, salão, shopping...',
+    '🏦 Reserva — dinheiro guardado, separado ou poupado...',
     '💰 Receita — salário, freela, recebimentos...',
     '📦 Outros — quando não se encaixar nas anteriores.',
     '',
@@ -181,17 +183,24 @@ async function retryCanonical(context: VerticalContext, rewrittenText: string): 
 
 export class CashBroadHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    const route = routeCashInput(context.combinedText);
+    const smart = await preprocessCashInput(context);
+    if (smart?.kind === 'result') return smart.result;
 
-    if (route && route.kind !== 'rewrite') return await specialRoute(context, route);
+    const preparedContext = smart?.kind === 'rewrite'
+      ? { ...context, combinedText: smart.text }
+      : context;
+
+    const route = routeCashInput(preparedContext.combinedText);
+
+    if (route && route.kind !== 'rewrite') return await specialRoute(preparedContext, route);
 
     const firstContext = route?.kind === 'rewrite'
-      ? { ...context, combinedText: route.text }
-      : context;
+      ? { ...preparedContext, combinedText: route.text }
+      : preparedContext;
     const first = await cashConversationHandler.handle(firstContext);
     if (!isFinalFallback(first)) return first;
 
-    const fallback = await broadAiFallback(context.combinedText);
+    const fallback = await broadAiFallback(preparedContext.combinedText);
 
     if (fallback.intent === 'plans') {
       const paymentMenu = await cashPaymentMenuForCompany(context.company.id);
