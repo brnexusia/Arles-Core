@@ -59,15 +59,19 @@ export async function bufferTextMessage(input: {
   phone: string;
   messageId: string;
   text: string;
+  waitMs?: number;
 }): Promise<string | null> {
-  if (env.messageBufferMs <= 0) return input.text;
+  const waitMs = Math.max(0, Number(input.waitMs ?? env.messageBufferMs));
+  if (waitMs <= 0) return input.text;
 
   const bufferKey = key.buffer(input.companyId, input.phone);
   const payload: BufferedTextMessage = { id: input.messageId, text: input.text };
 
   await redis.rpush(bufferKey, JSON.stringify(payload));
-  await redis.expire(bufferKey, 10);
-  await sleep(env.messageBufferMs);
+  // O TTL precisa sobreviver à janela inteira. Antes era fixo em 10s e quebraria
+  // um debounce de 15s. Mantemos margem para mensagens consecutivas.
+  await redis.expire(bufferKey, Math.max(10, Math.ceil(waitMs / 1000) + 30));
+  await sleep(waitMs);
 
   const rows: string[] = await redis.lrange(bufferKey, 0, -1);
   const parsed: BufferedTextMessage[] = rows
@@ -83,6 +87,9 @@ export async function bufferTextMessage(input: {
 
   if (!parsed.length) return null;
   const last = parsed[parsed.length - 1];
+  // Cada mensagem dorme sua própria janela. Só a mensagem mais recente pode
+  // consumir o lote; se outra chegou no meio, esta execução encerra e a nova
+  // reinicia a contagem a partir dela.
   if (!last || last.id !== input.messageId) return null;
 
   await redis.del(bufferKey);
