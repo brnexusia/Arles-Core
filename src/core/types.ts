@@ -32,5 +32,6 @@ export interface NormalizedMessage {
   event: string;
   type: 'text' | 'image' | 'audio' | 'unsupported';
   text: string;
+  quotedText?: string;
   raw: unknown;
 }
