@@ -2,6 +2,7 @@ import type { VerticalModule } from '../vertical.js';
 import { cashAccessHandler } from './access-handler.js';
 import { handleCashPendingConfirmation } from './confirmation.js';
 import { cashReports } from './reports.js';
+import { formatCashUserResponse } from './response-format.js';
 import { registerCashRoutes } from './routes.js';
 
 export const cashModule: VerticalModule = {
@@ -9,7 +10,7 @@ export const cashModule: VerticalModule = {
   name: 'Arles Cash',
   version: '2.0.0',
   capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings'],
-  handle: context => cashAccessHandler.handle(context),
+  handle: async context => formatCashUserResponse(context, await cashAccessHandler.handle(context)),
   handlePendingInteraction: context => handleCashPendingConfirmation(context),
   registerRoutes: registerCashRoutes,
   jobs: {
