@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
+import { cashSilenceRemainingMs } from '../whatsapp/cash-timing.js';
 
 export const redis = new Redis(env.redisUrl, {
   maxRetriesPerRequest: 2,
@@ -13,6 +14,7 @@ const key = {
   buffer: (companyId: string, phone: string) => `arles:buffer:${companyId}:${phone}`,
   bufferLatest: (companyId: string, phone: string) => `arles:buffer-latest:${companyId}:${phone}`,
   cashTyping: (phone: string) => `arles:cash-typing:${phone}`,
+  cashActivityAt: (phone: string) => `arles:cash-activity-at:${phone}`,
   paused: (companyId: string, phone: string) => `arles:paused:${companyId}:${phone}`,
   systemSending: (companyId: string, phone: string) => `arles:system-sending:${companyId}:${phone}`,
   lastInbound: (companyId: string, phone: string) => `arles:last-inbound:${companyId}:${phone}`,
@@ -21,7 +23,8 @@ const key = {
 };
 
 const FOLLOWUP_ZSET = 'arles:followups:due';
-const CASH_TYPING_TTL_MS = 12_000;
+const CASH_TYPING_TTL_MS = 120_000;
+const CASH_ACTIVITY_TTL_SECONDS = 600;
 const CASH_TYPING_POLL_MS = 250;
 
 export async function onceMessage(companyId: string, messageId: string): Promise<boolean> {
@@ -150,14 +153,43 @@ export async function setCashTypingPresence(phone: string, presence: string): Pr
   const normalizedPhone = String(phone ?? '').replace(/\D/g, '');
   if (!normalizedPhone) return;
 
+  const typingKey = key.cashTyping(normalizedPhone);
+  const activityKey = key.cashActivityAt(normalizedPhone);
+  const activityAt = String(Date.now());
+
   if (isCashActiveTypingPresence(presence)) {
-    // TTL é somente uma rede de segurança. Normalmente a Evolution envia `paused`
-    // quando o usuário para; se esse evento se perder, o Cash não fica preso para sempre.
-    await redis.set(key.cashTyping(normalizedPhone), '1', 'PX', CASH_TYPING_TTL_MS);
+    // Começar/continuar digitando reinicia a janela inteira. O TTL é apenas uma rede
+    // de segurança caso o WhatsApp não envie o evento `paused` depois.
+    await redis.eval(
+      `
+        redis.call('SET', KEYS[1], '1', 'PX', ARGV[1])
+        redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+        return 1
+      `,
+      2,
+      typingKey,
+      activityKey,
+      String(CASH_TYPING_TTL_MS),
+      activityAt,
+      String(CASH_ACTIVITY_TTL_SECONDS)
+    );
     return;
   }
 
-  await redis.del(key.cashTyping(normalizedPhone));
+  // Parou de digitar: remove o estado ativo e marca este instante como nova origem
+  // da contagem. Portanto a resposta só pode sair após 5s completos a partir daqui.
+  await redis.eval(
+    `
+      redis.call('DEL', KEYS[1])
+      redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
+      return 1
+    `,
+    2,
+    typingKey,
+    activityKey,
+    activityAt,
+    String(CASH_ACTIVITY_TTL_SECONDS)
+  );
 }
 
 export async function isCashTyping(phone: string): Promise<boolean> {
@@ -176,29 +208,55 @@ export async function bufferCashTextMessage(input: {
   const silenceMs = Math.max(0, Number(input.silenceMs ?? env.cashMessageSilenceMs));
   if (silenceMs <= 0) return input.text;
 
-  // O buffer precisa sobreviver a uma digitação longa. O TTL alto evita perder o lote,
-  // enquanto o TTL curto da presença impede travamento se o WhatsApp não enviar `paused`.
+  // O buffer precisa sobreviver a uma digitação longa. Cada mensagem nova troca o
+  // `latestKey`, mantém o lote acumulado e reinicia os 5s para a nova execução.
   const ttlSeconds = Math.max(300, Math.ceil(silenceMs / 1000) + 60);
   const { bufferKey, latestKey } = await enqueueBufferedText({ ...input, ttlSeconds });
-  const typingKey = key.cashTyping(input.phone.replace(/\D/g, ''));
-  let quietSince = Date.now();
+  const normalizedPhone = input.phone.replace(/\D/g, '');
+  const typingKey = key.cashTyping(normalizedPhone);
+  const activityKey = key.cashActivityAt(normalizedPhone);
+
+  // A própria chegada da mensagem é atividade: os 5s começam do zero aqui.
+  await redis.set(activityKey, String(Date.now()), 'EX', CASH_ACTIVITY_TTL_SECONDS);
+
+  let observedTyping = false;
 
   while (true) {
     await sleep(CASH_TYPING_POLL_MS);
 
-    const latest = await redis.get(latestKey);
+    const [latest, typingRaw, activityRaw] = await redis.mget(latestKey, typingKey, activityKey);
     if (latest !== input.messageId) return null;
 
-    if (await redis.get(typingKey)) {
-      quietSince = 0;
+    const typing = Boolean(typingRaw);
+    const now = Date.now();
+    let lastActivityAt = Number(activityRaw || 0);
+
+    if (typing) {
+      // Enquanto estiver digitando, a janela permanece inteira em 5s; não existe
+      // contagem regressiva paralela ao `composing`/`recording`.
+      observedTyping = true;
       continue;
     }
 
-    if (!quietSince) quietSince = Date.now();
-    if (Date.now() - quietSince < silenceMs) continue;
+    if (observedTyping && lastActivityAt > 0 && now - lastActivityAt >= CASH_TYPING_TTL_MS - CASH_TYPING_POLL_MS) {
+      // Fallback: se `paused` se perdeu e o TTL da presença expirou, iniciamos uma
+      // nova janela completa de silêncio em vez de responder imediatamente.
+      lastActivityAt = now;
+      await redis.set(activityKey, String(lastActivityAt), 'EX', CASH_ACTIVITY_TTL_SECONDS);
+    }
+    observedTyping = false;
 
-    // A checagem final da presença e o consumo do lote são atômicos. Se o usuário
-    // voltar a digitar exatamente nesse instante, nada é consumido e seguimos esperando.
+    const remainingMs = cashSilenceRemainingMs({
+      lastActivityAt,
+      now,
+      silenceMs,
+      typing: false
+    });
+    if (remainingMs > 0) continue;
+
+    // Consumo atômico: além de conferir se esta ainda é a última mensagem, validamos
+    // que ninguém voltou a digitar e que nenhuma atividade ocorreu nos últimos 5s.
+    const cutoff = Date.now() - silenceMs;
     const raw = await redis.eval(
       `
         if redis.call('GET', KEYS[2]) ~= ARGV[1] then
@@ -207,16 +265,23 @@ export async function bufferCashTextMessage(input: {
         if redis.call('EXISTS', KEYS[3]) == 1 then
           return cjson.encode({ state = 'typing' })
         end
+        local activity = tonumber(redis.call('GET', KEYS[4]) or '0')
+        if activity > tonumber(ARGV[2]) then
+          return cjson.encode({ state = 'active' })
+        end
         local rows = redis.call('LRANGE', KEYS[1], 0, -1)
         redis.call('DEL', KEYS[1])
         redis.call('DEL', KEYS[2])
+        redis.call('DEL', KEYS[4])
         return cjson.encode({ state = 'ready', rows = rows })
       `,
-      3,
+      4,
       bufferKey,
       latestKey,
       typingKey,
-      input.messageId
+      activityKey,
+      input.messageId,
+      String(cutoff)
     );
 
     let result: { state?: string; rows?: unknown[] } = {};
@@ -227,8 +292,8 @@ export async function bufferCashTextMessage(input: {
     }
 
     if (result.state === 'superseded') return null;
-    if (result.state === 'typing') {
-      quietSince = 0;
+    if (result.state === 'typing' || result.state === 'active') {
+      observedTyping = result.state === 'typing';
       continue;
     }
     if (result.state !== 'ready' || !Array.isArray(result.rows)) return null;
