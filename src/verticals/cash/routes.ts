@@ -3,6 +3,7 @@ import { resolveTenantContext, tenantErrorStatus } from '../../platform/security
 import { evolution } from '../../whatsapp/evolution.client.js';
 import { env } from '../../config/env.js';
 import { caktoPaymentService, cashPlanLabel, type CaktoPaymentResult } from './cakto-payment.js';
+import { resolveCashPaymentAlias } from './checkout.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
 import { formatBrazilDate, isoBrazil } from './time.js';
@@ -201,6 +202,19 @@ async function caktoWebhook(request: FastifyRequest, reply: FastifyReply) {
 }
 
 export async function registerCashRoutes(app: FastifyInstance) {
+  // Link curto enviado no WhatsApp. O token nao expoe e-mail, telefone, company_id
+  // nem o endereço da Cakto. Depois do clique, redireciona para o checkout real.
+  app.get('/cash/p/:token', async (request, reply) => {
+    const token = String((request.params as { token?: string }).token ?? '').trim();
+    const target = token ? await resolveCashPaymentAlias(token) : null;
+    if (!target) {
+      return reply.code(410).type('text/plain; charset=utf-8').send(
+        'Este link de pagamento expirou. Volte ao WhatsApp e envie “planos” para gerar um novo link.'
+      );
+    }
+    return reply.redirect(target);
+  });
+
   // Endpoint oficial da Cakto. Mantemos o alias antigo por compatibilidade enquanto
   // a integracao e migrada no painel do provedor.
   app.post('/webhooks/cash/cakto', caktoWebhook);
