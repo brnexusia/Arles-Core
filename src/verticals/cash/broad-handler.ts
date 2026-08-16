@@ -77,7 +77,8 @@ function scheduleMessage(): string {
 
 function planLabel(planKey: string | null): string {
   if (planKey === 'cash_monthly') return 'Mensal';
-  if (planKey === 'cash_semiannual') return 'Semestral';
+  if (planKey === 'cash_quarterly') return 'Trimestral';
+  if (planKey === 'cash_semiannual') return 'Semestral (legado)';
   if (planKey === 'cash_annual') return 'Anual';
   return 'Ativo';
 }
