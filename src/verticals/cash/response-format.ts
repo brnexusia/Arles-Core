@@ -39,10 +39,11 @@ export function cleanCashListItemLabel(input: string): string {
     .replace(/\s+(?:e\s+)?(?:me\s+)?(?:sobrou|restou|sobraram|restaram)\b.*$/i, '')
     .replace(/,?\s*(?:e\s+)?comprei\s+tamb[eé]m\s+(?:um|uma|uns|umas)?\s*/gi, ', ')
     .replace(/^\s*(?:e\s+)?(?:com\s+os\s+outros(?:\s+\d+(?:[.,]\d{1,2})?)?\s+)?(?:eu\s+)?/i, '')
-    .replace(/^\s*(?:paguei|pague|gastei|gastei com|comprei|comprei uma|comprei um|recebi|ganhei|entrou)\s+/i, '')
+    .replace(/^\s*(?:paguei|pague|gastei com|gastei|comprei|recebi|ganhei|entrou)\s+/i, '')
     .replace(/^\s*(?:um|uma|uns|umas)\s+/i, '')
     .replace(/^\s*(?:itens?\s*,?\s*objetos?\s*,?\s*)+/i, '')
     .replace(/\b(?:uns?\s+)?itens?\s*,\s*objetos?\s*,?\s*/gi, '')
+    .replace(/^\s*(?:um|uma|uns|umas|o|a|os|as)\s+/i, '')
     .replace(/\s*,\s*,+/g, ', ')
     .replace(/^\s*[,;:\-]+\s*|\s*[,;:\-]+\s*$/g, '')
     .replace(/\s+/g, ' ')
@@ -106,12 +107,9 @@ export function formatCashCompactListText(raw: string, queryText: string): strin
   const body = items.map(item => `${item.label} — ${item.amount}`);
   const truncated = lines.find(line => /^Mostrando\s+\d+\s+de\s+\d+\s+registros/i.test(line.trim()));
 
-  return [
-    title(subject, header[1]),
-    '',
-    ...body,
-    truncated ? `\n${truncated.trim()}` : ''
-  ].filter(Boolean).join('\n');
+  const output: string[] = [title(subject, header[1]), '', ...body];
+  if (truncated) output.push('', truncated.trim());
+  return output.join('\n');
 }
 
 function chunkText(value: string): VerticalResult['actions'] {
