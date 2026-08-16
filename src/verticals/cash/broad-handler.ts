@@ -3,6 +3,7 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
+import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashConversationHandler } from './conversation.js';
 import { routeCashInput, type CashBroadRoute } from './broad-routing.js';
 import { cashService } from './service.js';
@@ -107,16 +108,18 @@ async function trialMessage(companyId: string): Promise<string> {
     ].filter(Boolean).join('\n');
   }
 
+  const paymentMenu = await cashPaymentMenuForCompany(companyId);
   return [
     '⚠️ Seu acesso não está ativo no momento.',
     '',
-    cashService.paymentMenu()
+    paymentMenu
   ].join('\n');
 }
 
 async function specialRoute(context: VerticalContext, route: Exclude<CashBroadRoute, { kind: 'rewrite'; text: string } | null>): Promise<VerticalResult> {
   if (route.kind === 'plans') {
-    return text(['💳 Planos do Arles Cash', '', cashService.paymentMenu()].join('\n'));
+    const paymentMenu = await cashPaymentMenuForCompany(context.company.id);
+    return text(['💳 Planos do Arles Cash', '', paymentMenu].join('\n'));
   }
   if (route.kind === 'trial') return text(await trialMessage(context.company.id));
   if (route.kind === 'categories') return text(categoriesMessage());
@@ -190,7 +193,10 @@ export class CashBroadHandler implements VerticalHandler {
 
     const fallback = await broadAiFallback(context.combinedText);
 
-    if (fallback.intent === 'plans') return text(['💳 Planos do Arles Cash', '', cashService.paymentMenu()].join('\n'));
+    if (fallback.intent === 'plans') {
+      const paymentMenu = await cashPaymentMenuForCompany(context.company.id);
+      return text(['💳 Planos do Arles Cash', '', paymentMenu].join('\n'));
+    }
     if (fallback.intent === 'trial') return text(await trialMessage(context.company.id));
     if (fallback.intent === 'categories') return text(categoriesMessage());
     if (fallback.intent === 'schedule') return text(scheduleMessage());
