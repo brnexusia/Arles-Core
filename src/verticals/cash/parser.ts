@@ -12,6 +12,7 @@ const CATEGORIES = [
   'Moradia',
   'Educação',
   'Pessoal',
+  'Reserva',
   'Receita',
   'Outros'
 ] as const;
@@ -26,7 +27,7 @@ const ParsedTransactionSchema = z.object({
   transaction_date: z.string()
 });
 
-const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague)\b/i;
+const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague|guardei|reservei|separei)\b/i;
 const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
 
 function amountFrom(text: string): number | null {
@@ -50,7 +51,6 @@ function transactionType(text: string, amount: number | null): CashTransactionTy
   if (EXPENSE.test(text)) return 'expense';
   if (!amount) return null;
 
-  // Frases curtas como “farmácia 45” e “120 no almoço” são despesas por padrão.
   const usefulText = text.replace(/[\d.,R$\s]/gi, '');
   return usefulText.length >= 2 ? 'expense' : null;
 }
@@ -82,12 +82,13 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
   if (type === 'income') return 'Receita';
   const value = text.toLowerCase();
 
-  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|ifood|delivery/.test(value)) return 'Alimentação';
+  if (/\b(guardei|reservei|separei|poupança|poupanca|reserva)\b/.test(value)) return 'Reserva';
+  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery/.test(value)) return 'Alimentação';
   if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem/.test(value)) return 'Transporte';
   if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio/.test(value)) return 'Saúde';
   if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
   if (/escola|curso|livro|faculdade|mensalidade/.test(value)) return 'Educação';
-  if (/salão|salao|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio/.test(value)) return 'Pessoal';
+  if (/salão|salao|unha|manicure|academia|roupa|blusa|blusinha|camisa|camiseta|calça|calca|vestido|short|bermuda|sapato|t[eê]nis|shopping|shein|acess[oó]rio/.test(value)) return 'Pessoal';
   return 'Outros';
 }
 
@@ -102,7 +103,7 @@ export function descriptionFrom(text: string): string {
   value = value
     .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
     .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
-    .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
+    .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|guardei|reservei|separei|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
     .replace(/(?:\b(?:por|de)\s+)?(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:[.,]\d{1,2})?(?:\s*reais?)?/gi, ' ')
     .replace(/^\s*(?:um|uma)\s+/i, '')
     .replace(/^\s*(?:no|na|em|de)\s+/i, '')
@@ -134,8 +135,6 @@ export class CashParser {
   async parse(text: string): Promise<CashTransactionInput | null> {
     const deterministic = deterministicCashParse(text);
 
-    // Quando a regra determinística já sabe o tipo e a categoria, ela é a fonte mais barata/segura.
-    // Se caiu em “Outros” com linguagem possivelmente abreviada, deixa a IA tentar refinar.
     const deterministicIsStrong = Boolean(
       deterministic &&
       (deterministic.type === 'income' || deterministic.category !== 'Outros')
@@ -153,12 +152,13 @@ export class CashParser {
               'Você interpreta um único lançamento financeiro doméstico em português brasileiro.',
               'Tolere erros de digitação, abreviações e gírias, por exemplo: “gstei 80 mrcado”.',
               'expense é dinheiro que saiu; income é dinheiro que entrou.',
+              '“guardei 300”, “reservei 300” e “separei 300” são despesas da categoria Reserva porque reduzem o dinheiro disponível.',
               'Frases como “120 no almoço” ou “farmácia 45” são despesas.',
               'Não invente valor. Se não houver lançamento e valor identificáveis, is_transaction=false.',
-              'Use SOMENTE estas categorias: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Receita, Outros.',
+              'Use SOMENTE estas categorias: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
               'Toda entrada/receita deve usar a categoria Receita.',
               'merchant é o local/pessoa quando estiver claro.',
-              'description deve ser curta e útil, descrevendo o que foi comprado/recebido sem repetir verbo, valor ou data. Exemplo: “comprei uma blusinha na SHEIN de 15 reais” => “blusinha na SHEIN”.',
+              'description deve ser curta e útil, descrevendo o que foi comprado/recebido sem repetir verbo, valor ou data.',
               `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
