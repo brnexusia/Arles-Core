@@ -59,6 +59,12 @@ function options(): string {
   return 'Responda *sim* para registrar, *não* para cancelar ou *editar* para corrigir.';
 }
 
+export function cashRegistrationSavedMessage(count: number): string {
+  return count === 1
+    ? '✅ Confirmado! Lançamento registrado.'
+    : `✅ Confirmado! ${count} lançamentos registrados.`;
+}
+
 export function isCashRegistrationConfirmation(input: string): boolean {
   const value = normalize(input).replace(/[!.]+$/g, '').trim();
   return /^(sim|confirmo|confirmar|confirma|pode registrar|pode salvar|pode anotar|registra|registre|salva|salve|anota|anote|isso mesmo|esta certo|ta certo|tá certo|correto|pode)$/.test(value);
@@ -186,11 +192,7 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
     }
     await clearPending(context.company.id, context.message.phone);
 
-    return text([
-      saved.length === 1 ? '✅ Confirmado e registrado!' : `✅ Confirmado! ${saved.length} lançamentos registrados.`,
-      '',
-      summary(saved)
-    ].join('\n'));
+    return text(cashRegistrationSavedMessage(saved.length));
   }
 
   const patch = parseCashEditPatch(context.combinedText);
