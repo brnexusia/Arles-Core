@@ -12,6 +12,13 @@ async function errorBody(response: Response): Promise<string> {
   return (await response.text().catch(() => '')).slice(0, 800);
 }
 
+export const EVOLUTION_WEBHOOK_EVENTS = [
+  'MESSAGES_UPSERT',
+  'PRESENCE_UPDATE',
+  'CONNECTION_UPDATE',
+  'QRCODE_UPDATED'
+] as const;
+
 export function cashTypingDelayMs(text: string): number {
   const length = String(text ?? '').trim().length;
   // Curto o bastante para não atrapalhar respostas rápidas, mas perceptível no WhatsApp.
@@ -74,7 +81,7 @@ export class EvolutionClient {
         url: webhookUrl,
         byEvents: false,
         base64: false,
-        events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']
+        events: [...EVOLUTION_WEBHOOK_EVENTS]
       };
     }
     return this.requestJson('/instance/create', { method: 'POST', body: JSON.stringify(body) });
@@ -89,7 +96,7 @@ export class EvolutionClient {
           url: webhookUrl,
           byEvents: false,
           base64: false,
-          events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']
+          events: [...EVOLUTION_WEBHOOK_EVENTS]
         }
       })
     });
