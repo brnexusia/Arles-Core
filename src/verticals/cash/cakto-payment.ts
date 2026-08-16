@@ -7,10 +7,6 @@ function digits(value: string): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
 
-function right11(value: string): string {
-  return digits(value).slice(-11);
-}
-
 function normalizeEmail(value: string): string {
   return String(value ?? '').trim().toLowerCase().slice(0, 254);
 }
@@ -23,46 +19,63 @@ function addMonths(date: Date, months: number): Date {
 
 function planMonths(planKey: CashPlanKey): number {
   if (planKey === 'cash_monthly') return 1;
-  if (planKey === 'cash_semiannual') return 6;
+  if (planKey === 'cash_quarterly') return 3;
   return 12;
 }
 
 export function cashPlanLabel(planKey: string | null): string {
   if (planKey === 'cash_monthly') return 'Mensal';
-  if (planKey === 'cash_semiannual') return 'Semestral';
+  if (planKey === 'cash_quarterly') return 'Trimestral';
   if (planKey === 'cash_annual') return 'Anual';
   return 'Arles Cash';
 }
 
+export function parseCaktoSck(value: string): { companyId: string | null; planKey: CashPlanKey | null } {
+  const match = String(value ?? '').trim().match(
+    /^arlescash:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?::(monthly|quarterly|annual))?$/i
+  );
+  if (!match?.[1]) return { companyId: null, planKey: null };
+  const slug = String(match[2] ?? '').toLowerCase();
+  const planKey: CashPlanKey | null = slug === 'monthly'
+    ? 'cash_monthly'
+    : slug === 'quarterly'
+      ? 'cash_quarterly'
+      : slug === 'annual'
+        ? 'cash_annual'
+        : null;
+  return { companyId: match[1].toLowerCase(), planKey };
+}
+
 export function companyIdFromSck(value: string): string | null {
-  const match = String(value ?? '').trim().match(/^arlescash:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
-  return match?.[1]?.toLowerCase() ?? null;
+  return parseCaktoSck(value).companyId;
 }
 
 export function resolveCaktoPlan(input: {
+  sckPlan?: CashPlanKey | null;
   offerId?: string;
   offerName?: string;
   productName?: string;
   amountCents?: number | null;
   currentPlan?: string | null;
 }): CashPlanKey | null {
+  if (input.sckPlan) return input.sckPlan;
+
   const offerId = String(input.offerId ?? '').trim();
   if (offerId && env.cashCaktoMonthlyOfferId && offerId === env.cashCaktoMonthlyOfferId) return 'cash_monthly';
-  if (offerId && env.cashCaktoSemiannualOfferId && offerId === env.cashCaktoSemiannualOfferId) return 'cash_semiannual';
+  if (offerId && env.cashCaktoQuarterlyOfferId && offerId === env.cashCaktoQuarterlyOfferId) return 'cash_quarterly';
   if (offerId && env.cashCaktoAnnualOfferId && offerId === env.cashCaktoAnnualOfferId) return 'cash_annual';
 
   const label = `${input.offerName ?? ''} ${input.productName ?? ''}`.toLowerCase();
-  if (/semestral|6\s*mes/.test(label)) return 'cash_semiannual';
+  if (/trimestral|3\s*mes/.test(label)) return 'cash_quarterly';
   if (/anual|12\s*mes/.test(label)) return 'cash_annual';
   if (/mensal|1\s*mes/.test(label)) return 'cash_monthly';
 
-  // Fallback apenas para facilitar a implantação. Em produção, os IDs de oferta
-  // devem ser configurados para não depender de preço/nome.
-  if (input.amountCents === 499 || input.amountCents === 500) return 'cash_monthly';
-  if (input.amountCents === 2490) return 'cash_semiannual';
+  // Fallback para compras que não tenham passado pelo link personalizado.
+  if (input.amountCents === 500) return 'cash_monthly';
+  if (input.amountCents === 1350) return 'cash_quarterly';
   if (input.amountCents === 3990) return 'cash_annual';
 
-  if (input.currentPlan === 'cash_monthly' || input.currentPlan === 'cash_semiannual' || input.currentPlan === 'cash_annual') {
+  if (input.currentPlan === 'cash_monthly' || input.currentPlan === 'cash_quarterly' || input.currentPlan === 'cash_annual') {
     return input.currentPlan;
   }
   return null;
@@ -187,7 +200,7 @@ export class CaktoPaymentService {
     const eventType = String(input.eventType ?? '').trim().toLowerCase();
     const orderId = String(input.orderId ?? '').trim();
     const subscriptionId = String(input.subscriptionId ?? '').trim();
-    const companyId = companyIdFromSck(String(input.sck ?? ''));
+    const sck = parseCaktoSck(String(input.sck ?? ''));
     const ownerPhone = digits(input.phone ?? '');
     const ownerEmail = normalizeEmail(input.email ?? '');
     const offerId = String(input.offerId ?? '').trim();
@@ -218,10 +231,15 @@ export class CaktoPaymentService {
         return { duplicate: true };
       }
 
-      const account = await findAccount(client, { companyId, phone: ownerPhone, email: ownerEmail });
+      const account = await findAccount(client, {
+        companyId: sck.companyId,
+        phone: ownerPhone,
+        email: ownerEmail
+      });
       if (!account) throw new Error('CASH_PAYMENT_ACCOUNT_NOT_FOUND');
 
       const planKey = resolveCaktoPlan({
+        sckPlan: sck.planKey,
         offerId,
         offerName: input.offerName ?? '',
         productName: input.productName ?? '',
