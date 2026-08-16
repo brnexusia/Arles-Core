@@ -33,12 +33,12 @@ function evolutionInstanceName(payload: any): string {
 }
 
 function inferredPublicBaseUrl(request: { headers: Record<string, unknown> }): string {
-  const proto = String(request.headers['x-forwarded-proto'] ?? 'https').split(',')[0].trim() || 'https';
+  const proto = String(request.headers['x-forwarded-proto'] ?? 'https').split(',')[0]?.trim() || 'https';
   const host = String(
     request.headers['x-forwarded-host'] ??
     request.headers.host ??
     ''
-  ).split(',')[0].trim();
+  ).split(',')[0]?.trim() || '';
   return host ? `${proto}://${host}`.replace(/\/+$/, '') : '';
 }
 
