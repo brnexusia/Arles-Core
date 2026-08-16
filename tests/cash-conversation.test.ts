@@ -9,6 +9,7 @@ const {
   expandQueryFollowup,
   isGuideRequest,
   isUndoRequest,
+  shouldRememberCashQuery,
   toIsoDateOnly
 } = await import('../src/verticals/cash/conversation.js');
 
@@ -16,6 +17,27 @@ describe('cash conversational layer', () => {
   it('mantém o contexto da consulta e troca apenas o período', () => {
     expect(expandQueryFollowup('Quanto gastei hoje?', 'E ontem?')).toBe('Quanto gastei ontem?');
     expect(expandQueryFollowup('Quanto gastei na SHEIN esse mês?', 'E ontem?')).toBe('Quanto gastei na SHEIN ontem?');
+    expect(expandQueryFollowup('quais foram meus gastos hoje?', 'E ontem')).toBe('quais foram meus gastos ontem');
+  });
+
+  it('memoriza consulta mesmo quando a lista compacta usa o formato de clipboard', () => {
+    const result = {
+      actions: [{
+        type: 'text' as const,
+        text: '📋 Hoje:\n• mercado — R$ 80,00 · 16/08/2026'
+      }]
+    };
+    expect(shouldRememberCashQuery('quais foram meus gastos hoje?', result)).toBe(true);
+  });
+
+  it('não memoriza fallback como se fosse consulta válida', () => {
+    const result = {
+      actions: [{
+        type: 'text' as const,
+        text: 'Hmm, não entendi bem 🤔'
+      }]
+    };
+    expect(shouldRememberCashQuery('quais foram meus gastos hoje?', result)).toBe(false);
   });
 
   it('reconhece pedido natural para desfazer exclusão', () => {

@@ -6,6 +6,7 @@ import { redis } from '../../infrastructure/redis.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashHandler } from './handler.js';
 import { cashService } from './service.js';
+import { deterministicCashQuery } from './query.js';
 import { deletionTarget, normalizeCashText, type CashRecordTarget } from './management.js';
 import { formatBrazilDate, isoBrazil } from './time.js';
 
@@ -45,8 +46,13 @@ function resultText(result: VerticalResult | null): string {
     .join('\n');
 }
 
-function isQueryResult(result: VerticalResult | null): boolean {
-  return resultText(result).trimStart().startsWith('🔎');
+export function shouldRememberCashQuery(input: string, result: VerticalResult | null): boolean {
+  if (!result) return false;
+  const output = resultText(result).trimStart();
+  if (!output || output.startsWith('Hmm, não entendi bem') || output.startsWith('Não consegui interpretar isso com segurança')) {
+    return false;
+  }
+  return deterministicCashQuery(input) !== null || output.startsWith('🔎');
 }
 
 function isGenericFallback(result: VerticalResult | null): boolean {
@@ -266,7 +272,7 @@ export class CashConversationHandler implements VerticalHandler {
 
     const result = await cashHandler.handle(effectiveContext);
 
-    if (isQueryResult(result)) {
+    if (shouldRememberCashQuery(effectiveContext.combinedText, result)) {
       await rememberQuery(company.id, message.phone, effectiveContext.combinedText);
       return result;
     }
@@ -300,7 +306,7 @@ export class CashConversationHandler implements VerticalHandler {
     if (fallback.intent === 'query' && fallback.rewritten_text?.trim()) {
       const retryContext = { ...context, combinedText: fallback.rewritten_text.trim() };
       const retry = await cashHandler.handle(retryContext);
-      if (isQueryResult(retry)) {
+      if (shouldRememberCashQuery(retryContext.combinedText, retry)) {
         await rememberQuery(company.id, message.phone, retryContext.combinedText);
         return retry;
       }
