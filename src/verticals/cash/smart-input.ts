@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { cashParser } from './parser.js';
-import { cashService } from './service.js';
+import { stageCashRegistration } from './confirmation.js';
 import type { CashTransactionInput } from './types.js';
 import { formatBrazilDate, isoBrazil } from './time.js';
 
@@ -59,10 +59,6 @@ function normalize(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
-function brl(value: number): string {
-  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
-
 export function isCashCasualAcknowledgement(input: string): boolean {
   const value = normalize(input).replace(/[!.]+$/g, '').trim();
   return /^(certo|ok|okay|blz|beleza|entendi|entendido|show|perfeito|ta bom|tá bom|tranquilo|valeu|obrigado|obrigada|massa|top)$/.test(value);
@@ -79,6 +75,14 @@ export function isCashExpenseListRequest(input: string): boolean {
   if (/\b(lista|listar|organiza|organizar|organizada|organizado|mostra|mostrar|ver)\b.*\b(gast|despes|compr|pague)\w*/.test(value)) return true;
   if (/\b(meus gastos|minhas despesas)\b.*\b(foi|foram|citei|falei|disse|acima|antes)\b/.test(value)) return true;
   if (/\b(ja citei|falei acima|disse acima)\b.*\b(gast|despes)\w*/.test(value)) return true;
+  return false;
+}
+
+function looksLikeFinancialQuery(input: string): boolean {
+  const value = normalize(input);
+  if (/\?$/.test(input.trim()) && /\b(quanto|quais|qual|como|onde|mostra|lista|saldo|historico|histórico|gastos?|despesas?|receitas?)\b/.test(value)) return true;
+  if (/\b(quanto|quais|qual|me mostra|mostra|lista|listar|pesquisa|procura)\b.*\b(gast|despes|receit|registro|lancamento|lançamento|saldo|movimenta)\w*/.test(value)) return true;
+  if (/^(saldo|historico|histórico|relatorio|relatório|resumo|balanco|balanço)\b/.test(value)) return true;
   return false;
 }
 
@@ -104,9 +108,7 @@ export function looksLikeCashBatch(input: string): boolean {
 
 function missingAmountExpense(input: string): boolean {
   const value = normalize(input);
-  const hasExpenseVerb = /\b(paguei|gastei|comprei|custou)\b/.test(value);
-  const hasMoney = /\d/.test(value);
-  return hasExpenseVerb && !hasMoney;
+  return /\b(paguei|gastei|comprei|custou)\b/.test(value) && !/\d/.test(value);
 }
 
 function normalizeDate(value: string): string {
@@ -137,8 +139,7 @@ async function fallbackBatch(input: string): Promise<CashTransactionInput[]> {
   for (const segment of simpleSegments(input)) {
     if (/\b(sobrou|restou)\b/i.test(segment) && !/\b(comprei|gastei|paguei)\b/i.test(segment)) continue;
     const parsed = await cashParser.parse(segment);
-    if (!parsed) continue;
-    rows.push(adjustCashRemainder(segment, parsed));
+    if (parsed) rows.push(adjustCashRemainder(segment, parsed));
   }
   return rows;
 }
@@ -156,12 +157,12 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
             'A mensagem pode misturar receita, dinheiro reservado e várias despesas.',
             'Crie um item por movimento REAL. Nunca junte movimentos diferentes em uma descrição.',
             'income = dinheiro que entrou. expense = dinheiro que saiu do dinheiro disponível.',
-            '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva, pois reduz o dinheiro disponível, mas deve ficar claramente identificado como reserva.',
+            '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva.',
             '“sobrou 20” sozinho NÃO é lançamento.',
-            'Quando a pessoa disser explicitamente que tinha um valor para gastar e informa quanto sobrou, registre somente o que foi efetivamente gasto. Ex.: “com os outros 100 comprei coisas e sobrou 20” => despesa de 80.',
+            'Se havia um valor para gastar e a pessoa informa quanto sobrou, registre somente o gasto efetivo. Ex.: “com os outros 100 comprei coisas e sobrou 20” => despesa de 80.',
             'Não invente valores. Se um gasto foi citado sem valor identificável, include=false.',
             'Use somente: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
-            'Toda receita usa categoria Receita. Dinheiro guardado usa Reserva.',
+            'Toda receita usa Receita. Dinheiro guardado usa Reserva.',
             'description deve ser curta e específica. merchant só quando houver loja/pessoa/local claro.',
             `Hoje no fuso do Brasil é ${isoBrazil()}. transaction_date deve ser YYYY-MM-DD.`,
             'source_text deve conter o trecho da mensagem que sustenta aquele item.'
@@ -192,50 +193,18 @@ function canonicalBatchItem(item: BatchItem): CashTransactionInput | null {
   };
 }
 
-async function saveBatch(context: VerticalContext, source: string): Promise<VerticalResult | null> {
+async function prepareBatch(context: VerticalContext, source: string): Promise<VerticalResult | null> {
   const aiItems = await aiBatch(source);
   let transactions = (aiItems ?? [])
     .map(canonicalBatchItem)
     .filter((item): item is CashTransactionInput => Boolean(item));
-
   if (transactions.length < 2) transactions = await fallbackBatch(source);
   if (transactions.length < 2) return null;
-
-  const saved: CashTransactionInput[] = [];
-  for (let index = 0; index < transactions.length; index += 1) {
-    const transaction = transactions[index]!;
-    await cashService.createTransaction({
-      companyId: context.company.id,
-      phone: context.message.phone,
-      sourceMessageId: `${context.message.messageId || Date.now()}:item:${index + 1}`,
-      sourceMessage: source,
-      transaction
-    });
-    saved.push(transaction);
-  }
-
-  const income = saved.filter(item => item.type === 'income').reduce((sum, item) => sum + item.amount, 0);
-  const expense = saved.filter(item => item.type === 'expense').reduce((sum, item) => sum + item.amount, 0);
-  const lines = saved.map((item, index) => {
-    const icon = item.type === 'income' ? '💰' : item.category === 'Reserva' ? '🏦' : '💸';
-    const sign = item.type === 'income' ? '+' : '-';
-    return `${index + 1}. ${icon} ${sign}${brl(item.amount)} — ${item.category} — ${item.description}`;
-  });
-
-  return text([
-    `✅ Entendi e separei sua mensagem em ${saved.length} lançamentos:`,
-    '',
-    ...lines,
-    '',
-    `💰 Entradas: ${brl(income)}`,
-    `💸 Saídas + reservas: ${brl(expense)}`,
-    `📊 Saldo desses lançamentos: ${brl(income - expense)}`,
-    '',
-    'Se algum item ficou diferente do que você quis dizer, pode falar naturalmente: “edita o 2”.'
-  ].join('\n'));
+  return await stageCashRegistration(context, transactions, source);
 }
 
 async function trialDefinition(companyId: string): Promise<VerticalResult> {
+  const { cashService } = await import('./service.js');
   const state = await cashService.accessState(companyId);
   const status = state.subscription_status === 'trial' && state.trial_ends_at
     ? `O seu está ativo até ${formatBrazilDate(state.trial_ends_at)}.`
@@ -259,26 +228,18 @@ export async function preprocessCashInput(context: VerticalContext): Promise<Cas
   }
 
   if (isCashCasualAcknowledgement(input)) {
-    return {
-      kind: 'result',
-      result: text('Perfeito 😊 Quando quiser, pode me mandar um gasto, uma receita ou perguntar sobre suas finanças do seu jeito.')
-    };
+    return { kind: 'result', result: text('Perfeito 😊 Quando quiser, pode me mandar um gasto, uma receita ou perguntar sobre suas finanças do seu jeito.') };
   }
 
   if (/^(sim|isso|sim entao|sim então)\s+(?:formule|reformule|pode formular|pode reformular)[!. ]*$/i.test(input.trim())) {
-    return {
-      kind: 'result',
-      result: text('Pode mandar do jeito que você lembrar 😊 Se estiver falando de uma mensagem anterior, responda aquela mensagem e diga o que quer ver ou registrar.')
-    };
+    return { kind: 'result', result: text('Pode mandar do jeito que você lembrar 😊 Se estiver falando de uma mensagem anterior, responda aquela mensagem e diga o que quer ver ou registrar.') };
   }
 
   const quotedText = String(context.message.quotedText ?? '').trim();
   const source = quotedText && asksToUseQuotedMessage(input) ? quotedText : input;
 
-  // Uma mensagem com vários valores/movimentos precisa ser separada antes de qualquer
-  // regra de consulta. Isso evita “meus gastos foram: 100..., 100...” virar pesquisa.
   if (looksLikeCashBatch(source)) {
-    const result = await saveBatch(context, source);
+    const result = await prepareBatch(context, source);
     if (result) return { kind: 'result', result };
   }
 
@@ -287,10 +248,16 @@ export async function preprocessCashInput(context: VerticalContext): Promise<Cas
   }
 
   if (missingAmountExpense(input)) {
-    return {
-      kind: 'result',
-      result: text('Consigo registrar isso, mas preciso do valor 😊\nExemplo: “paguei R$100 nas unhas e R$100 na bicicleta”.')
-    };
+    return { kind: 'result', result: text('Consigo registrar isso, mas preciso do valor 😊\nExemplo: “paguei R$100 nas unhas e R$100 na bicicleta”.') };
+  }
+
+  // Consultas seguem para o roteador/consulta. Todo possível lançamento novo passa
+  // pelo parser (IA-first) e vira apenas um resumo pendente; nada é salvo aqui.
+  if (!looksLikeFinancialQuery(input)) {
+    const parsed = await cashParser.parse(source);
+    if (parsed) {
+      return { kind: 'result', result: await stageCashRegistration(context, [parsed], source) };
+    }
   }
 
   return null;
