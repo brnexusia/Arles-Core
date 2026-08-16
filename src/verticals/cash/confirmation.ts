@@ -50,12 +50,12 @@ function summary(transactions: CashTransactionInput[]): string {
   return transactions.map((item, index) => line(item, index + 1)).join('\n\n');
 }
 
-function isConfirm(input: string): boolean {
+export function isCashRegistrationConfirmation(input: string): boolean {
   const value = normalize(input).replace(/[!.]+$/g, '').trim();
   return /^(sim|confirmo|confirmar|confirma|pode registrar|pode salvar|pode anotar|registra|registre|salva|salve|anota|anote|isso mesmo|esta certo|ta certo|tá certo|correto|pode)$/.test(value);
 }
 
-function isCancel(input: string): boolean {
+export function isCashRegistrationCancellation(input: string): boolean {
   const value = normalize(input).replace(/[!.]+$/g, '').trim();
   return /^(nao|não|cancelar|cancela|cancele|deixa pra la|deixa pra lá|esquece|descarta|nao registra|não registra|nao salve|não salve)$/.test(value);
 }
@@ -103,12 +103,12 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
   const pending = await getPending(context.company.id, context.message.phone);
   if (!pending) return undefined;
 
-  if (isCancel(context.combinedText)) {
+  if (isCashRegistrationCancellation(context.combinedText)) {
     await clearPending(context.company.id, context.message.phone);
     return text('Tudo bem 👍 Não registrei nada. Pode me mandar novamente do jeito correto.');
   }
 
-  if (!isConfirm(context.combinedText)) {
+  if (!isCashRegistrationConfirmation(context.combinedText)) {
     return text([
       'Tenho um lançamento aguardando sua confirmação.',
       '',
