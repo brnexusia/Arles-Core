@@ -2,6 +2,7 @@ import type { VerticalModule } from '../vertical.js';
 import { cashAccessHandler } from './access-handler.js';
 import { handleCashPendingConfirmation } from './confirmation.js';
 import { handleCashPendingDeletion } from './deletion.js';
+import { handleCashPendingEditInteraction } from './pending-edit-interaction.js';
 import { cashReports } from './reports.js';
 import { formatCashUserResponse } from './response-format.js';
 import { registerCashRoutes } from './routes.js';
@@ -13,7 +14,9 @@ export const cashModule: VerticalModule = {
   capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings'],
   handle: async context => formatCashUserResponse(context, await cashAccessHandler.handle(context)),
   handlePendingInteraction: async context =>
-    (await handleCashPendingDeletion(context)) ?? (await handleCashPendingConfirmation(context)),
+    (await handleCashPendingDeletion(context))
+      ?? (await handleCashPendingConfirmation(context))
+      ?? (await handleCashPendingEditInteraction(context)),
   registerRoutes: registerCashRoutes,
   jobs: {
     'cash.weekly-summary': context => cashReports.weekly(context),
