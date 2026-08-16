@@ -14,6 +14,8 @@ function numberEnv(name: string, fallback: number): number {
   return value;
 }
 
+const defaultQuarterlyCheckout = 'https://pay.cakto.com.br/gh5iq23_1043146';
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: numberEnv('PORT', 3000),
@@ -47,7 +49,12 @@ export const env = {
   cashPaymentMonthlyUrl:
     process.env.CASH_PAYMENT_MONTHLY_URL?.trim() || 'https://pay.cakto.com.br/y2bhspu_1043142',
   cashPaymentQuarterlyUrl:
-    process.env.CASH_PAYMENT_QUARTERLY_URL?.trim() || 'https://pay.cakto.com.br/gh5iq23_1043146',
+    process.env.CASH_PAYMENT_QUARTERLY_URL?.trim() || defaultQuarterlyCheckout,
+  // Alias legado apenas para manter código antigo compilando durante a migração.
+  cashPaymentSemiannualUrl:
+    process.env.CASH_PAYMENT_SEMIANNUAL_URL?.trim() ||
+    process.env.CASH_PAYMENT_QUARTERLY_URL?.trim() ||
+    defaultQuarterlyCheckout,
   cashPaymentAnnualUrl:
     process.env.CASH_PAYMENT_ANNUAL_URL?.trim() || 'https://pay.cakto.com.br/uw7bctc_1043148',
   cashPaymentPublicBaseUrl:
