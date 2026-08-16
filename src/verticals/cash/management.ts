@@ -62,6 +62,10 @@ export function deletionTarget(text: string): CashRecordTarget | null {
   const index = explicitIndex(value, verbSource);
   if (index && index >= 1 && index <= 20) return { kind: 'index', index };
   if (/\b(ultimo|agora|recente|registro|registo|lancamento|gasto|despesa|receita|compra)\b/.test(value)) return { kind: 'last' };
+  // Referências curtas são comuns logo depois de um lançamento/edição: “cancela ele”,
+  // “apaga esse”, “remove isso”. Nesses casos, “ele/esse/isso” aponta para o registro
+  // que acabou de ser tratado, portanto o alvo seguro é o lançamento mais recente.
+  if (/\b(ele|ela|esse|essa|isso|este|esta)\b/.test(value)) return { kind: 'last' };
   return null;
 }
 

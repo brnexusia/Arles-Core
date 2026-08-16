@@ -5,6 +5,7 @@ import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
+import { deletionTarget } from './management.js';
 
 const SemanticSchema = z.object({
   intent: z.enum([
@@ -122,6 +123,13 @@ function canonical(intent: SemanticIntent['intent']): string | null {
 
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
+    // Exclusões diretas têm prioridade sobre a IA. Isso é especialmente importante
+    // para frases curtas de continuidade como “cancela ele” e “apaga esse”, que se
+    // referem ao lançamento recém-tratado e não podem ser reclassificadas como edição.
+    if (deletionTarget(context.combinedText)) {
+      return await cashBroadHandler.handle(context);
+    }
+
     // Lançamentos claros seguem para o parser financeiro. O parser também usa IA
     // como extrator semântico, evitando uma chamada duplicada só para classificar.
     if (obviousTransaction(context.combinedText)) {

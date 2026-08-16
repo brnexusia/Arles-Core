@@ -20,6 +20,14 @@ describe('cash record management', () => {
     expect(deletionTarget('apaga o 2')).toEqual({ kind: 'index', index: 2 });
   });
 
+  it('entende referência curta ao lançamento recém-tratado', () => {
+    expect(deletionTarget('cancela ele na verdade')).toEqual({ kind: 'last' });
+    expect(deletionTarget('apaga ele')).toEqual({ kind: 'last' });
+    expect(deletionTarget('remove esse')).toEqual({ kind: 'last' });
+    expect(deletionTarget('exclui isso')).toEqual({ kind: 'last' });
+    expect(deletionTarget('cancelar edição')).toBeNull();
+  });
+
   it('não apaga quando o usuário está perguntando como fazer', () => {
     expect(asksHowToManage('Como posso remover ou editar?')).toBe(true);
     expect(deletionTarget('Como posso remover o último?')).toBeNull();
