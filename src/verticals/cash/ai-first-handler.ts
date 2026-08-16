@@ -46,6 +46,14 @@ function normalize(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
+export function isCashNaturalRecordListRequest(input: string): boolean {
+  const value = normalize(input).replace(/[!?.,]+$/g, '').trim();
+  if (!value || /\b(como|ajuda|ensina|explica)\b/.test(value)) return false;
+
+  return /^(?:(?:me )?(?:fala|mostra|mostre|lista|liste|traz|traga|diz|fale)\s+)?(?:(?:ai|aí)\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)(?:\s+(?:ai|aí|pra mim|para mim))?$/.test(value)
+    || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value);
+}
+
 function obviousTransaction(input: string): boolean {
   const value = normalize(input);
   const hasMoney = /(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/.test(value);
@@ -76,8 +84,10 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
             'Você NÃO consulta banco, NÃO calcula saldo real e NÃO inventa lançamentos. Apenas classifica e reescreve para o motor seguro executar.',
             'transaction: a pessoa informa um lançamento novo. Não reescreva; o parser financeiro fará a extração.',
             'query: quer consultar registros, gastos, receitas, lojas, categorias, períodos ou listas. rewritten_text deve ser uma pergunta explícita e curta preservando filtros.',
+            'Pedidos como “fala meus registros”, “me mostra meus lançamentos” ou “lista meus registros” são query, nunca help.',
+            'Quando um pedido de lista/consulta não trouxer período, considere hoje.',
             'balance: quer saber saldo, quanto sobrou ou situação financeira geral.',
-            'history: quer ver lançamentos recentes sem filtro específico.',
+            'history: quer ver lançamentos recentes quando disser explicitamente histórico, últimos ou recentes.',
             'weekly_report/monthly_report: quer relatório/fechamento da semana ou mês.',
             'edit: quer explicitamente corrigir um lançamento existente.',
             'delete: quer explicitamente apagar um lançamento existente. Nunca use para apagar conta, cadastro, perfil ou dados pessoais.',
@@ -123,6 +133,12 @@ function canonical(intent: SemanticIntent['intent']): string | null {
 
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
+    // Pedidos diretos de lista são determinísticos e não precisam gastar IA.
+    // Sem período explícito, a regra do Cash é consultar somente hoje.
+    if (isCashNaturalRecordListRequest(context.combinedText)) {
+      return await cashBroadHandler.handle({ ...context, combinedText: 'quais foram meus registros hoje?' });
+    }
+
     // Exclusões diretas têm prioridade sobre a IA. Isso é especialmente importante
     // para frases curtas de continuidade como “cancela ele” e “apaga esse”, que se
     // referem ao lançamento recém-tratado e não podem ser reclassificadas como edição.
