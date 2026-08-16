@@ -29,9 +29,14 @@ const ParsedTransactionSchema = z.object({
 
 const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague|guardei|reservei|separei)\b/i;
 const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
+const MOVEMENT = /\b(gastei|gasto|paguei|comprei|guardei|reservei|separei|recebi|ganhei|entrou|vendi|faturei|depositaram)\b/gi;
+
+function amountMatches(text: string): RegExpMatchArray[] {
+  return [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
+}
 
 function amountFrom(text: string): number | null {
-  const matches = [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
+  const matches = amountMatches(text);
   for (const match of matches) {
     const before = text.slice(Math.max(0, (match.index ?? 0) - 8), match.index ?? 0);
     const after = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 5);
@@ -129,16 +134,40 @@ export function deterministicCashParse(text: string): CashTransactionInput | nul
   };
 }
 
+export function isStrongDeterministicCashTransaction(
+  text: string,
+  parsed: CashTransactionInput | null = deterministicCashParse(text)
+): boolean {
+  if (!parsed) return false;
+  const clean = text.trim();
+  if (!clean || clean.length > 140 || /\n/.test(clean)) return false;
+
+  // Mais de um valor ou mais de um movimento já merece interpretação semântica.
+  if (amountMatches(clean).length !== 1) return false;
+  const movements = clean.match(MOVEMENT) ?? [];
+  if (movements.length > 1) return false;
+
+  const explicitMovement = EXPENSE.test(clean) || INCOME.test(clean);
+  const compactKnownCategory = clean.split(/\s+/).length <= 8 && parsed.category !== 'Outros';
+
+  // “gastei 50 no mercado”, “recebi 2000 de salário”, “farmácia 45” etc.
+  // ficam 100% em script. Categorias incertas, textos maiores ou formatos fora do
+  // esperado sobem para a IA.
+  return explicitMovement && parsed.category !== 'Outros' || compactKnownCategory;
+}
+
 export class CashParser {
   private readonly client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
 
   async parse(text: string): Promise<CashTransactionInput | null> {
-    // A IA é a interpretação principal. O parser determinístico é calculado em
-    // paralelo como rede de segurança e só assume se a API não estiver disponível,
-    // falhar ou recusar a mensagem por falta de dados suficientes.
     const deterministic = deterministicCashParse(text);
+
+    // Caminho barato e previsível: lançamento muito direto não consome GPT.
+    if (isStrongDeterministicCashTransaction(text, deterministic)) return deterministic;
     if (!this.client) return deterministic;
 
+    // Saiu um pouco do padrão esperado: a IA assume a interpretação e as regras
+    // determinísticas permanecem como fallback de segurança.
     try {
       const response = await this.client.responses.parse({
         model: env.openaiModel,
@@ -146,7 +175,7 @@ export class CashParser {
           {
             role: 'system',
             content: [
-              'Você é o extrator principal de lançamentos do Arles Cash em português brasileiro.',
+              'Você interpreta lançamentos do Arles Cash em português brasileiro quando a frase saiu do padrão simples coberto por regras.',
               'Entenda linguagem natural, erros de digitação, abreviações, gírias e frases curtas.',
               'Nunca invente valor, data, loja, pessoa ou descrição que não estejam sustentados pela mensagem.',
               'expense é dinheiro que saiu do disponível; income é dinheiro que entrou.',
