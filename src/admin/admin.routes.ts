@@ -84,6 +84,16 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.delete('/internal/admin/cash/users/:companyId', async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    try {
+      const { companyId } = request.params as { companyId: string };
+      return reply.send({ data: await adminService.deleteCashUser(companyId) });
+    } catch (error) {
+      return adminError(request, reply, error);
+    }
+  });
+
   app.post('/internal/admin/cash/users/:companyId/expire', async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     try {
