@@ -9,13 +9,23 @@ on:
       - 'tests/cash-real-world-5000.test.ts'
       - '.github/workflows/cash-real-world-eval.yml'
   workflow_dispatch:
+    inputs:
+      shards:
+        description: 'Quantidade de partes para dividir as 5.000 mensagens'
+        required: false
+        default: '20'
+        type: choice
+        options:
+          - '10'
+          - '20'
 
 concurrency:
-  group: cash-real-world-eval
-  cancel-in-progress: true
+  group: cash-real-world-eval-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  eval:
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,7 +48,61 @@ jobs:
           EVOLUTION_API_KEY: test
         run: npm run typecheck
 
-      - name: Run 5000-message Cash eval
+  eval:
+    name: Cash eval parte ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: ${{ fromJSON(inputs.shards == '10' && '[0,1,2,3,4,5,6,7,8,9]' || '[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Preparar parte da simulação
+        env:
+          CASH_EVAL_SHARD_INDEX: ${{ matrix.shard }}
+          CASH_EVAL_SHARD_COUNT: ${{ inputs.shards || '20' }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          shard = int(os.environ['CASH_EVAL_SHARD_INDEX'])
+          shard_count = int(os.environ['CASH_EVAL_SHARD_COUNT'])
+          total_personas = 100
+          scenarios_per_persona = 50
+
+          start = total_personas * shard // shard_count
+          end = total_personas * (shard + 1) // shard_count
+          expected_total = (end - start) * scenarios_per_persona
+
+          path = Path('tests/cash-real-world-5000.test.ts')
+          text = path.read_text(encoding='utf-8')
+          loop = 'for (let persona = 0; persona < 100; persona += 1) {'
+          expected = 'expect(total).toBe(5000);'
+
+          if loop not in text or expected not in text:
+              raise SystemExit('Não foi possível preparar o shard: marcadores do teste mudaram.')
+
+          text = text.replace(loop, f'for (let persona = {start}; persona < {end}; persona += 1) {{', 1)
+          text = text.replace(expected, f'expect(total).toBe({expected_total});', 1)
+          path.write_text(text, encoding='utf-8')
+
+          print(f'Parte {shard + 1}/{shard_count}: pessoas {start + 1}-{end}, {expected_total} mensagens')
+          PY
+
+      - name: Rodar parte da avaliação sem interromper as demais
         env:
           DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
           REDIS_URL: redis://127.0.0.1:6379
