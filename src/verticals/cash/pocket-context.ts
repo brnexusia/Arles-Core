@@ -20,6 +20,7 @@ type PocketContext = {
 export type CashPocketDeleteReference =
   | { kind: 'explicit' }
   | { kind: 'context' }
+  | { kind: 'context-all' }
   | null;
 
 function text(value: string): VerticalResult {
@@ -38,11 +39,42 @@ function hasDeleteVerb(value: string): boolean {
   return /\b(apag|exclu|remov|delet|retir|tir)\w*/.test(value);
 }
 
+/**
+ * Normaliza mensagens agrupadas pelo debounce do WhatsApp antes de entregá-las
+ * ao parser de cofrinhos. Isso evita que comandos consecutivos virem o nome de
+ * um único cofrinho, por exemplo:
+ * "Criar cofrinho Sinapse. Criar cofrinho Arles Cash".
+ */
+export function normalizeCashPocketBatchInput(input: string): string {
+  return String(input ?? '')
+    .replace(
+      /([.!?;])\s*(?=(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:(?:um|o|outro|mais\s+um)\s+)?cofrinho\b)/gi,
+      '$1\n'
+    )
+    .replace(
+      /\s+(?=(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:(?:um|o|outro|mais\s+um)\s+)?cofrinho\b)/gi,
+      '\n'
+    )
+    // O parser legado diferencia "cofrinhos" (lista) de "o cofrinho" (um item).
+    // Inserir o artigo impede "criar cofrinho chamado X" de cair no modo lista.
+    .replace(
+      /^((?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça))\s+cofrinho\b/gim,
+      '$1 o cofrinho'
+    );
+}
+
 export function parseCashPocketDeleteReference(input: string): CashPocketDeleteReference {
   const value = normalizeCashText(input);
   if (!hasDeleteVerb(value)) return null;
 
   if (/\bcofrinh(?:o|os)\b/.test(value)) return { kind: 'explicit' };
+
+  // Plural curto: depois de uma lista de cofrinhos, "apaga eles" significa os
+  // cofrinhos que acabaram de ser mostrados. Como apagar cofrinho preserva os
+  // lançamentos, podemos cumprir o pedido sem confundir com exclusão financeira.
+  if (/^(?:por favor\s+)?(?:apag|exclu|remov|delet|retir|tir)\w*\s+(?:eles|elas|esses|essas|estes|estas|todos(?:\s+eles)?|todas(?:\s+elas)?)(?:\s+(?:ai|aí|pfv|por favor|pra mim|para mim))*[!.? ]*$/.test(value)) {
+    return { kind: 'context-all' };
+  }
 
   // Referência curta só vale como contexto de cofrinho quando a mensagem inteira é
   // essencialmente “apaga ele/esse/isso”. Isso evita roubar exclusões financeiras
@@ -147,21 +179,36 @@ async function removePocketKeepingMoney(companyId: string, pocket: CashPocket): 
   }
 }
 
-async function deletePocket(context: VerticalContext, pocket: CashPocket): Promise<VerticalResult> {
-  const kept = await removePocketKeepingMoney(context.company.id, pocket);
+async function deletePockets(context: VerticalContext, pockets: CashPocket[]): Promise<VerticalResult> {
+  let transactions = 0;
+  let forecasts = 0;
+
+  for (const pocket of pockets) {
+    const kept = await removePocketKeepingMoney(context.company.id, pocket);
+    transactions += kept.transactions;
+    forecasts += kept.forecasts;
+  }
   await clearPocketContext(context.company.id, context.message.phone);
 
-  const lines = [`🐷 Cofrinho *${pocket.name}* apagado.`];
-  if (kept.transactions > 0) {
-    lines.push(`Seus ${kept.transactions} lançamento${kept.transactions === 1 ? '' : 's'} foram mantidos no saldo geral.`);
+  const lines = pockets.length === 1
+    ? [`🐷 Cofrinho *${pockets[0]!.name}* apagado.`]
+    : [
+        `🐷 ${pockets.length} cofrinhos apagados:`,
+        ...pockets.map(pocket => `• ${pocket.name}`)
+      ];
+
+  if (transactions > 0) {
+    lines.push(`Seus ${transactions} lançamento${transactions === 1 ? '' : 's'} ${transactions === 1 ? 'foi mantido' : 'foram mantidos'} no saldo geral.`);
   }
-  if (kept.forecasts > 0) {
-    lines.push(`${kept.forecasts} previsão${kept.forecasts === 1 ? '' : 'ões'} também ${kept.forecasts === 1 ? 'foi mantida' : 'foram mantidas'} sem cofrinho.`);
+  if (forecasts > 0) {
+    lines.push(`${forecasts} previsão${forecasts === 1 ? '' : 'ões'} também ${forecasts === 1 ? 'foi mantida' : 'foram mantidas'} sem cofrinho.`);
   }
-  if (!kept.transactions && !kept.forecasts) {
-    lines.push('Nenhum lançamento financeiro foi apagado.');
-  }
+
   return text(lines.join('\n'));
+}
+
+async function deletePocket(context: VerticalContext, pocket: CashPocket): Promise<VerticalResult> {
+  return await deletePockets(context, [pocket]);
 }
 
 async function rememberContextFromPocketCommand(context: VerticalContext): Promise<void> {
@@ -196,6 +243,20 @@ export async function handleCashPocketContextCommand(context: VerticalContext): 
     return text('Qual cofrinho você quer apagar? Mande, por exemplo: “apaga o cofrinho Viagem”.');
   }
 
+  if (deletion?.kind === 'context-all') {
+    const remembered = await getPocketContext(context.company.id, context.message.phone);
+    if (remembered?.ids.length) {
+      const pockets = (await Promise.all(
+        remembered.ids.map(id => activePocketById(context.company.id, id))
+      )).filter((pocket): pocket is CashPocket => Boolean(pocket));
+
+      if (pockets.length) return await deletePockets(context, pockets);
+      await clearPocketContext(context.company.id, context.message.phone);
+    }
+    // Sem lista recente de cofrinhos, não intercepta: outras camadas podem decidir
+    // se a referência plural pertence a registros financeiros.
+  }
+
   if (deletion?.kind === 'context') {
     const remembered = await getPocketContext(context.company.id, context.message.phone);
     if (remembered?.ids.length === 1) {
@@ -214,7 +275,12 @@ export async function handleCashPocketContextCommand(context: VerticalContext): 
     // decidir se “apaga ele” se refere ao último lançamento financeiro.
   }
 
-  const result = await handleCashPocketCommand(context);
-  if (result) await rememberContextFromPocketCommand(context);
+  const normalizedPocketText = normalizeCashPocketBatchInput(context.combinedText);
+  const pocketContext = normalizedPocketText === context.combinedText
+    ? context
+    : { ...context, combinedText: normalizedPocketText };
+
+  const result = await handleCashPocketCommand(pocketContext);
+  if (result) await rememberContextFromPocketCommand(pocketContext);
   return result;
 }
