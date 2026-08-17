@@ -8,6 +8,7 @@ import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
 import { matchCashNaturalLanguageExpandedExample } from './natural-language-corpus-expanded.js';
 import { matchCashNaturalLanguageColloquialExample } from './natural-language-corpus-colloquial.js';
 import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-corpus-quadrupled.js';
+import { matchCashNaturalLanguageDoubledExample } from './natural-language-corpus-doubled.js';
 import { cashQuery } from './query.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 
@@ -140,6 +141,9 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
 
   const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
   if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
+
+  const doubledCorpus = matchCashNaturalLanguageDoubledExample(input);
+  if (doubledCorpus) return { intent: doubledCorpus.intent, canonical: doubledCorpus.canonical };
 
   const schedule = scheduleCanonical(input, value);
   if (schedule) return { intent: 'schedule', canonical: schedule };
