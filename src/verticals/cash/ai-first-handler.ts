@@ -15,6 +15,7 @@ import {
   isCashProtectedNonTransaction
 } from './ledger.js';
 import { deletionTarget } from './management.js';
+import { handleCashQuotedManagement } from './quoted-management.js';
 
 const SemanticSchema = z.object({
   intent: z.enum([
@@ -152,6 +153,13 @@ function canonical(intent: SemanticIntent['intent']): string | null {
 
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
+    // Citação/resposta do WhatsApp é contexto mais forte que qualquer regex genérica.
+    // “corrige essa”, “apaga essa”, “essa foi entrada” continuam usando o ID exato.
+    if (context.message.quotedMessageId || context.message.quotedText) {
+      const quoted = await handleCashQuotedManagement(context);
+      if (quoted) return quoted;
+    }
+
     // Primeiro passa pelo corpus. É aqui que centenas/milhares de variações comuns
     // deixam de consumir IA e vão direto para as funções do Core.
     const corpusResult = await handleCashConversationCorpus(context);
