@@ -9,6 +9,7 @@ import { routeCashInput, type CashBroadRoute } from './broad-routing.js';
 import { cashService } from './service.js';
 import { preprocessCashInput } from './smart-input.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
+import { handleCashLedgerDeterministic } from './ledger.js';
 import { formatBrazilDate } from './time.js';
 import { handleCashQuotedManagement } from './quoted-management.js';
 
@@ -180,18 +181,26 @@ async function broadAiFallback(input: string) {
 }
 
 async function retryCanonical(context: VerticalContext, rewrittenText: string): Promise<VerticalResult | null> {
+  // “saldo” é conceito de ledger acumulado no Cash. Mesmo este fallback legado nunca
+  // pode voltar ao resumo mensal antigo.
+  if (/^(saldo|meu saldo|saldo atual)$/i.test(rewrittenText.trim())) {
+    return await handleCashLedgerDeterministic({ ...context, combinedText: 'saldo' });
+  }
   return await cashConversationHandler.handle({ ...context, combinedText: rewrittenText });
 }
 
 export class CashBroadHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    // Uma resposta/citação do WhatsApp define um alvo muito mais preciso do que
-    // “último registro”. Tratamos esse contexto antes de regex, IA ou parser financeiro.
     const quotedManagement = await handleCashQuotedManagement(context);
     if (quotedManagement) return quotedManagement;
 
     const guideSection = cashHelpSection(context.combinedText);
     if (guideSection) return text(cashHelpMessage(guideSection));
+
+    // Segurança também no fallback/broad: saldo e simulação continuam sendo leitura
+    // ou cálculo, nunca passam para o parser de movimento.
+    const ledger = await handleCashLedgerDeterministic(context);
+    if (ledger) return ledger;
 
     const smart = await preprocessCashInput(context);
     if (smart?.kind === 'result') return smart.result;
@@ -219,9 +228,11 @@ export class CashBroadHandler implements VerticalHandler {
     if (fallback.intent === 'categories') return text(categoriesMessage());
     if (fallback.intent === 'schedule') return text(scheduleMessage());
     if (fallback.intent === 'help') return text(cashHelpMessage('menu'));
+    if (fallback.intent === 'balance') {
+      return await handleCashLedgerDeterministic({ ...context, combinedText: 'saldo' });
+    }
 
     const canonical: Record<string, string> = {
-      balance: 'saldo',
       history: 'histórico',
       weekly_report: 'relatório semanal',
       monthly_report: 'relatório mensal',
