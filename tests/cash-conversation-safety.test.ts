@@ -28,7 +28,7 @@ describe('Arles Cash — proteção conversacional', () => {
     ['gstei 50 no mercado hj', 'gastei 50 no mercado hoje'],
     ['pguei 80 de gasolina agr', 'paguei 80 de gasolina agora'],
     ['rcebi 1200 hj', 'recebi 1200 hoje'],
-    ['qto eu gasteii esse mes', 'quanto eu gasteii esse mes'],
+    ['qto eu gasteii esse mes', 'quanto eu gastei esse mes'],
     ['Q Burger 50', 'Q Burger 50']
   ])('normaliza ruído sem estragar nomes: %s', (input, expected) => {
     expect(normalizeCashNoisyLanguage(input)).toBe(expected);
