@@ -6,9 +6,11 @@ import {
   handleCashPocketCommand,
   parseCashPocketCommand,
   parseCashPocketCreateNames,
-  type CashPocket
+  type CashPocket,
+  type CashPocketBalance
 } from './cofrinhos.js';
 import { normalizeCashText } from './management.js';
+import { handleCashReportContext } from './report-context.js';
 
 const POCKET_CONTEXT_TTL_SECONDS = 30 * 60;
 
@@ -23,8 +25,17 @@ export type CashPocketDeleteReference =
   | { kind: 'context-all' }
   | null;
 
+export type CashPocketBalanceReference =
+  | { kind: 'explicit-all' }
+  | { kind: 'context' }
+  | null;
+
 function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
+}
+
+function brl(value: number): string {
+  return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
 function phoneDigits(value: string): string {
@@ -37,6 +48,10 @@ function pocketContextKey(companyId: string, phone: string): string {
 
 function hasDeleteVerb(value: string): boolean {
   return /\b(apag|exclu|remov|delet|retir|tir)\w*/.test(value);
+}
+
+function hasPocketCreationVerb(value: string): boolean {
+  return /\b(cria|criar|crie|abre|abrir|faz|faca|faça|novo|nova)\b/.test(value);
 }
 
 /**
@@ -55,8 +70,6 @@ export function normalizeCashPocketBatchInput(input: string): string {
       /\s+(?=(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:(?:um|o|outro|mais\s+um)\s+)?cofrinho\b)/gi,
       '\n'
     )
-    // O parser legado diferencia "cofrinhos" (lista) de "o cofrinho" (um item).
-    // Inserir o artigo impede "criar cofrinho chamado X" de cair no modo lista.
     .replace(
       /^((?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça))\s+cofrinho\b/gim,
       '$1 o cofrinho'
@@ -69,17 +82,38 @@ export function parseCashPocketDeleteReference(input: string): CashPocketDeleteR
 
   if (/\bcofrinh(?:o|os)\b/.test(value)) return { kind: 'explicit' };
 
-  // Plural curto: depois de uma lista de cofrinhos, "apaga eles" significa os
-  // cofrinhos que acabaram de ser mostrados. Como apagar cofrinho preserva os
-  // lançamentos, podemos cumprir o pedido sem confundir com exclusão financeira.
   if (/^(?:por favor\s+)?(?:apag|exclu|remov|delet|retir|tir)\w*\s+(?:eles|elas|esses|essas|estes|estas|todos(?:\s+eles)?|todas(?:\s+elas)?)(?:\s+(?:ai|aí|pfv|por favor|pra mim|para mim))*[!.? ]*$/.test(value)) {
     return { kind: 'context-all' };
   }
 
-  // Referência curta só vale como contexto de cofrinho quando a mensagem inteira é
-  // essencialmente “apaga ele/esse/isso”. Isso evita roubar exclusões financeiras
-  // mais específicas, como “apaga ele porque registrei o mercado errado”.
   if (/^(?:por favor\s+)?(?:apag|exclu|remov|delet|retir|tir)\w*\s+(?:ele|ela|esse|essa|isso|este|esta)(?:\s+(?:ai|aí|pfv|por favor|pra mim|para mim))*[!.? ]*$/.test(value)) {
+    return { kind: 'context' };
+  }
+
+  return null;
+}
+
+/**
+ * Reconhece perguntas curtas que dependem da conversa anterior de cofrinhos.
+ * Exemplos reais: “e no cofrinho?”, “e neles?”, “quanto tenho nos cofrinhos?”.
+ */
+export function parseCashPocketBalanceReference(input: string): CashPocketBalanceReference {
+  const value = normalizeCashText(input).replace(/[!?.,]+$/g, '').trim();
+  if (!value || hasDeleteVerb(value) || hasPocketCreationVerb(value)) return null;
+
+  const balanceLanguage = /\b(saldo|quanto|total|tem|tenho|ficou|fica|guardado|guardei|disponivel|disponível|dinheiro)\b/.test(value);
+  const pluralPocket = /\b(cofrinhos|caixinhas|envelopes|potinhos|potes)\b/.test(value);
+  if (pluralPocket && balanceLanguage) return { kind: 'explicit-all' };
+
+  if (/^(?:e\s+)?(?:no|nos|do|dos)?\s*cofrinh(?:o|os)$/.test(value)) {
+    return { kind: 'context' };
+  }
+
+  if (/^(?:e\s+)?(?:quanto\s+(?:tem|tenho|ficou|fica)|qual(?:\s+e)?\s+(?:o\s+)?saldo|saldo|total)(?:\s+(?:nele|nela|neles|nelas|ali|la|lá))?$/.test(value)) {
+    return { kind: 'context' };
+  }
+
+  if (/^(?:e\s+)?(?:nele|nela|neles|nelas)(?:\s+(?:quanto|qual|saldo|total))?$/.test(value)) {
     return { kind: 'context' };
   }
 
@@ -211,6 +245,54 @@ async function deletePocket(context: VerticalContext, pocket: CashPocket): Promi
   return await deletePockets(context, [pocket]);
 }
 
+function pocketBalanceResult(pockets: CashPocketBalance[]): VerticalResult {
+  if (pockets.length === 1) {
+    const pocket = pockets[0]!;
+    return text([
+      `🐷 *${pocket.name}*`,
+      `Saldo: *${brl(pocket.balance)}*`,
+      `Entradas: ${brl(pocket.income)}`,
+      `Saídas: ${brl(pocket.expense)}`,
+      `${pocket.count} lançamento${pocket.count === 1 ? '' : 's'}.`
+    ].join('\n'));
+  }
+
+  const total = pockets.reduce((sum, pocket) => sum + Number(pocket.balance), 0);
+  const income = pockets.reduce((sum, pocket) => sum + Number(pocket.income), 0);
+  const expense = pockets.reduce((sum, pocket) => sum + Number(pocket.expense), 0);
+
+  return text([
+    '🐷 *Seus cofrinhos*',
+    `Total nos cofrinhos: *${brl(total)}*`,
+    `Entradas: ${brl(income)}`,
+    `Saídas: ${brl(expense)}`,
+    '',
+    ...pockets.map(pocket => `• ${pocket.name} — ${brl(pocket.balance)}`)
+  ].join('\n'));
+}
+
+async function handlePocketBalanceReference(context: VerticalContext, reference: CashPocketBalanceReference): Promise<VerticalResult | null> {
+  const all = await cashPocketService.list(context.company.id);
+  if (!all.length) return text('Você ainda não tem cofrinhos. Para criar um: “criar cofrinho Viagem”.');
+
+  if (reference.kind === 'explicit-all') {
+    await savePocketContext(context.company.id, context.message.phone, all);
+    return pocketBalanceResult(all);
+  }
+
+  const remembered = await getPocketContext(context.company.id, context.message.phone);
+  if (!remembered?.ids.length) return null;
+
+  const wanted = new Set(remembered.ids.map(String));
+  const selected = all.filter(pocket => wanted.has(String(pocket.id)));
+  if (!selected.length) {
+    await clearPocketContext(context.company.id, context.message.phone);
+    return null;
+  }
+
+  return pocketBalanceResult(selected);
+}
+
 async function rememberContextFromPocketCommand(context: VerticalContext): Promise<void> {
   const createNames = parseCashPocketCreateNames(context.combinedText);
   if (createNames.length) {
@@ -233,6 +315,12 @@ async function rememberContextFromPocketCommand(context: VerticalContext): Promi
 }
 
 export async function handleCashPocketContextCommand(context: VerticalContext): Promise<VerticalResult | null> {
+  // Relatórios já tinham um mecanismo de contexto dedicado, mas ele não estava ligado
+  // à rota principal do Cash. Aqui ele passa a ser executado cedo e pode entender
+  // continuações como “e da semana passada?” sem sequestrar consultas financeiras.
+  const report = await handleCashReportContext(context);
+  if (report) return report;
+
   const deletion = parseCashPocketDeleteReference(context.combinedText);
   if (deletion?.kind === 'explicit') {
     const mentioned = await cashPocketService.findMentioned(context.company.id, context.combinedText);
@@ -253,8 +341,6 @@ export async function handleCashPocketContextCommand(context: VerticalContext): 
       if (pockets.length) return await deletePockets(context, pockets);
       await clearPocketContext(context.company.id, context.message.phone);
     }
-    // Sem lista recente de cofrinhos, não intercepta: outras camadas podem decidir
-    // se a referência plural pertence a registros financeiros.
   }
 
   if (deletion?.kind === 'context') {
@@ -271,8 +357,12 @@ export async function handleCashPocketContextCommand(context: VerticalContext): 
         'Diga o nome, por exemplo: “apaga o cofrinho Viagem”.'
       ].join('\n'));
     }
-    // Sem contexto recente de cofrinho, não intercepta: deixa a camada de registros
-    // decidir se “apaga ele” se refere ao último lançamento financeiro.
+  }
+
+  const balanceReference = parseCashPocketBalanceReference(context.combinedText);
+  if (balanceReference) {
+    const balance = await handlePocketBalanceReference(context, balanceReference);
+    if (balance) return balance;
   }
 
   const normalizedPocketText = normalizeCashPocketBatchInput(context.combinedText);
