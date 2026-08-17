@@ -38,7 +38,7 @@ let isCashForecastLanguage: (input: string) => boolean;
 let parseCashProjection: (input: string) => unknown;
 let isCashNaturalRecordListRequest: (input: string) => boolean;
 let parseCashPocketDeleteReference: (input: string) => unknown;
-let parseCashPocketBalanceReference: (input: string) => unknown;
+let parseCashPocketBalanceReference: (input: string) => { kind: 'explicit-all' | 'context' } | null;
 let parseCashReportRequest: (input: string) => { kind: 'weekly' | 'monthly' } | null;
 
 beforeAll(async () => {
@@ -110,10 +110,20 @@ const scenarios: Scenario[] = [
   { expected: 'acknowledgement', variants: ['top', 'massa', 'fechou', 'tranquilo', 'tá bom'] }
 ];
 
+function normalizedForContext(input: string): string {
+  return input.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 function route(input: string): Route {
   if (parseCashPocketDeleteReference(input)) return 'pocket-delete';
+
+  const pocketBalance = parseCashPocketBalanceReference(input);
+  if (pocketBalance?.kind === 'explicit-all') return 'pocket-balance';
+  if (pocketBalance?.kind === 'context' && /\b(nele|nela|neles|nelas|cofrinh(?:o|os))\b/.test(normalizedForContext(input))) {
+    return 'pocket-balance';
+  }
   if (isCashDirectBalanceRequest(input)) return 'balance';
-  if (parseCashPocketBalanceReference(input)) return 'pocket-balance';
+  if (pocketBalance) return 'pocket-balance';
 
   const report = parseCashReportRequest(input);
   if (report) return report.kind === 'weekly' ? 'weekly_report' : 'monthly_report';
