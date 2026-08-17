@@ -98,7 +98,7 @@ export function classifyCashCorpus(input: string): CashCorpusRoute {
 
   if (looksBatch(input)) return { intent: 'batch_transaction', confidence: 'high', canonical: input };
 
-  if (/\b(agend|program|previst|previs|todo dia|toda semana|todo mes|todo mês|todo ano|mensalmente|semanalmente|diariamente|a cada|contas futuras|saldo projetado|projecao|projeção|quanto vou ter|quanto terei|quanto vai sobrar|quanto vou gastar|quanto vou receber|quanto vou ganhar)\w*/.test(value)) {
+  if (/\b(agend|program|previst|previs|todo dia|toda semana|todo mes|todo mês|todo ano|mensalmente|semanalmente|diariamente|a cada|contas futuras|saldo projetado|projecao|projeção|quanto vou ter|quanto terei|quanto vai sobrar|quanto vou gastar|quanto vou receber|quanto vou ganhar|depois das contas|apos as contas|após as contas|como fica meu saldo)\w*/.test(value)) {
     return { intent: 'schedule', confidence: 'high', canonical: input };
   }
 
