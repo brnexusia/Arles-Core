@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { CashTransactionInput, CashTransactionType } from './types.js';
 import { brazilParts, dateIsoOffset, isoBrazil } from './time.js';
+import { isCashProtectedNonTransaction } from './ledger.js';
 
 const CATEGORIES = [
   'Alimentação',
@@ -134,6 +135,10 @@ function specificDescription(text: string, aiDescription: string, deterministic:
 }
 
 export function deterministicCashParse(text: string): CashTransactionInput | null {
+  // Perguntas, saldo e cenários hipotéticos nunca são lançamentos. Essa barreira fica
+  // dentro do parser para continuar segura mesmo se uma nova rota futura chamar aqui.
+  if (isCashProtectedNonTransaction(text)) return null;
+
   const amount = amountFrom(text);
   const type = transactionType(text, amount);
   if (!type || !amount) return null;
@@ -151,21 +156,16 @@ export function isStrongDeterministicCashTransaction(
   text: string,
   parsed: CashTransactionInput | null = deterministicCashParse(text)
 ): boolean {
-  if (!parsed) return false;
+  if (!parsed || isCashProtectedNonTransaction(text)) return false;
   const clean = text.trim();
   if (!clean || clean.length > 140 || /\n/.test(clean)) return false;
 
-  // Mais de um valor ou mais de um movimento já merece interpretação semântica.
   if (amountMatches(clean).length !== 1) return false;
   const movements = clean.match(MOVEMENT) ?? [];
   if (movements.length > 1) return false;
 
   const explicitMovement = EXPENSE.test(clean) || INCOME.test(clean);
   const compactKnownCategory = clean.split(/\s+/).length <= 8 && parsed.category !== 'Outros';
-
-  // “gastei 50 no mercado”, “recebi 2000 de salário”, “farmácia 45” etc.
-  // ficam 100% em script. Categorias incertas, textos maiores ou formatos fora do
-  // esperado sobem para a IA.
   return explicitMovement && parsed.category !== 'Outros' || compactKnownCategory;
 }
 
@@ -173,14 +173,14 @@ export class CashParser {
   private readonly client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
 
   async parse(text: string): Promise<CashTransactionInput | null> {
-    const deterministic = deterministicCashParse(text);
+    // Também bloqueia ANTES da chamada ao GPT. Simulação e consulta custam zero IA
+    // e nunca chegam a gerar resumo de confirmação financeira.
+    if (isCashProtectedNonTransaction(text)) return null;
 
-    // Caminho barato e previsível: lançamento muito direto não consome GPT.
+    const deterministic = deterministicCashParse(text);
     if (isStrongDeterministicCashTransaction(text, deterministic)) return deterministic;
     if (!this.client) return deterministic;
 
-    // Saiu um pouco do padrão esperado: a IA assume a interpretação e as regras
-    // determinísticas permanecem como fallback de segurança.
     try {
       const response = await this.client.responses.parse({
         model: env.openaiModel,
@@ -188,13 +188,14 @@ export class CashParser {
           {
             role: 'system',
             content: [
-              'Você interpreta lançamentos do Arles Cash em português brasileiro quando a frase saiu do padrão simples coberto por regras.',
+              'Você interpreta APENAS lançamentos novos do Arles Cash em português brasileiro quando a frase saiu do padrão simples coberto por regras.',
               'Entenda linguagem natural, erros de digitação, abreviações, gírias e frases curtas.',
+              'Perguntas, hipóteses, simulações, cálculos de saldo e frases com “se eu gastar/receber” NÃO são lançamentos: is_transaction=false.',
               'Nunca invente valor, data, loja, pessoa ou descrição que não estejam sustentados pela mensagem.',
-              'expense é dinheiro que saiu do disponível; income é dinheiro que entrou.',
+              'expense é dinheiro que realmente saiu do disponível; income é dinheiro que realmente entrou.',
               '“guardei”, “reservei” ou “separei dinheiro” é expense na categoria Reserva.',
-              'Frases como “120 no almoço” ou “farmácia 45” são despesas.',
-              'Se não houver lançamento e valor identificáveis, is_transaction=false.',
+              'Frases como “120 no almoço” ou “farmácia 45” são despesas somente quando estão sendo informadas como fato, não pergunta/simulação.',
+              'Se não houver lançamento REAL e valor identificáveis, is_transaction=false.',
               'Use SOMENTE: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
               'Toda entrada usa Receita. Dinheiro guardado usa Reserva.',
               'merchant é loja, pessoa ou local somente quando estiver claro.',
