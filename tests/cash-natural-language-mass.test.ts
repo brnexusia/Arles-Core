@@ -151,14 +151,21 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(deterministicCashQuery(route!.canonical)).not.toBeNull();
   });
 
-  it.each([
-    'seguinte, saldo',
-    'ó, me mostra meus gastos hoje',
-    'só uma coisa: quanto entrou e quanto saiu hoje',
-    'pra eu conferir, meus registros',
-    'quando puder, meus cofrinhos',
-    'faz um favor, planos'
-  ])('aceita novas formas coloquiais da camada dobrada: %s', input => {
-    expect(classifyCashDeterministicLanguage(input)).not.toBeNull();
+  it('aceita amostras reais espalhadas pela nova camada coloquial dobrada', () => {
+    const indexes = [
+      0,
+      Math.floor(colloquialExamples.length / 4),
+      Math.floor(colloquialExamples.length / 2),
+      Math.floor((colloquialExamples.length * 3) / 4),
+      colloquialExamples.length - 1
+    ];
+
+    for (const index of indexes) {
+      const example = colloquialExamples[index];
+      expect(example).toBeDefined();
+      const route = classifyCashDeterministicLanguage(example!.input);
+      expect(route?.intent).toBe(example!.intent);
+      expect(route?.canonical).toBe(example!.canonical);
+    }
   });
 });
