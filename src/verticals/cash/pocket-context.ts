@@ -54,12 +54,6 @@ function hasPocketCreationVerb(value: string): boolean {
   return /\b(cria|criar|crie|abre|abrir|faz|faca|faça|novo|nova)\b/.test(value);
 }
 
-/**
- * Normaliza mensagens agrupadas pelo debounce do WhatsApp antes de entregá-las
- * ao parser de cofrinhos. Isso evita que comandos consecutivos virem o nome de
- * um único cofrinho, por exemplo:
- * "Criar cofrinho Sinapse. Criar cofrinho Arles Cash".
- */
 export function normalizeCashPocketBatchInput(input: string): string {
   return String(input ?? '')
     .replace(
@@ -93,10 +87,6 @@ export function parseCashPocketDeleteReference(input: string): CashPocketDeleteR
   return null;
 }
 
-/**
- * Reconhece perguntas curtas que dependem da conversa anterior de cofrinhos.
- * Exemplos reais: “e no cofrinho?”, “e neles?”, “quanto tenho nos cofrinhos?”.
- */
 export function parseCashPocketBalanceReference(input: string): CashPocketBalanceReference {
   const value = normalizeCashText(input).replace(/[!?.,]+$/g, '').trim();
   if (!value || hasDeleteVerb(value) || hasPocketCreationVerb(value)) return null;
@@ -271,7 +261,7 @@ function pocketBalanceResult(pockets: CashPocketBalance[]): VerticalResult {
   ].join('\n'));
 }
 
-async function handlePocketBalanceReference(context: VerticalContext, reference: CashPocketBalanceReference): Promise<VerticalResult | null> {
+async function handlePocketBalanceReference(context: VerticalContext, reference: NonNullable<CashPocketBalanceReference>): Promise<VerticalResult | null> {
   const all = await cashPocketService.list(context.company.id);
   if (!all.length) return text('Você ainda não tem cofrinhos. Para criar um: “criar cofrinho Viagem”.');
 
@@ -315,9 +305,6 @@ async function rememberContextFromPocketCommand(context: VerticalContext): Promi
 }
 
 export async function handleCashPocketContextCommand(context: VerticalContext): Promise<VerticalResult | null> {
-  // Relatórios já tinham um mecanismo de contexto dedicado, mas ele não estava ligado
-  // à rota principal do Cash. Aqui ele passa a ser executado cedo e pode entender
-  // continuações como “e da semana passada?” sem sequestrar consultas financeiras.
   const report = await handleCashReportContext(context);
   if (report) return report;
 
