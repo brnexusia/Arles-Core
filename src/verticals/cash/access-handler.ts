@@ -2,9 +2,11 @@ import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
+import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashConversationHandler } from './conversation.js';
 import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
 import { fastCashFaq } from './fast-faq.js';
+import { handleCashLedgerDeterministic } from './ledger.js';
 import { cashReports } from './reports.js';
 import { cashService } from './service.js';
 
@@ -51,8 +53,6 @@ export function extractCashOnboardingName(value: string): string | null {
 
   if (!candidates.length) return null;
 
-  // Se a pessoa repetiu “Stefane” / “Meu nome é Stefane” durante o debounce,
-  // isso continua sendo uma única resposta, não dois nomes nem duas interações.
   const unique = new Map<string, { name: string; explicit: boolean }>();
   for (const candidate of candidates) {
     const key = nameKey(candidate.name);
@@ -62,13 +62,8 @@ export function extractCashOnboardingName(value: string): string | null {
 
   if (unique.size === 1) return [...unique.values()][0]!.name;
 
-  // Em um lote misto, uma frase explícita como “meu nome é Stefane” vence outros
-  // trechos curtos que por acaso também contenham apenas letras.
   const explicit = [...unique.values()].filter(candidate => candidate.explicit);
   if (explicit.length === 1) return explicit[0]!.name;
-
-  // Mais de um nome diferente no mesmo lote é ambíguo; melhor perguntar novamente
-  // do que gravar um dado incorreto.
   return null;
 }
 
@@ -172,9 +167,7 @@ export class CashAccessHandler implements VerticalHandler {
 
     if (state.onboarding_state === 'awaiting_name') {
       const name = extractCashOnboardingName(combinedText);
-      if (!name) {
-        return text('Antes de começar, me diz seu nome 😊');
-      }
+      if (!name) return text('Antes de começar, me diz seu nome 😊');
       await saveName(company.id, name);
       return text([
         `Perfeito, ${name}! 😊`,
@@ -218,12 +211,11 @@ export class CashAccessHandler implements VerticalHandler {
         `Perfeito, ${name}! 🎉`,
         `E-mail cadastrado: ${email}`,
         'Seu trial gratuito de 7 dias está ativo.',
-        'Você pode registrar receitas, despesas e consultar seu saldo aqui mesmo.',
+        'Você pode registrar receitas, despesas, criar cofrinhos e consultar seu saldo aqui mesmo.',
         'Já pode começar! Tente mandar: “Gastei 50 no mercado”'
       ].join('\n'));
     }
 
-    // Salvaguarda para contas legadas que por algum motivo chegaram ativas sem e-mail.
     if (state.onboarding_state === 'active' && !state.owner_email) {
       await db.query(
         `update cash_settings set onboarding_state='awaiting_email',updated_at=now() where company_id=$1`,
@@ -232,19 +224,29 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
-    // Exclusão é uma intenção operacional de alta prioridade. Ela nunca passa pelo
-    // parser de valores: números como “4 registros” não podem virar despesa de R$4.
+    // Administração de cofrinhos vem antes do roteador financeiro. Uma frase como
+    // “criar cofrinho Emprego” nunca pode cair no parser de despesa.
+    const pocketCommand = await handleCashPocketCommand(context);
+    if (pocketCommand) return pocketCommand;
+
+    // Saldo e simulações são operações de leitura/cálculo. Nunca criam lançamento e
+    // são resolvidas 100% por script + banco antes de qualquer chamada de IA.
+    const ledger = await handleCashLedgerDeterministic(context);
+    if (ledger) return ledger;
+
+    // Exclusão continua com alta prioridade para números como “apaga 4 registros”
+    // jamais serem interpretados como dinheiro.
     if (isCashDeletionCommand(combinedText)) {
       const bulk = await handleCashBulkDeletionCommand(context);
       if (bulk) return bulk;
       return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
     }
 
-    // FAQ previsível não precisa consumir IA. Respostas institucionais e de uso comum
-    // são resolvidas por script antes de entrar na camada semântica do GPT.
     const fastFaq = await fastCashFaq(context);
     if (fastFaq) return fastFaq;
 
+    // IA é fallback semântico para linguagem fora das centenas de combinações
+    // determinísticas. Ela classifica/reescreve; o Core e o banco continuam executando.
     return await personalizePaymentMenu(company.id, await cashAiFirstHandler.handle(context));
   }
 }

@@ -14,6 +14,7 @@ export interface CashQuotedRecord {
   transaction_date: string;
   created_at: Date | string;
   source_message_id: string | null;
+  pocket_id: string | null;
 }
 
 export async function findCashRecordsByQuotedMessage(input: {
@@ -28,7 +29,7 @@ export async function findCashRecordsByQuotedMessage(input: {
 
   const result = await db.query(
     `select id::text,type,amount::float8,category,merchant,description,
-            transaction_date,created_at,source_message_id
+            transaction_date,created_at,source_message_id,pocket_id::text as pocket_id
      from cash_transactions
      where company_id=$1
        and ($2::text='' or user_phone=$2)

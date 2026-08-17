@@ -18,12 +18,17 @@ import {
   withConversationLock
 } from '../infrastructure/redis.js';
 import { evolution } from '../whatsapp/evolution.client.js';
-import { isMessageUpsert, normalizeEvolutionMessage } from '../whatsapp/normalize.js';
+import {
+  isMessageUpsert,
+  normalizeEvolutionEditedMessage,
+  normalizeEvolutionMessage
+} from '../whatsapp/normalize.js';
 import { getVerticalModule } from '../verticals/router.js';
 import type { OutgoingAction, VerticalModule, VerticalResult } from '../verticals/vertical.js';
 import { mediaAiService } from '../media/media-ai.service.js';
 import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
+import { handleCashEditedMessage } from '../verticals/cash/edited-message.js';
 
 export class ArlesEngine {
   private isCashSharedInstance(instanceName: string): boolean {
@@ -31,9 +36,7 @@ export class ArlesEngine {
   }
 
   private outboundInstance(company: Company, message?: NormalizedMessage): string {
-    if (company.vertical === 'cash' && env.cashEvolutionInstance) {
-      return env.cashEvolutionInstance;
-    }
+    if (company.vertical === 'cash' && env.cashEvolutionInstance) return env.cashEvolutionInstance;
     return message?.instanceName || company.evolution_instance;
   }
 
@@ -42,7 +45,6 @@ export class ArlesEngine {
     cashShared: boolean;
     route: 'instance' | 'cash-shared' | 'none';
   }> {
-    // Delivery e outras verticais sempre têm prioridade pela própria instância.
     const instanceCompany = await getCompanyByInstance(message.instanceName);
     if (instanceCompany && instanceCompany.vertical !== 'cash') {
       return { company: instanceCompany, cashShared: false, route: 'instance' };
@@ -50,7 +52,6 @@ export class ArlesEngine {
 
     const cashShared = this.isCashSharedInstance(message.instanceName);
     if (cashShared) {
-      // Ecos de mensagens que saíram pelo número central nunca criam uma nova conta.
       if (message.fromMe) {
         const existingCash = await getCashCompanyByOwnerPhone(message.phone);
         return {
@@ -60,14 +61,8 @@ export class ArlesEngine {
         };
       }
 
-      // WhatsApp-first: um número remetente é uma conta. Se for o primeiro contato,
-      // a conta e o trial são criados automaticamente, sem cadastro/painel.
       const cashAccount = await getOrCreateCashCompanyByOwnerPhone(message.phone);
-      return {
-        company: cashAccount.company,
-        cashShared: true,
-        route: 'cash-shared'
-      };
+      return { company: cashAccount.company, cashShared: true, route: 'cash-shared' };
     }
 
     return {
@@ -105,14 +100,8 @@ export class ArlesEngine {
     }
   }
 
-  private async applyResult(
-    company: Company,
-    message: NormalizedMessage,
-    result: VerticalResult
-  ): Promise<void> {
-    if (result.pauseSeconds) {
-      await pauseConversation(company.id, message.phone, result.pauseSeconds);
-    }
+  private async applyResult(company: Company, message: NormalizedMessage, result: VerticalResult): Promise<void> {
+    if (result.pauseSeconds) await pauseConversation(company.id, message.phone, result.pauseSeconds);
     if (result.actions.length) await this.sendActions(company, message, result.actions);
     if (result.followup) {
       await scheduleFollowup({
@@ -136,11 +125,7 @@ export class ArlesEngine {
         instanceName: this.outboundInstance(company, message),
         messageId: message.messageId
       });
-
-      const analysis = await mediaAiService.analyzeImage(
-        media.base64,
-        media.mimeType
-      );
+      const analysis = await mediaAiService.analyzeImage(media.base64, media.mimeType);
 
       if (module.handleImage) {
         const result = await module.handleImage(
@@ -149,36 +134,24 @@ export class ArlesEngine {
         );
         if (result) return { result };
       }
-
       return { text: `[Imagem enviada pelo cliente]\n${analysis.description}` };
     } catch (error) {
       console.error('[Arles] falha processando imagem:', error);
-
       await this.sendActions(company, message, [{
         type: 'text',
-        text:
-          'Não consegui analisar essa imagem agora. Pode tentar enviar novamente ou me explicar em texto? 😊'
+        text: 'Não consegui analisar essa imagem agora. Pode tentar enviar novamente ou me explicar em texto? 😊'
       }]);
-
       return {};
     }
   }
 
-  private async processAudio(
-    company: Company,
-    message: NormalizedMessage
-  ): Promise<string | null> {
+  private async processAudio(company: Company, message: NormalizedMessage): Promise<string | null> {
     try {
       const media = await evolution.getMediaBase64({
         instanceName: this.outboundInstance(company, message),
         messageId: message.messageId
       });
-
-      const text = await mediaAiService.transcribeAudio(
-        media.base64,
-        media.mimeType || 'audio/ogg'
-      );
-
+      const text = await mediaAiService.transcribeAudio(media.base64, media.mimeType || 'audio/ogg');
       if (!text) {
         await this.sendActions(company, message, [{
           type: 'text',
@@ -186,22 +159,22 @@ export class ArlesEngine {
         }]);
         return null;
       }
-
       return `[Áudio transcrito]\n${text}`;
     } catch (error) {
       console.error('[Arles] falha processando áudio:', error);
-
       await this.sendActions(company, message, [{
         type: 'text',
         text: 'Não consegui entender o áudio. Pode me mandar em texto? 😊'
       }]);
-
       return null;
     }
   }
 
   async handleEvolution(payload: unknown): Promise<void> {
-    const message = normalizeEvolutionMessage(payload);
+    // Edição tem formato diferente entre versões da Evolution. Tentamos normalizá-la
+    // antes da mensagem comum; update de status/ACK sem texto editado retorna null.
+    const edited = normalizeEvolutionEditedMessage(payload);
+    const message = edited ?? normalizeEvolutionMessage(payload);
     const phoneTail = message.phone ? message.phone.slice(-4) : '----';
 
     if (!message.instanceName || !message.remoteJid || !message.phone) {
@@ -212,21 +185,20 @@ export class ArlesEngine {
       console.info(`[Arles] Webhook ignorado: grupo/broadcast instance=${message.instanceName} phone=*${phoneTail}`);
       return;
     }
-    if (message.event && !isMessageUpsert(message.event)) {
+    if (!message.isEdit && message.event && !isMessageUpsert(message.event)) {
       console.info(`[Arles] Webhook ignorado: event=${message.event} instance=${message.instanceName} phone=*${phoneTail}`);
       return;
     }
 
     const resolved = await this.resolveCompany(message);
     const company = resolved.company;
-
     if (!company) {
       if (!message.fromMe) console.warn(`[Arles] Instância sem empresa: ${message.instanceName}`);
       return;
     }
 
     console.info(
-      `[Arles] Webhook roteado: instance=${message.instanceName} route=${resolved.route} vertical=${company.vertical} event=${message.event || 'sem_evento'} type=${message.type} phone=*${phoneTail}`
+      `[Arles] Webhook roteado: instance=${message.instanceName} route=${resolved.route} vertical=${company.vertical} event=${message.event || 'sem_evento'} type=${message.type}${message.isEdit ? ' edit=true' : ''} phone=*${phoneTail}`
     );
 
     const module = getVerticalModule(company.vertical);
@@ -235,14 +207,8 @@ export class ArlesEngine {
       return;
     }
 
-    // O número central do Cash é gerenciado pelo próprio produto. Ecos de relatórios,
-    // avisos e confirmações não podem pausar o assistente.
-    if (message.fromMe && resolved.cashShared && company.vertical === 'cash') {
-      return;
-    }
+    if (message.fromMe && resolved.cashShared && company.vertical === 'cash') return;
 
-    // Nas demais verticais, mensagem escrita manualmente pela loja pausa a IA por 1h.
-    // Mensagens enviadas pelo próprio Arles possuem marcador curto e são ignoradas.
     if (message.fromMe) {
       const wasSystem = await consumeSystemSending(company.id, message.phone);
       if (!wasSystem) {
@@ -252,16 +218,37 @@ export class ArlesEngine {
       return;
     }
 
-    // Cash precisa receber a mensagem mesmo expirado para conseguir mostrar o paywall
-    // e permitir reativação. As outras verticais mantêm o bloqueio global normal.
     if (!companyCanUseEngine(company) && company.vertical !== 'cash') {
       console.warn(
         `[Arles] Engine bloqueado para company=${company.id} vertical=${company.vertical} access_active=${company.access_active} subscription_status=${company.subscription_status}`
       );
       return;
     }
-    if (!(await onceMessage(company.id, message.messageId))) {
-      console.info(`[Arles] Mensagem duplicada ignorada: company=${company.id} messageId=${message.messageId}`);
+
+    const dedupeId = message.isEdit
+      ? `edit:${message.editedMessageId || message.messageId}:${message.messageId}:${message.text}`.slice(0, 900)
+      : message.messageId;
+    if (!(await onceMessage(company.id, dedupeId))) {
+      console.info(`[Arles] Mensagem duplicada ignorada: company=${company.id} messageId=${dedupeId}`);
+      return;
+    }
+
+    // Edição de mensagem é exclusiva do Cash neste momento. Delivery e demais
+    // verticais continuam com o fluxo anterior, sem qualquer mudança de comportamento.
+    if (message.isEdit) {
+      if (company.vertical !== 'cash') return;
+      const result = await handleCashEditedMessage({ company, message });
+      if (!result) return;
+
+      await logIncoming({
+        companyId: company.id,
+        phone: message.phone,
+        messageId: dedupeId,
+        messageType: 'text',
+        body: `[Mensagem editada] ${message.text}`,
+        rawPayload: payload
+      });
+      await this.applyResult(company, message, result);
       return;
     }
 
@@ -281,7 +268,6 @@ export class ArlesEngine {
     }
 
     let messageText: string | null = null;
-
     if (message.type === 'text') {
       messageText = message.text;
     } else if (message.type === 'image') {
@@ -303,8 +289,6 @@ export class ArlesEngine {
       return;
     }
 
-    // Depois que o Cash já mostrou o resumo de um lançamento, a decisão do usuário
-    // precisa ser imediata. Sim, não e edição do resumo não passam pelo agrupamento.
     if (company.vertical === 'cash' && module.handlePendingInteraction) {
       const immediate = await module.handlePendingInteraction({ company, message, combinedText: messageText });
       if (immediate) {

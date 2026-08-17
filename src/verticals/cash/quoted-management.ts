@@ -1,5 +1,7 @@
+import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { cashService } from './service.js';
+import { cashPocketService } from './cofrinhos.js';
 import {
   clearCashEditState,
   setCashEditState
@@ -33,7 +35,7 @@ function recordLabel(row: CashQuotedRecord, index?: number): string {
 export function cashQuotedSelectionIndex(input: string, count: number): number | null {
   if (count <= 1) return count === 1 ? 0 : null;
   const value = normalizeCashText(input);
-  const match = value.match(/\b(?:item|registro|registo|lancamento|lancamento|numero|n|#)\s*(\d{1,2})\b/);
+  const match = value.match(/\b(?:item|registro|registo|lancamento|lançamento|numero|n|#)\s*(\d{1,2})\b/);
   if (!match?.[1]) return null;
   const index = Number(match[1]) - 1;
   return index >= 0 && index < count ? index : null;
@@ -49,8 +51,6 @@ export function cashQuotedEditPatch(input: string): CashEditPatch {
   const value = normalizeCashText(input);
   const patch = parseCashEditPatch(input);
 
-  // Em uma resposta citada, frases curtas como “essa foi entrada” ou “isso era
-  // despesa” são inequívocas porque a própria citação define o alvo.
   if (/\b(?:foi|era|e|é|tipo)\s+(?:uma\s+)?(?:entrada|receita)\b/.test(value)) {
     patch.type = 'income';
     patch.category = 'Receita';
@@ -69,13 +69,22 @@ export function cashQuotedEditIntent(input: string): boolean {
   return hasCashEditPatch(cashQuotedEditPatch(input));
 }
 
-function chooseMessage(rows: CashQuotedRecord[], action: 'editar' | 'apagar'): VerticalResult {
+export function cashQuotedPocketIntent(input: string): boolean {
+  const value = normalizeCashText(input);
+  if (!/\bcofrinho\b/.test(value)) return false;
+  if (/\b(como|posso|consigo|tem como|da pra|da para)\b/.test(value)) return false;
+  return /\b(coloc|bota|poe|põe|joga|move|manda|organiza|separa|deixa|fica|vai)\w*/.test(value)
+    || /\b(?:no|pro|para o|naquele|nesse)\s+cofrinho\b/.test(value);
+}
+
+function chooseMessage(rows: CashQuotedRecord[], action: 'editar' | 'apagar' | 'organizar'): VerticalResult {
+  const example = action === 'editar' ? 'editar item 2' : action === 'apagar' ? 'apaga item 2' : 'coloca item 2 no cofrinho Viagem';
   return text([
     `Essa mensagem gerou ${rows.length} lançamentos. Qual deles você quer ${action}?`,
     '',
     ...rows.map((row, index) => recordLabel(row, index + 1)),
     '',
-    `Responda citando a mesma mensagem com “${action === 'editar' ? 'editar' : 'apaga'} item 2”, por exemplo.`
+    `Responda citando a mesma mensagem com “${example}”, por exemplo.`
   ].join('\n'));
 }
 
@@ -109,10 +118,11 @@ export async function handleCashQuotedManagement(context: VerticalContext): Prom
   const quotedText = String(context.message.quotedText ?? '').trim();
   if (!quotedMessageId && !quotedText) return null;
 
+  const wantsPocket = cashQuotedPocketIntent(context.combinedText);
   const wantsDelete = cashQuotedDeleteIntent(context.combinedText);
   const patch = cashQuotedEditPatch(context.combinedText);
   const wantsEdit = cashQuotedEditIntent(context.combinedText);
-  if (!wantsDelete && !wantsEdit) return null;
+  if (!wantsPocket && !wantsDelete && !wantsEdit) return null;
 
   const rows = await findCashRecordsByQuotedMessage({
     companyId: context.company.id,
@@ -123,8 +133,23 @@ export async function handleCashQuotedManagement(context: VerticalContext): Prom
   if (!rows.length) return null;
 
   const index = cashQuotedSelectionIndex(context.combinedText, rows.length);
-  if (index == null) return chooseMessage(rows, wantsDelete ? 'apagar' : 'editar');
+  if (index == null) return chooseMessage(rows, wantsPocket ? 'organizar' : wantsDelete ? 'apagar' : 'editar');
   const row = rows[index]!;
+
+  if (wantsPocket) {
+    const reference = await cashPocketService.findMentioned(context.company.id, context.combinedText);
+    if (!reference.pocket) {
+      const name = reference.requestedName || 'informado';
+      return text(`Não encontrei o cofrinho *${name}*. Crie primeiro com “criar cofrinho ${name}” ou mande “meus cofrinhos”.`);
+    }
+    await db.query(
+      `update cash_transactions set pocket_id=$3,updated_at=now()
+       where company_id=$1 and id=$2`,
+      [context.company.id, row.id, reference.pocket.id]
+    );
+    await clearCashEditState(context.company.id, context.message.phone);
+    return text(`🐷 Organizei ${recordLabel(row)} no cofrinho *${reference.pocket.name}*.`);
+  }
 
   if (wantsDelete) {
     await cashService.deleteTransaction(context.company.id, row.id);
@@ -146,6 +171,7 @@ export async function handleCashQuotedManagement(context: VerticalContext): Prom
     '• “o valor foi 80”',
     '• “essa foi entrada”',
     '• “foi ontem”',
-    '• “descrição: mercado”'
+    '• “descrição: mercado”',
+    '• “coloca no cofrinho Viagem”'
   ].join('\n'));
 }

@@ -12,7 +12,8 @@ describe('cash help por seções', () => {
     expect(cashHelpSection('ajuda')).toBe('menu');
     const message = cashHelpMessage('menu');
     expect(message).toContain('1️⃣ Registrar');
-    expect(message).toContain('5️⃣ Planos');
+    expect(message).toContain('3️⃣ Criar e usar cofrinhos');
+    expect(message).toContain('6️⃣ Planos');
     expect(message).not.toContain('gastei 50 no mercado');
   });
 
@@ -28,8 +29,15 @@ describe('cash help por seções', () => {
     expect(cashHelpMessage('query')).toContain('quanto gastei hoje?');
   });
 
+  it('entende ajuda natural de cofrinhos', () => {
+    expect(cashHelpSection('como uso cofrinhos?')).toBe('pockets');
+    expect(cashHelpMessage('pockets')).toContain('criar cofrinho Emprego');
+  });
+
   it('aceita número da seção', () => {
-    expect(cashHelpSection('3')).toBe('manage');
-    expect(cashHelpSection('opção 4')).toBe('reports');
+    expect(cashHelpSection('3')).toBe('pockets');
+    expect(cashHelpSection('opção 4')).toBe('manage');
+    expect(cashHelpSection('5')).toBe('reports');
+    expect(cashHelpSection('opção 6')).toBe('plans');
   });
 });

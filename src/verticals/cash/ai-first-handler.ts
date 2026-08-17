@@ -4,7 +4,12 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashBroadHandler } from './broad-handler.js';
+import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
+import {
+  handleCashLedgerDeterministic,
+  isCashProtectedNonTransaction
+} from './ledger.js';
 import { deletionTarget } from './management.js';
 
 const SemanticSchema = z.object({
@@ -12,6 +17,8 @@ const SemanticSchema = z.object({
     'transaction',
     'query',
     'balance',
+    'projection',
+    'pocket',
     'history',
     'weekly_report',
     'monthly_report',
@@ -55,6 +62,7 @@ export function isCashNaturalRecordListRequest(input: string): boolean {
 }
 
 function obviousTransaction(input: string): boolean {
+  if (isCashProtectedNonTransaction(input)) return false;
   const value = normalize(input);
   const hasMoney = /(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/.test(value);
   const movement = /\b(gastei|gasto|paguei|pague|comprei|recebi|ganhei|entrou|vendi|faturei|guardei|reservei|separei)\b/.test(value);
@@ -73,35 +81,38 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
 
   const quoted = String(context.message.quotedText ?? '').trim();
   try {
+    console.info(`[CashAI] fallback semântico acionado company=${context.company.id} phone=*${context.message.phone.slice(-4)}`);
     const response = await client.responses.parse({
       model: env.openaiModel,
       input: [
         {
           role: 'system',
           content: [
-            'Você é a camada principal de compreensão do Arles Cash, um assistente financeiro pessoal no WhatsApp.',
+            'Você é a camada de FALLBACK de compreensão do Arles Cash, um assistente financeiro pessoal no WhatsApp.',
+            'A maior parte das frases já foi resolvida por regras. Você entra apenas quando a linguagem ficou fora dessas rotas.',
             'Entenda português brasileiro natural, erros, gírias, frases incompletas e contexto de mensagem respondida.',
-            'Você NÃO consulta banco, NÃO calcula saldo real e NÃO inventa lançamentos. Apenas classifica e reescreve para o motor seguro executar.',
-            'transaction: a pessoa informa um lançamento novo. Não reescreva; o parser financeiro fará a extração.',
-            'query: quer consultar registros, gastos, receitas, lojas, categorias, períodos ou listas. rewritten_text deve ser uma pergunta explícita e curta preservando filtros.',
-            'Pedidos como “fala meus registros”, “me mostra meus lançamentos” ou “lista meus registros” são query, nunca help.',
-            'Quando um pedido de lista/consulta não trouxer período, considere hoje.',
-            'balance: quer saber saldo, quanto sobrou ou situação financeira geral.',
+            'Você NÃO consulta banco, NÃO calcula saldo real, NÃO salva e NÃO apaga nada. Apenas classifica e reescreve para o Core seguro executar.',
+            'transaction: a pessoa afirma um lançamento NOVO e REAL que já aconteceu/acontece. Nunca classifique hipótese, pergunta ou simulação como transaction.',
+            'query: quer consultar registros, gastos, receitas, lojas, categorias, períodos ou listas. rewritten_text deve preservar filtros.',
+            'balance: quer saber o saldo real atual/acumulado. rewritten_text pode ser “saldo”.',
+            'projection: quer simular quanto sobrará/terá caso gaste ou receba um valor. rewritten_text DEVE manter todos os valores e virar frase explícita como “se eu gastar 5,67, quanto fica meu saldo?”.',
+            'pocket: quer criar/listar/consultar um cofrinho, caixinha, envelope ou separação de dinheiro. Reescreva usando a palavra “cofrinho” e preserve o nome. Ex.: “faz uma caixinha trabalho” -> “criar cofrinho Trabalho”.',
             'history: quer ver lançamentos recentes quando disser explicitamente histórico, últimos ou recentes.',
             'weekly_report/monthly_report: quer relatório/fechamento da semana ou mês.',
             'edit: quer explicitamente corrigir um lançamento existente.',
             'delete: quer explicitamente apagar um lançamento existente. Nunca use para apagar conta, cadastro, perfil ou dados pessoais.',
             'undo: quer desfazer a última exclusão de lançamento.',
-            'help: quer aprender como usar alguma função. Se for específico, use rewritten_text como uma destas opções: “ajuda registrar”, “ajuda consultar”, “ajuda editar”, “ajuda relatorios” ou “ajuda planos”. Se for geral, use “ajuda”.',
-            'Importante: “como consulto meus gastos?” é help; “quanto gastei hoje?” é query.',
+            'help: quer aprender como usar alguma função.',
             'plans: quer preço, assinatura, plano ou pagar.',
             'trial: pergunta sobre teste grátis, período gratuito, validade ou status do trial.',
             'categories: pergunta sobre categorias.',
             'schedule: pergunta quando relatórios automáticos são enviados.',
-            'acknowledgement: resposta social curta sem nova ação, como certo, entendi, beleza, obrigado.',
+            'acknowledgement: resposta social curta sem nova ação.',
             'unknown: conversa que não cabe com segurança nas funções acima.',
-            'Se a pessoa disser que já falou/citou os gastos acima, ou pedir uma lista do que gastou, isso é query — não transforme a frase em termo de busca literal.',
-            'Se houver mensagem citada, use-a como contexto, sem inventar conteúdo.',
+            'IMPORTANTE: “tenho saldo de 10, se eu gastar 5,67 quanto fica?” é projection, NUNCA transaction.',
+            'IMPORTANTE: “se eu receber 100 e gastar 20 quanto terei?” é projection, NUNCA dois lançamentos.',
+            'IMPORTANTE: números em perguntas não são prova de lançamento.',
+            'Se houver mensagem citada, use-a como contexto sem inventar conteúdo.',
             quoted ? `Mensagem citada/respondida: ${quoted}` : 'Não há mensagem citada nesta interação.'
           ].join('\n')
         },
@@ -118,7 +129,6 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
 
 function canonical(intent: SemanticIntent['intent']): string | null {
   const map: Partial<Record<SemanticIntent['intent'], string>> = {
-    balance: 'saldo',
     history: 'histórico',
     weekly_report: 'relatório semanal',
     monthly_report: 'relatório mensal',
@@ -133,27 +143,28 @@ function canonical(intent: SemanticIntent['intent']): string | null {
 
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    // Pedidos diretos de lista são determinísticos e não precisam gastar IA.
-    // Sem período explícito, a regra do Cash é consultar somente hoje.
     if (isCashNaturalRecordListRequest(context.combinedText)) {
       return await cashBroadHandler.handle({ ...context, combinedText: 'quais foram meus registros hoje?' });
     }
 
-    // Exclusões diretas têm prioridade sobre a IA. Isso é especialmente importante
-    // para frases curtas de continuidade como “cancela ele” e “apaga esse”, que se
-    // referem ao lançamento recém-tratado e não podem ser reclassificadas como edição.
-    if (deletionTarget(context.combinedText)) {
-      return await cashBroadHandler.handle(context);
+    if (deletionTarget(context.combinedText)) return await cashBroadHandler.handle(context);
+
+    // Uma segunda trava de leitura/cálculo antes do parser. Normalmente AccessHandler
+    // já resolveu isso; aqui protege chamadas internas e reescritas futuras.
+    if (isCashProtectedNonTransaction(context.combinedText)) {
+      const ledger = await handleCashLedgerDeterministic(context);
+      if (ledger) return ledger;
     }
 
-    // Lançamentos claros seguem para o parser financeiro. O parser também usa IA
-    // como extrator semântico, evitando uma chamada duplicada só para classificar.
-    if (obviousTransaction(context.combinedText)) {
-      return await cashBroadHandler.handle(context);
-    }
+    if (obviousTransaction(context.combinedText)) return await cashBroadHandler.handle(context);
 
     const understood = await semanticRoute(context);
-    if (!understood || understood.intent === 'unknown' || understood.intent === 'transaction') {
+    if (!understood || understood.intent === 'unknown') return await cashBroadHandler.handle(context);
+
+    if (understood.intent === 'transaction') {
+      if (isCashProtectedNonTransaction(context.combinedText)) {
+        return text('Entendi que você está fazendo uma pergunta/simulação, então não registrei nenhum lançamento. Pode dizer o cenário e eu calculo para você.');
+      }
       return await cashBroadHandler.handle(context);
     }
 
@@ -165,6 +176,24 @@ export class CashAiFirstHandler implements VerticalHandler {
       const requested = understood.rewritten_text?.trim() || context.combinedText;
       const section = cashHelpSection(requested) ?? 'menu';
       return text(cashHelpMessage(section));
+    }
+
+    if (understood.intent === 'balance') {
+      return await handleCashLedgerDeterministic({ ...context, combinedText: 'saldo' });
+    }
+
+    if (understood.intent === 'projection') {
+      const rewritten = understood.rewritten_text?.trim() || context.combinedText;
+      const result = await handleCashLedgerDeterministic({ ...context, combinedText: rewritten });
+      if (result) return result;
+      return text('Entendi que é uma simulação e não registrei nada. Me diga o valor que entraria/sairia e eu calculo com seu saldo atual.');
+    }
+
+    if (understood.intent === 'pocket') {
+      const rewritten = understood.rewritten_text?.trim() || context.combinedText;
+      const result = await handleCashPocketCommand({ ...context, combinedText: rewritten });
+      if (result) return result;
+      return text('Entendi que você está falando de um cofrinho. Pode dizer, por exemplo, “criar cofrinho Emprego”, “meus cofrinhos” ou “saldo do cofrinho Emprego”.');
     }
 
     if (understood.intent === 'edit' || understood.intent === 'delete') {
@@ -179,17 +208,13 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     if (understood.intent === 'query') {
       const rewritten = understood.rewritten_text?.trim();
-      if (rewritten) {
-        return await cashBroadHandler.handle({ ...context, combinedText: rewritten });
-      }
-      return await cashBroadHandler.handle(context);
+      return await cashBroadHandler.handle(rewritten
+        ? { ...context, combinedText: rewritten }
+        : context);
     }
 
     const command = canonical(understood.intent);
-    if (command) {
-      return await cashBroadHandler.handle({ ...context, combinedText: command });
-    }
-
+    if (command) return await cashBroadHandler.handle({ ...context, combinedText: command });
     return await cashBroadHandler.handle(context);
   }
 }

@@ -14,6 +14,8 @@ async function errorBody(response: Response): Promise<string> {
 
 export const EVOLUTION_WEBHOOK_EVENTS = [
   'MESSAGES_UPSERT',
+  'MESSAGES_EDITED',
+  'MESSAGES_UPDATE',
   'PRESENCE_UPDATE',
   'CONNECTION_UPDATE',
   'QRCODE_UPDATED'
@@ -21,8 +23,6 @@ export const EVOLUTION_WEBHOOK_EVENTS = [
 
 export function cashTypingDelayMs(text: string): number {
   const length = String(text ?? '').trim().length;
-  // Curto o bastante para não atrapalhar respostas rápidas, mas perceptível no WhatsApp.
-  // Respostas maiores ficam um pouco mais tempo como “digitando…”, sem parecer artificiais.
   return Math.min(1800, Math.max(800, Math.round(length * 10)));
 }
 
@@ -117,8 +117,6 @@ export class EvolutionClient {
       text: input.text
     };
 
-    // A Evolution exibe presença “composing” durante o delay do sendText.
-    // Aplicamos isso somente à instância central do Arles Cash para não alterar Delivery.
     if (env.cashEvolutionInstance && input.instanceName === env.cashEvolutionInstance) {
       body.delay = cashTypingDelayMs(input.text);
     }

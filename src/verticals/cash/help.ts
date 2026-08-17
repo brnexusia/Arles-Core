@@ -4,6 +4,7 @@ export type CashHelpSection =
   | 'menu'
   | 'register'
   | 'query'
+  | 'pockets'
   | 'manage'
   | 'reports'
   | 'plans';
@@ -12,11 +13,14 @@ export function cashHelpSection(input: string): CashHelpSection | null {
   const value = normalizeCashText(input);
   if (!value) return null;
 
+  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(cofrinho|cofrinhos|caixinha|caixinhas|separar dinheiro)\b/.test(value)
+    || /^(?:cofrinho|cofrinhos|caixinha|caixinhas)$/.test(value)) return 'pockets';
+
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(registrar|registro|lancar|lancamento|despesa|receita|guardar|reserva)\b/.test(value)
     || /^(?:registrar|registro|lancamentos?|despesas?|receitas?)$/.test(value)) return 'register';
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(consultar|consulta|pesquisar|pesquisa|buscar|gastos|saldo|historico|lista)\b/.test(value)
-    || /^(?:consultar|consulta|pesquisar|pesquisa|historico|saldo)$/.test(value)) return 'query';
+  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(consultar|consulta|pesquisar|pesquisa|buscar|gastos|saldo|historico|lista|simular|simulacao)\b/.test(value)
+    || /^(?:consultar|consulta|pesquisar|pesquisa|historico|saldo|simular|simulacao)$/.test(value)) return 'query';
 
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(editar|corrigir|alterar|apagar|remover|excluir|desfazer)\b/.test(value)
     || /^(?:editar|corrigir|apagar|remover|excluir|desfazer)$/.test(value)) return 'manage';
@@ -29,12 +33,13 @@ export function cashHelpSection(input: string): CashHelpSection | null {
 
   if (/^(ajuda|menu|comandos|guia|guia de ajuda|tutorial|me ajuda|me ensina|como usar|como uso|o que voce faz|o que posso fazer|como funciona)[!.? ]*$/.test(value)) return 'menu';
 
-  const numbered = value.match(/^(?:opcao|opção)?\s*([1-5])$/);
+  const numbered = value.match(/^(?:opcao|opção)?\s*([1-6])$/);
   if (numbered?.[1] === '1') return 'register';
   if (numbered?.[1] === '2') return 'query';
-  if (numbered?.[1] === '3') return 'manage';
-  if (numbered?.[1] === '4') return 'reports';
-  if (numbered?.[1] === '5') return 'plans';
+  if (numbered?.[1] === '3') return 'pockets';
+  if (numbered?.[1] === '4') return 'manage';
+  if (numbered?.[1] === '5') return 'reports';
+  if (numbered?.[1] === '6') return 'plans';
 
   return null;
 }
@@ -51,6 +56,7 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• “guardei 300”',
       '',
       'Pode mandar vários lançamentos na mesma mensagem que eu separo para você.',
+      'Antes de salvar, eu mostro o que entendi e peço sua confirmação.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
@@ -58,17 +64,37 @@ export function cashHelpMessage(section: CashHelpSection): string {
 
   if (section === 'query') {
     return [
-      '🔎 *Consultar suas finanças*',
+      '🔎 *Consultar, saldo e simular*',
       '',
       'Pergunte do seu jeito:',
       '• “quanto gastei hoje?”',
       '• “faz uma lista do que gastei esse mês”',
-      '• “quanto gastei na SHEIN?”',
-      '• “quais foram meus gastos de ontem?”',
-      '• “qual foi meu maior gasto?”',
       '• “quanto tenho de saldo?”',
+      '• “se eu gastar 25, quanto fica meu saldo?”',
+      '• “tenho saldo de 100, se eu gastar 37,50 quanto sobra?”',
       '',
-      'Você também pode continuar uma consulta com: “e ontem?” ou “e mês passado?”.',
+      'Seu saldo é acumulado: entradas − saídas de todos os lançamentos.',
+      'Simulações não registram nada; servem apenas para fazer a conta.',
+      '',
+      'Digite *ajuda* para voltar ao menu.'
+    ].join('\n');
+  }
+
+  if (section === 'pockets') {
+    return [
+      '🐷 *Cofrinhos de organização*',
+      '',
+      'Separe seus lançamentos por finalidade sem duplicar dinheiro:',
+      '• “criar cofrinho Emprego”',
+      '• “criar cofrinho Viagem”',
+      '• “recebi 500 no cofrinho Emprego”',
+      '• “gastei 30 do cofrinho Viagem”',
+      '• “saldo do cofrinho Emprego”',
+      '• “quanto gastei no cofrinho Viagem?”',
+      '• “extrato do cofrinho Emprego”',
+      '• “meus cofrinhos”',
+      '',
+      'Você também pode responder/citar um lançamento e dizer “coloca esse no cofrinho Viagem”.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
@@ -85,7 +111,8 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• “remove o 2”',
       '• “coloca ele de novo” para desfazer uma exclusão recente',
       '',
-      'Antes de apagar ou alterar, eu só executo quando a intenção estiver clara.',
+      'Você pode citar a mensagem original para eu saber exatamente qual lançamento quer alterar.',
+      'Se você editar no próprio WhatsApp uma mensagem que originou um lançamento, eu tento sincronizar o registro correspondente.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
@@ -129,11 +156,12 @@ export function cashHelpMessage(section: CashHelpSection): string {
     'O que você quer aprender?',
     '',
     '1️⃣ Registrar gastos, receitas e reservas',
-    '2️⃣ Consultar gastos, saldo e histórico',
-    '3️⃣ Editar ou excluir registros',
-    '4️⃣ Relatórios e resumos',
-    '5️⃣ Planos, pagamento e trial',
+    '2️⃣ Consultar saldo, gastos e fazer simulações',
+    '3️⃣ Criar e usar cofrinhos',
+    '4️⃣ Editar ou excluir registros',
+    '5️⃣ Relatórios e resumos',
+    '6️⃣ Planos, pagamento e trial',
     '',
-    'Responda com o número ou fale naturalmente, por exemplo: “como consulto meus gastos?”.'
+    'Responda com o número ou fale naturalmente, por exemplo: “como crio um cofrinho?”.'
   ].join('\n');
 }
