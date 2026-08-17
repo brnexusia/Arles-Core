@@ -10,8 +10,8 @@ import { registerCashRoutes } from './routes.js';
 export const cashModule: VerticalModule = {
   id: 'cash',
   name: 'Arles Cash',
-  version: '2.0.0',
-  capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings'],
+  version: '2.1.0',
+  capabilities: ['cash.transactions', 'cash.summaries', 'cash.settings', 'cash.pockets'],
   handle: async context => formatCashUserResponse(context, await cashAccessHandler.handle(context)),
   handlePendingInteraction: async context =>
     (await handleCashPendingDeletion(context))
