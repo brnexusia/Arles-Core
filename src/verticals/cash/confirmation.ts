@@ -12,6 +12,14 @@ import {
   assignCashTransactionPocket,
   prepareCashPocketTransactions
 } from './pocket-assignment.js';
+import {
+  clearCashDeferredQuery,
+  consumeCashDeferredQuery,
+  rememberCashQueryContext,
+  rememberCashRecentRecordReference
+} from './conversation-state.js';
+import { handleCashLedgerDeterministic } from './ledger.js';
+import { cashQuery } from './query.js';
 
 const TTL_SECONDS = 15 * 60;
 
@@ -130,8 +138,8 @@ function applyPatch(item: CashTransactionInput, patch: CashEditPatch): CashTrans
   return {
     ...item,
     type,
-    amount: patch.amount ?? item.amount,
     category,
+    amount: patch.amount ?? item.amount,
     description: patch.description ?? item.description,
     transactionDate: patch.transaction_date ?? item.transactionDate
   };
@@ -181,12 +189,22 @@ export async function stageCashRegistration(
   ].join('\n'));
 }
 
+async function deferredResult(context: VerticalContext, query: string): Promise<VerticalResult | null> {
+  const ledger = await handleCashLedgerDeterministic({ ...context, combinedText: query });
+  if (ledger) return ledger;
+
+  const result = await cashQuery.handle(context.company.id, query);
+  if (result) await rememberCashQueryContext(context.company.id, context.message.phone, query);
+  return result;
+}
+
 export async function handleCashPendingConfirmation(context: VerticalContext): Promise<VerticalResult | undefined> {
   const pending = await getPending(context.company.id, context.message.phone);
   if (!pending) return undefined;
 
   if (isCashRegistrationCancellation(context.combinedText)) {
     await clearPending(context.company.id, context.message.phone);
+    await clearCashDeferredQuery(context.company.id, context.message.phone);
     return text('Tudo bem 👍 Não registrei nada. Pode me mandar novamente do jeito correto.');
   }
 
@@ -207,8 +225,23 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
       saved.push(transaction);
     }
     await clearPending(context.company.id, context.message.phone);
+    await rememberCashRecentRecordReference(context.company.id, context.message.phone);
 
-    return text(cashRegistrationSavedMessage(saved.length));
+    const confirmed = cashRegistrationSavedMessage(saved.length);
+    const deferred = await consumeCashDeferredQuery(context.company.id, context.message.phone);
+    if (deferred) {
+      const followup = await deferredResult(context, deferred);
+      if (followup) {
+        return {
+          actions: [
+            { type: 'text', text: confirmed },
+            ...followup.actions
+          ]
+        };
+      }
+    }
+
+    return text(confirmed);
   }
 
   const patch = parseCashEditPatch(context.combinedText);
