@@ -34,5 +34,7 @@ export interface NormalizedMessage {
   text: string;
   quotedText?: string;
   quotedMessageId?: string;
+  isEdit?: boolean;
+  editedMessageId?: string;
   raw: unknown;
 }
