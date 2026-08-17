@@ -6,6 +6,7 @@ import { cashHelpMessage, cashHelpSection } from './help.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
 import { matchCashNaturalLanguageExpandedExample } from './natural-language-corpus-expanded.js';
+import { matchCashNaturalLanguageColloquialExample } from './natural-language-corpus-colloquial.js';
 import { cashQuery } from './query.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 
@@ -128,11 +129,13 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'future_data', canonical: input };
   }
 
-  // O corpus expandido entra cedo para remover floreios conversacionais e entregar
-  // ao motor financeiro apenas a frase canônica segura. Assim “rapidinho...”,
-  // “uma dúvida...” e “me ajuda aqui...” não atrapalham parser, agenda ou simulação.
+  // As camadas de corpus entram cedo para remover linguagem conversacional e
+  // entregar ao motor financeiro apenas a intenção e a frase canônica seguras.
   const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
   if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
+
+  const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
+  if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
 
   const schedule = scheduleCanonical(input, value);
   if (schedule) return { intent: 'schedule', canonical: schedule };
