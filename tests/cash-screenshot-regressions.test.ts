@@ -8,17 +8,12 @@ process.env.EVOLUTION_API_KEY ||= 'test-key';
 const { deterministicCashParse } = await import('../src/verticals/cash/parser.js');
 const { brazilParts, dateIsoOffset } = await import('../src/verticals/cash/time.js');
 const { parseCashPocketOrganizationInput } = await import('../src/verticals/cash/pocket-organization.js');
-const { isCashMixedSnapshotMessage } = await import('../src/verticals/cash/snapshot-safety.js');
+const { extractCashSnapshotSummary, isCashMixedSnapshotMessage } = await import('../src/verticals/cash/snapshot-safety.js');
 
 describe('cash screenshot regressions', () => {
-  it('classifica pizzaria como alimentação e remove pronome da descrição', () => {
+  it('classifica pizzaria como alimentação e limpa a descrição', () => {
     const result = deterministicCashParse('Ontem eu gastei na pizzaria 5,00');
-    expect(result).toMatchObject({
-      type: 'expense',
-      amount: 5,
-      category: 'Alimentação'
-    });
-    expect(result?.description.toLowerCase()).not.toContain('eu gastei');
+    expect(result).toMatchObject({ type: 'expense', amount: 5, category: 'Alimentação', description: 'pizzaria' });
   });
 
   it('resolve sábado para o sábado mais recente e não repete cofrinho na descrição', () => {
@@ -31,9 +26,7 @@ describe('cash screenshot regressions', () => {
   });
 
   it('entende pedido para separar uma atividade dos gastos pessoais', () => {
-    expect(parseCashPocketOrganizationInput(
-      'Fiz uma vendagem de roupa e quero que você administra sem mistura com meus gastos pessoais'
-    )).toEqual({ kind: 'setup-separation' });
+    expect(parseCashPocketOrganizationInput('Fiz uma vendagem de roupa e quero que você administra sem mistura com meus gastos pessoais')).toEqual({ kind: 'setup-separation' });
   });
 
   it('entende criação natural de dois cofrinhos e organização do mês na mesma frase', () => {
@@ -42,27 +35,14 @@ describe('cash screenshot regressions', () => {
       'e coloca outro cofrinho vai se chamar "vendas de roupas".',
       'E registre todas as informações desse mês no cofrinho chamado "Luiza".'
     ].join(' '));
-
-    expect(result).toEqual({
-      kind: 'organize',
-      createNames: ['Luiza', 'vendas de roupas'],
-      pocketName: 'Luiza',
-      scope: 'all',
-      period: 'current-month'
-    });
+    expect(result).toEqual({ kind: 'organize', createNames: ['Luiza', 'vendas de roupas'], pocketName: 'Luiza', scope: 'all', period: 'current-month' });
   });
 
   it('entende organização de gastos já existentes no cofrinho', () => {
-    expect(parseCashPocketOrganizationInput('Registre os gastos desse mês no cofrinho Luiza')).toEqual({
-      kind: 'organize',
-      createNames: [],
-      pocketName: 'Luiza',
-      scope: 'expense',
-      period: 'current-month'
-    });
+    expect(parseCashPocketOrganizationInput('Registre os gastos desse mês no cofrinho Luiza')).toEqual({ kind: 'organize', createNames: [], pocketName: 'Luiza', scope: 'expense', period: 'current-month' });
   });
 
-  it('bloqueia lote que mistura total vendido, caixa, retiradas e valores a receber', () => {
+  it('bloqueia lote misto e não confunde 31/07/2026 com R$ 31', () => {
     const message = [
       'Total dos valores vendidos até o dia 31/07/2026',
       '1640,00',
@@ -76,8 +56,8 @@ describe('cash screenshot regressions', () => {
       '30,00 Stefane (devendo de Rosana)',
       '80,00 Brenda'
     ].join('\n');
-
     expect(isCashMixedSnapshotMessage(message)).toBe(true);
+    expect(extractCashSnapshotSummary(message)).toEqual({ totalSold: 1640, cash: 530, receivable: 110, withdrawals: 4 });
     expect(isCashMixedSnapshotMessage('Gastei 50 no mercado e 20 no Uber')).toBe(false);
   });
 });
