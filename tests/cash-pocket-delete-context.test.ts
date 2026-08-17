@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
-let parseCashPocketDeleteReference: (input: string) => { kind: 'explicit' | 'context' } | null;
+let parseCashPocketDeleteReference: (input: string) => { kind: 'explicit' | 'context' | 'context-all' } | null;
 
 beforeAll(async () => {
   process.env.DATABASE_URL ||= 'postgresql://test:test@127.0.0.1:5432/test';
@@ -18,6 +18,15 @@ describe('cash contexto de exclusão de cofrinho', () => {
     'tira ele por favor'
   ])('reconhece referência curta depois de um cofrinho: %s', input => {
     expect(parseCashPocketDeleteReference(input)).toEqual({ kind: 'context' });
+  });
+
+  it.each([
+    'apaga eles pfv',
+    'exclui esses',
+    'remove todos eles',
+    'tira todas elas por favor'
+  ])('reconhece referência plural aos cofrinhos recém mostrados: %s', input => {
+    expect(parseCashPocketDeleteReference(input)).toEqual({ kind: 'context-all' });
   });
 
   it.each([
