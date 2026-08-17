@@ -4,14 +4,16 @@ on:
   push:
     branches:
       - main
+      - test/cash-synthetic-5000-20260817
     paths:
       - 'src/verticals/cash/**'
       - 'tests/cash-real-world-5000.test.ts'
+      - 'tests/cash-daily-stateful-5000.test.ts'
       - '.github/workflows/cash-real-world-eval.yml'
   workflow_dispatch:
 
 concurrency:
-  group: cash-real-world-eval
+  group: cash-real-world-eval-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,3 +47,12 @@ jobs:
           EVOLUTION_BASE_URL: http://127.0.0.1:8080
           EVOLUTION_API_KEY: test
         run: npx vitest run tests/cash-real-world-5000.test.ts
+
+      - name: Run 5000-message stateful Cash eval
+        if: hashFiles('tests/cash-daily-stateful-5000.test.ts') != ''
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
+          REDIS_URL: redis://127.0.0.1:6379
+          EVOLUTION_BASE_URL: http://127.0.0.1:8080
+          EVOLUTION_API_KEY: test
+        run: npx vitest run tests/cash-daily-stateful-5000.test.ts
