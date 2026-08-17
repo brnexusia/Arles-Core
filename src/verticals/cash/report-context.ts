@@ -60,7 +60,7 @@ function temporalFollowup(value: string, lastKind: CashReportKind | null): CashR
     if (/^(?:da|de|na)?\s*(?:semana passada|ultima semana|semana anterior)$/.test(value)) {
       return { kind: 'weekly', period: 'previous' };
     }
-    if (/^(?:da|de|na)?\s*(?:essa semana|esta semana|semana atual)$/.test(value)) {
+    if (/^(?:da|de|na)?\s*(?:essa semana|esta semana|dessa semana|desta semana|semana atual)$/.test(value)) {
       return { kind: 'weekly', period: 'current' };
     }
   }
@@ -69,7 +69,7 @@ function temporalFollowup(value: string, lastKind: CashReportKind | null): CashR
     if (/^(?:do|de|no)?\s*(?:mes passado|ultimo mes|mes anterior)$/.test(value)) {
       return { kind: 'monthly', period: 'previous' };
     }
-    if (/^(?:do|de|no)?\s*(?:esse mes|este mes|mes atual)$/.test(value)) {
+    if (/^(?:do|de|no)?\s*(?:esse mes|este mes|desse mes|deste mes|mes atual)$/.test(value)) {
       return { kind: 'monthly', period: 'current' };
     }
   }
