@@ -46,3 +46,11 @@ jobs:
           EVOLUTION_BASE_URL: http://127.0.0.1:8080
           EVOLUTION_API_KEY: test
         run: npx vitest run tests/cash-real-world-5000.test.ts
+
+      - name: Run full test suite
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
+          REDIS_URL: redis://127.0.0.1:6379
+          EVOLUTION_BASE_URL: http://127.0.0.1:8080
+          EVOLUTION_API_KEY: test
+        run: npm test
