@@ -31,6 +31,7 @@ const ParsedTransactionSchema = z.object({
 const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague|guardei|reservei|separei)\b/i;
 const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
 const MOVEMENT = /\b(gastei|gasto|paguei|comprei|guardei|reservei|separei|recebi|ganhei|entrou|vendi|faturei|depositaram)\b/gi;
+const WEEKDAY_WORD = '(?:domingo|segunda(?:-feira)?|terça(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|sabado)';
 
 function amountMatches(text: string): RegExpMatchArray[] {
   return [...text.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
@@ -61,15 +62,37 @@ function transactionType(text: string, amount: number | null): CashTransactionTy
   return usefulText.length >= 2 ? 'expense' : null;
 }
 
-function dateFrom(text: string): string {
-  if (/\bontem\b/i.test(text)) return dateIsoOffset(-1);
-  if (/\banteontem\b/i.test(text)) return dateIsoOffset(-2);
-  if (/\bhoje\b/i.test(text)) return isoBrazil();
+function weekdayIndex(text: string): number | null {
+  const value = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (/\bdomingo\b/.test(value)) return 0;
+  if (/\bsegunda(?:-feira)?\b/.test(value)) return 1;
+  if (/\bterca(?:-feira)?\b/.test(value)) return 2;
+  if (/\bquarta(?:-feira)?\b/.test(value)) return 3;
+  if (/\bquinta(?:-feira)?\b/.test(value)) return 4;
+  if (/\bsexta(?:-feira)?\b/.test(value)) return 5;
+  if (/\bsabado\b/.test(value)) return 6;
+  return null;
+}
+
+export function cashDateFromText(text: string, from = new Date()): string {
+  if (/\bontem\b/i.test(text)) return dateIsoOffset(-1, from);
+  if (/\banteontem\b/i.test(text)) return dateIsoOffset(-2, from);
+  if (/\bhoje\b/i.test(text)) return isoBrazil(from);
+
+  const weekday = weekdayIndex(text);
+  if (weekday != null) {
+    const current = brazilParts(from).weekday;
+    const daysAgo = (current - weekday + 7) % 7;
+    return dateIsoOffset(-daysAgo, from);
+  }
 
   const explicit = text.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/);
-  if (!explicit) return isoBrazil();
+  if (!explicit) return isoBrazil(from);
 
-  const now = brazilParts();
+  const now = brazilParts(from);
   const yearRaw = explicit[3];
   const year = yearRaw ? Number(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw) : now.year;
   const month = Number(explicit[2]);
@@ -80,8 +103,13 @@ function dateFrom(text: string): string {
     date.getUTCFullYear() !== year ||
     date.getUTCMonth() !== month - 1 ||
     date.getUTCDate() !== day
-  ) return isoBrazil();
+  ) return isoBrazil(from);
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function hasExplicitDateContext(text: string): boolean {
+  return new RegExp(`\\b(?:hoje|ontem|anteontem|${WEEKDAY_WORD})\\b`, 'i').test(text)
+    || /\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/.test(text);
 }
 
 export function categoryFrom(text: string, type: CashTransactionType): string {
@@ -89,7 +117,7 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
   const value = text.toLowerCase();
 
   if (/\b(guardei|reservei|separei|poupança|poupanca|reserva)\b/.test(value)) return 'Reserva';
-  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery/.test(value)) return 'Alimentação';
+  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery|pizzaria|pizza/.test(value)) return 'Alimentação';
   if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem|bicicleta/.test(value)) return 'Transporte';
   if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio|xarope/.test(value)) return 'Saúde';
   if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
@@ -98,16 +126,24 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
   return 'Outros';
 }
 
+function stripTransactionContext(text: string): string {
+  return text
+    .replace(new RegExp(`\\b${WEEKDAY_WORD}\\b`, 'gi'), ' ')
+    .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
+    .replace(/\b(?:no|na|do|da|de)?\s*cofrinho\s+["'“”]?[^,.;!?]+["'“”]?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function merchantFrom(text: string): string {
-  const withoutDate = text.replace(/\b(hoje|ontem|anteontem|agora)\b/gi, '');
-  const match = withoutDate.match(/\b(?:no|na|em|para o|para a|de)\s+([^,.]+?)(?:\s+(?:por|de)\s+r?\$?\s*\d|$)/i);
+  const clean = stripTransactionContext(text);
+  const match = clean.match(/\b(?:no|na|em|para o|para a|de)\s+([^,.]+?)(?:\s+(?:por|de)\s+r?\$?\s*\d|$)/i);
   return (match?.[1] ?? '').trim().slice(0, 120);
 }
 
 export function descriptionFrom(text: string): string {
-  let value = text.trim();
+  let value = stripTransactionContext(text);
   value = value
-    .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
     .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
     .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|guardei|reservei|separei|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
     .replace(/(?:\b(?:por|de)\s+)?(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:[.,]\d{1,2})?(?:\s*reais?)?/gi, ' ')
@@ -118,7 +154,7 @@ export function descriptionFrom(text: string): string {
     .replace(/\b(?:por|de|em)\s*$/i, '')
     .trim();
 
-  return (value || text.trim()).slice(0, 500);
+  return (value || stripTransactionContext(text) || text.trim()).slice(0, 500);
 }
 
 function hasItemEnumeration(text: string): boolean {
@@ -130,7 +166,8 @@ function specificDescription(text: string, aiDescription: string, deterministic:
   const ai = aiDescription.trim();
   const source = descriptionFrom(text).trim();
   const generic = /\b(itens? diversos?|compras? diversas?|coisas? diversas?|varios itens|vários itens)\b/i.test(ai);
-  if (source && (generic || hasItemEnumeration(text))) return source.slice(0, 500);
+  const contextual = /\bcofrinho\b/i.test(text) || new RegExp(`\\b${WEEKDAY_WORD}\\b`, 'i').test(text);
+  if (source && (generic || hasItemEnumeration(text) || contextual)) return source.slice(0, 500);
   return (ai || deterministic?.description || source).slice(0, 500);
 }
 
@@ -148,7 +185,7 @@ export function deterministicCashParse(text: string): CashTransactionInput | nul
     category: categoryFrom(text, type),
     merchant: merchantFrom(text),
     description: descriptionFrom(text),
-    transactionDate: dateFrom(text)
+    transactionDate: cashDateFromText(text)
   };
 }
 
@@ -166,7 +203,8 @@ export function isStrongDeterministicCashTransaction(
 
   const explicitMovement = EXPENSE.test(clean) || INCOME.test(clean);
   const compactKnownCategory = clean.split(/\s+/).length <= 8 && parsed.category !== 'Outros';
-  return explicitMovement && parsed.category !== 'Outros' || compactKnownCategory;
+  const contextualRealMovement = explicitMovement && (hasExplicitDateContext(clean) || /\bcofrinho\b/i.test(clean));
+  return explicitMovement && parsed.category !== 'Outros' || compactKnownCategory || contextualRealMovement;
 }
 
 export class CashParser {
@@ -218,9 +256,11 @@ export class CashParser {
         category: parsed.type === 'income' ? 'Receita' : parsed.category,
         merchant: parsed.merchant.trim().slice(0, 120),
         description: specificDescription(text, parsed.description, deterministic),
-        transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
-          ? parsed.transaction_date
-          : deterministic?.transactionDate ?? isoBrazil()
+        transactionDate: hasExplicitDateContext(text)
+          ? deterministic?.transactionDate ?? cashDateFromText(text)
+          : /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
+            ? parsed.transaction_date
+            : deterministic?.transactionDate ?? isoBrazil()
       };
     } catch (error) {
       console.error('[CashParser] falha na IA; usando fallback determinístico:', error);
