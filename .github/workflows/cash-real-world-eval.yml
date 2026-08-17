@@ -147,11 +147,13 @@ jobs:
             description="Falha no typecheck, proteção conversacional ou eval de 5.000 mensagens"
           fi
 
+          target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           payload=$(jq -n \
             --arg state "$state" \
             --arg context "cash/conversation-safety" \
             --arg description "$description" \
-            '{state:$state, context:$context, description:$description}')
+            --arg target_url "$target_url" \
+            '{state:$state, context:$context, description:$description, target_url:$target_url}')
 
           curl -fsSL \
             -X POST \
