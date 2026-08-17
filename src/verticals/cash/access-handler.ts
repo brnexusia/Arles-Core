@@ -3,6 +3,7 @@ import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertic
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashConversationHandler } from './conversation.js';
+import { handleCashConversationSafety } from './conversation-safety.js';
 import { handleCashDeterministicLanguage } from './deterministic-language.js';
 import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
 import { fastCashFaq } from './fast-faq.js';
@@ -228,6 +229,11 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
+    // Nova barreira central: corrige linguagem quebrada, usa contexto curto com segurança,
+    // separa lançamento + consulta e bloqueia referências destrutivas ambíguas.
+    const conversationSafety = await handleCashConversationSafety(context);
+    if (conversationSafety) return conversationSafety;
+
     // Agenda/previsão vem antes de cofrinhos e parser financeiro. Isso garante que
     // “todo dia 10 gasto 300 no cofrinho Cartão” seja previsão, não gasto imediato.
     const scheduled = await handleCashScheduleDeterministic(context);
@@ -258,7 +264,7 @@ export class CashAccessHandler implements VerticalHandler {
     const ledger = await handleCashLedgerDeterministic(context);
     if (ledger) return ledger;
 
-    if (isCashDeletionCommand(combinedText)) {
+    if (isCashDeletionCommand(context.combinedText)) {
       const bulk = await handleCashBulkDeletionCommand(context);
       if (bulk) return bulk;
       return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
