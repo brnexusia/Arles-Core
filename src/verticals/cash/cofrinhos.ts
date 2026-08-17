@@ -92,8 +92,6 @@ export function parseCashPocketCreateNames(input: string): string[] {
   const hasPocketWord = /\bcofrinh(?:o|os)\b/.test(value);
   if (!hasCreationVerb || !hasPocketWord) return [];
 
-  // Separa continuidades inline antes de extrair os nomes. Isso cobre:
-  // "criar cofrinho Casa e outro chamado Lazer".
   const prepared = original
     .replace(/\s+(?=(?:e\s+)?(?:cria(?:r|e)?\s+)?outro(?:\s+cofrinho)?\s+(?:chamad[oa]|de|s[oó])\b)/gi, '\n')
     .replace(/\s+(?=(?:e\s+)?cria(?:r|e)?\s+outro\s+cofrinho\b)/gi, '\n');
@@ -184,7 +182,7 @@ export function parseCashPocketCommand(input: string): CashPocketCommand {
   const question = /\b(quanto|qual|total|soma|me mostra|mostra|liste|lista|quais|extrato|historico|historico|registros|lancamentos|movimentacoes)\b/.test(value) || /\?$/.test(input.trim());
 
   const createNames = parseCashPocketCreateNames(input);
-  if (createNames.length === 1) return { kind: 'create', name: createNames[0] };
+  if (createNames.length === 1) return { kind: 'create', name: createNames[0]! };
 
   if (!movement && /\b(lista|listar|liste|mostra|mostrar|mostre|quais|meus|ver)\b/.test(value) && /\bcofrinhos\b/.test(value)) {
     return { kind: 'list' };
@@ -363,7 +361,7 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
     }
 
     if (createNames.length === 1) {
-      const name = created[0] ?? existing[0];
+      const name = created[0] ?? existing[0]!;
       return created.length
         ? text([`🐷 Cofrinho *${name}* criado.`, '', `Para usar: “recebi 500 no cofrinho ${name}” ou “gastei 30 do cofrinho ${name}”.`].join('\n'))
         : text(`🐷 O cofrinho *${name}* já existe. O saldo e os lançamentos dele continuam separados.`);
