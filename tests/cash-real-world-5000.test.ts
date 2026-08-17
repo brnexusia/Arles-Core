@@ -30,6 +30,7 @@ type Scenario = {
 };
 
 let classifyCashCorpus: (input: string) => { intent: string };
+let classifyCashDeterministicLanguage: (input: string) => { intent: string; canonical: string } | null;
 let deterministicCashParse: (input: string) => unknown;
 let deterministicCashQuery: (input: string) => unknown;
 let isCashDirectBalanceRequest: (input: string) => boolean;
@@ -47,6 +48,7 @@ beforeAll(async () => {
   process.env.EVOLUTION_API_KEY ||= 'test';
 
   ({ classifyCashCorpus } = await import('../src/verticals/cash/conversation-corpus.js'));
+  ({ classifyCashDeterministicLanguage } = await import('../src/verticals/cash/deterministic-language.js'));
   ({ deterministicCashParse } = await import('../src/verticals/cash/parser.js'));
   ({ deterministicCashQuery } = await import('../src/verticals/cash/query.js'));
   ({ isCashDirectBalanceRequest, isCashForecastLanguage, parseCashProjection } = await import('../src/verticals/cash/ledger.js'));
@@ -110,14 +112,19 @@ const scenarios: Scenario[] = [
 
 function route(input: string): Route {
   if (parseCashPocketDeleteReference(input)) return 'pocket-delete';
+  if (isCashDirectBalanceRequest(input)) return 'balance';
   if (parseCashPocketBalanceReference(input)) return 'pocket-balance';
 
   const report = parseCashReportRequest(input);
   if (report) return report.kind === 'weekly' ? 'weekly_report' : 'monthly_report';
 
+  const deterministicLanguage = classifyCashDeterministicLanguage(input);
+  if (deterministicLanguage && deterministicLanguage.intent !== 'future_data') {
+    return deterministicLanguage.intent as Route;
+  }
+
   if (isCashForecastLanguage(input)) return 'schedule';
   if (parseCashProjection(input)) return 'projection';
-  if (isCashDirectBalanceRequest(input)) return 'balance';
   if (isCashNaturalRecordListRequest(input)) return 'history';
 
   const corpus = classifyCashCorpus(input);
