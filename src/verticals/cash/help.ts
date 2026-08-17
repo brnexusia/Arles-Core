@@ -5,6 +5,7 @@ export type CashHelpSection =
   | 'register'
   | 'query'
   | 'pockets'
+  | 'forecasts'
   | 'manage'
   | 'reports'
   | 'plans';
@@ -12,6 +13,9 @@ export type CashHelpSection =
 export function cashHelpSection(input: string): CashHelpSection | null {
   const value = normalizeCashText(input);
   if (!value) return null;
+
+  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(agendar|agendamento|previsao|previsoes|previsto|previstos|projecao futura|contas futuras)\b/.test(value)
+    || /^(?:agendamento|agendamentos|previsao|previsoes|previstos?|agenda financeira)$/.test(value)) return 'forecasts';
 
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(cofrinho|cofrinhos|caixinha|caixinhas|separar dinheiro)\b/.test(value)
     || /^(?:cofrinho|cofrinhos|caixinha|caixinhas)$/.test(value)) return 'pockets';
@@ -33,13 +37,14 @@ export function cashHelpSection(input: string): CashHelpSection | null {
 
   if (/^(ajuda|menu|comandos|guia|guia de ajuda|tutorial|me ajuda|me ensina|como usar|como uso|o que voce faz|o que posso fazer|como funciona)[!.? ]*$/.test(value)) return 'menu';
 
-  const numbered = value.match(/^(?:opcao|opção)?\s*([1-6])$/);
+  const numbered = value.match(/^(?:opcao|opção)?\s*([1-7])$/);
   if (numbered?.[1] === '1') return 'register';
   if (numbered?.[1] === '2') return 'query';
   if (numbered?.[1] === '3') return 'pockets';
-  if (numbered?.[1] === '4') return 'manage';
-  if (numbered?.[1] === '5') return 'reports';
-  if (numbered?.[1] === '6') return 'plans';
+  if (numbered?.[1] === '4') return 'forecasts';
+  if (numbered?.[1] === '5') return 'manage';
+  if (numbered?.[1] === '6') return 'reports';
+  if (numbered?.[1] === '7') return 'plans';
 
   return null;
 }
@@ -47,7 +52,7 @@ export function cashHelpSection(input: string): CashHelpSection | null {
 export function cashHelpMessage(section: CashHelpSection): string {
   if (section === 'register') {
     return [
-      '💸 *Registrar movimentações*',
+      '💸 *Registrar movimentações reais*',
       '',
       'É só falar normalmente:',
       '• “gastei 50 no mercado”',
@@ -57,6 +62,8 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '',
       'Pode mandar vários lançamentos na mesma mensagem que eu separo para você.',
       'Antes de salvar, eu mostro o que entendi e peço sua confirmação.',
+      '',
+      'Importante: previsão e simulação não entram aqui como gasto/receita real.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
@@ -73,8 +80,10 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• “se eu gastar 25, quanto fica meu saldo?”',
       '• “tenho saldo de 100, se eu gastar 37,50 quanto sobra?”',
       '',
-      'Seu saldo é acumulado: entradas − saídas de todos os lançamentos.',
+      'Seu saldo real é acumulado: entradas reais − saídas reais.',
       'Simulações não registram nada; servem apenas para fazer a conta.',
+      '',
+      'Para contas futuras recorrentes, use a opção de previsões/agendamentos.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
@@ -95,6 +104,33 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• “meus cofrinhos”',
       '',
       'Você também pode responder/citar um lançamento e dizer “coloca esse no cofrinho Viagem”.',
+      'Previsões também podem apontar para um cofrinho.',
+      '',
+      'Digite *ajuda* para voltar ao menu.'
+    ].join('\n');
+  }
+
+  if (section === 'forecasts') {
+    return [
+      '🔮 *Previsões e agendamentos financeiros*',
+      '',
+      'Use para dinheiro que ainda vai entrar ou sair:',
+      '• “todo dia 10 pago 300 do cartão”',
+      '• “todo dia 5 recebo 2.000 de salário”',
+      '• “toda sexta gasto 50 com almoço”',
+      '• “todos os dias gasto 12 no café”',
+      '• “amanhã vou receber 800 de um cliente”',
+      '',
+      'Consultar:',
+      '• “quanto vou ter no fim do mês?”',
+      '• “quanto vou gastar este mês?”',
+      '• “quanto vou receber este mês?”',
+      '• “meus agendamentos”',
+      '',
+      'Gerenciar:',
+      '• “cancela agendamento 2”',
+      '',
+      'Previsões entram somente no saldo projetado. Elas NÃO alteram seu saldo real e NÃO viram lançamento real automaticamente.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
@@ -131,6 +167,8 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• Segunda-feira às 08:00 → semana anterior',
       '• Dia 1 às 08:00 → mês anterior',
       '',
+      'Relatórios mostram realizado. Projeções futuras ficam separadas.',
+      '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
   }
@@ -155,13 +193,14 @@ export function cashHelpMessage(section: CashHelpSection): string {
     '',
     'O que você quer aprender?',
     '',
-    '1️⃣ Registrar gastos, receitas e reservas',
+    '1️⃣ Registrar gastos, receitas e reservas reais',
     '2️⃣ Consultar saldo, gastos e fazer simulações',
     '3️⃣ Criar e usar cofrinhos',
-    '4️⃣ Editar ou excluir registros',
-    '5️⃣ Relatórios e resumos',
-    '6️⃣ Planos, pagamento e trial',
+    '4️⃣ Previsões e agendamentos financeiros',
+    '5️⃣ Editar ou excluir registros',
+    '6️⃣ Relatórios e resumos',
+    '7️⃣ Planos, pagamento e trial',
     '',
-    'Responda com o número ou fale naturalmente, por exemplo: “como crio um cofrinho?”.'
+    'Responda com o número ou fale naturalmente, por exemplo: “como agendo uma conta todo mês?”.'
   ].join('\n');
 }
