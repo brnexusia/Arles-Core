@@ -191,6 +191,10 @@ function appendSafetyNote(result: VerticalResult, note: string): VerticalResult 
   return { ...result, actions: [...result.actions, { type: 'text', text: note }] };
 }
 
+function stagedRegistration(result: VerticalResult): boolean {
+  return result.actions.some(action => action.type === 'text' && action.text.startsWith('🧾 Antes de registrar'));
+}
+
 export async function handleCashConversationSafety(context: VerticalContext): Promise<VerticalResult | null> {
   const normalizedInput = normalizeCashNoisyLanguage(context.combinedText);
   if (normalizedInput) context.combinedText = normalizedInput;
@@ -204,18 +208,26 @@ export async function handleCashConversationSafety(context: VerticalContext): Pr
     const parsed = deterministicCashParse(multi.primary);
     const deferred = canonicalCashDeferredQuery(multi.secondary);
     if (parsed && deferred) {
-      await rememberCashDeferredQuery(companyId, phone, deferred);
-      const staged = await stageCashRegistration(
-        { ...context, combinedText: multi.primary },
-        [parsed],
-        multi.primary
-      );
-      return appendSafetyNote(
-        staged,
-        deferred === 'saldo'
-          ? 'Também entendi que você quer ver o saldo. Assim que confirmar este lançamento, eu mostro o saldo atualizado na sequência.'
-          : 'Também entendi a sua consulta. Assim que confirmar este lançamento, eu respondo a consulta na sequência.'
-      );
+      // A camada não pode abrir um caminho paralelo que ignore trial/assinatura.
+      const { cashService } = await import('./service.js');
+      const access = await cashService.accessState(companyId);
+      if (access.hasAccess) {
+        const staged = await stageCashRegistration(
+          { ...context, combinedText: multi.primary },
+          [parsed],
+          multi.primary
+        );
+        if (stagedRegistration(staged)) {
+          await rememberCashDeferredQuery(companyId, phone, deferred);
+          return appendSafetyNote(
+            staged,
+            deferred === 'saldo'
+              ? 'Também entendi que você quer ver o saldo. Assim que confirmar este lançamento, eu mostro o saldo atualizado na sequência.'
+              : 'Também entendi a sua consulta. Assim que confirmar este lançamento, eu respondo a consulta na sequência.'
+          );
+        }
+        return staged;
+      }
     }
   }
 
@@ -225,8 +237,6 @@ export async function handleCashConversationSafety(context: VerticalContext): Pr
     if (expanded) context.combinedText = expanded;
   }
 
-  // Toda consulta determinística válida vira contexto para o próximo follow-up curto.
-  // Como a chave inclui company + telefone, nunca há vazamento entre usuários.
   if (deterministicCashQuery(context.combinedText)) {
     await rememberCashQueryContext(companyId, phone, context.combinedText);
   }
