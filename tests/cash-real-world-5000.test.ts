@@ -30,6 +30,7 @@ type Scenario = {
 };
 
 let classifyCashCorpus: (input: string) => { intent: string };
+let classifyCashDeterministicLanguage: (input: string) => { intent: string; canonical: string } | null;
 let deterministicCashParse: (input: string) => unknown;
 let deterministicCashQuery: (input: string) => unknown;
 let isCashDirectBalanceRequest: (input: string) => boolean;
@@ -37,7 +38,7 @@ let isCashForecastLanguage: (input: string) => boolean;
 let parseCashProjection: (input: string) => unknown;
 let isCashNaturalRecordListRequest: (input: string) => boolean;
 let parseCashPocketDeleteReference: (input: string) => unknown;
-let parseCashPocketBalanceReference: (input: string) => unknown;
+let parseCashPocketBalanceReference: (input: string) => { kind: 'explicit-all' | 'context' } | null;
 let parseCashReportRequest: (input: string) => { kind: 'weekly' | 'monthly' } | null;
 
 beforeAll(async () => {
@@ -47,6 +48,7 @@ beforeAll(async () => {
   process.env.EVOLUTION_API_KEY ||= 'test';
 
   ({ classifyCashCorpus } = await import('../src/verticals/cash/conversation-corpus.js'));
+  ({ classifyCashDeterministicLanguage } = await import('../src/verticals/cash/deterministic-language.js'));
   ({ deterministicCashParse } = await import('../src/verticals/cash/parser.js'));
   ({ deterministicCashQuery } = await import('../src/verticals/cash/query.js'));
   ({ isCashDirectBalanceRequest, isCashForecastLanguage, parseCashProjection } = await import('../src/verticals/cash/ledger.js'));
@@ -108,16 +110,31 @@ const scenarios: Scenario[] = [
   { expected: 'acknowledgement', variants: ['top', 'massa', 'fechou', 'tranquilo', 'tá bom'] }
 ];
 
+function normalizedForContext(input: string): string {
+  return input.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 function route(input: string): Route {
   if (parseCashPocketDeleteReference(input)) return 'pocket-delete';
-  if (parseCashPocketBalanceReference(input)) return 'pocket-balance';
+
+  const pocketBalance = parseCashPocketBalanceReference(input);
+  if (pocketBalance?.kind === 'explicit-all') return 'pocket-balance';
+  if (pocketBalance?.kind === 'context' && /\b(nele|nela|neles|nelas|cofrinh(?:o|os))\b/.test(normalizedForContext(input))) {
+    return 'pocket-balance';
+  }
+  if (isCashDirectBalanceRequest(input)) return 'balance';
+  if (pocketBalance) return 'pocket-balance';
 
   const report = parseCashReportRequest(input);
   if (report) return report.kind === 'weekly' ? 'weekly_report' : 'monthly_report';
 
+  const deterministicLanguage = classifyCashDeterministicLanguage(input);
+  if (deterministicLanguage && deterministicLanguage.intent !== 'future_data') {
+    return deterministicLanguage.intent as Route;
+  }
+
   if (isCashForecastLanguage(input)) return 'schedule';
   if (parseCashProjection(input)) return 'projection';
-  if (isCashDirectBalanceRequest(input)) return 'balance';
   if (isCashNaturalRecordListRequest(input)) return 'history';
 
   const corpus = classifyCashCorpus(input);
@@ -135,7 +152,6 @@ function route(input: string): Route {
 
 function personaMessage(persona: number, scenario: Scenario, scenarioIndex: number): string {
   const base = scenario.variants[(persona + scenarioIndex) % scenario.variants.length]!;
-  // Pequenas diferenças de pontuação/cortesia sem destruir o sentido da frase.
   if (persona % 10 === 1 && !/[?!.]$/.test(base)) return `${base}!`;
   if (persona % 10 === 2 && /\?$/.test(base)) return base.replace(/\?$/, '??');
   if (persona % 10 === 3 && base.length > 18 && !/^por favor/i.test(base)) return `${base} por favor`;
