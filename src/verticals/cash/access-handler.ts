@@ -2,11 +2,11 @@ import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
-import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashConversationHandler } from './conversation.js';
 import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
+import { handleCashPocketContextCommand } from './pocket-context.js';
 import { cashReports } from './reports.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
@@ -230,9 +230,9 @@ export class CashAccessHandler implements VerticalHandler {
     const scheduled = await handleCashScheduleDeterministic(context);
     if (scheduled) return scheduled;
 
-    // Administração de cofrinhos vem antes do parser financeiro. Uma frase como
-    // “criar cofrinho Emprego” nunca pode cair no parser de despesa.
-    const pocketCommand = await handleCashPocketCommand(context);
+    // Administração e contexto de cofrinhos vêm antes da exclusão de registros. Assim,
+    // depois de “quais cofrinhos eu tenho?”, “apaga ele” não pode apagar uma transação.
+    const pocketCommand = await handleCashPocketContextCommand(context);
     if (pocketCommand) return pocketCommand;
 
     // Saldo e simulações são operações de leitura/cálculo. Nunca criam lançamento e
