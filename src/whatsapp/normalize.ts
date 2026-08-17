@@ -21,17 +21,30 @@ function messageText(message: any): string {
   ).trim();
 }
 
-function quotedTextFrom(message: any): string {
-  const contextInfo =
+function contextInfoFrom(message: any): any {
+  return (
     message?.extendedTextMessage?.contextInfo ??
     message?.imageMessage?.contextInfo ??
     message?.videoMessage?.contextInfo ??
     message?.documentMessage?.contextInfo ??
     message?.buttonsResponseMessage?.contextInfo ??
     message?.listResponseMessage?.contextInfo ??
-    null;
+    null
+  );
+}
 
+function quotedTextFrom(message: any): string {
+  const contextInfo = contextInfoFrom(message);
   return messageText(contextInfo?.quotedMessage ?? {});
+}
+
+function quotedMessageIdFrom(message: any): string {
+  const contextInfo = contextInfoFrom(message);
+  return String(
+    contextInfo?.stanzaId ??
+    contextInfo?.quotedMessage?.key?.id ??
+    ''
+  ).trim();
 }
 
 export interface NormalizedEvolutionPresence {
@@ -58,8 +71,6 @@ export function normalizeEvolutionPresence(payload: any): NormalizedEvolutionPre
   const entries = Object.entries(presences) as Array<[string, any]>;
   const presenceEntry = entries.find(([, value]) => value?.lastKnownPresence || value?.presence) ?? entries[0];
 
-  // Quando a Evolution fornece o JID dentro de `presences`, ele é preferível ao
-  // `id` externo, que em algumas versões pode ser um LID em vez do número real.
   const candidateJid = String(
     presenceEntry?.[0] ??
     data?.id ??
@@ -131,6 +142,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   ).trim();
 
   const quotedText = quotedTextFrom(message);
+  const quotedMessageId = quotedMessageIdFrom(message);
 
   let type: NormalizedMessage['type'] = 'unsupported';
 
@@ -161,6 +173,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
     type,
     text,
     quotedText: quotedText || undefined,
+    quotedMessageId: quotedMessageId || undefined,
     raw: payload
   };
 }
