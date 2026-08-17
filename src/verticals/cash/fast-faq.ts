@@ -1,5 +1,6 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
+import { handleCashReportContext } from './report-context.js';
 import { cashService } from './service.js';
 import { formatBrazilDate } from './time.js';
 
@@ -52,6 +53,11 @@ async function plansAnswer(companyId: string): Promise<VerticalResult> {
 export async function fastCashFaq(context: VerticalContext): Promise<VerticalResult | null> {
   const value = normalize(context.combinedText);
   if (!value) return null;
+
+  // Relatórios e continuidades temporais precisam ser resolvidos antes da IA.
+  // Ex.: “me manda o resumo da semana” → “da semana passada”.
+  const contextualReport = await handleCashReportContext(context);
+  if (contextualReport) return contextualReport;
 
   // Trial e período gratuito.
   if (matches(value, [
