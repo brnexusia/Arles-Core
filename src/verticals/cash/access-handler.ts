@@ -8,6 +8,7 @@ import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { cashReports } from './reports.js';
+import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
 
 function text(value: string): VerticalResult {
@@ -224,7 +225,12 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
-    // Administração de cofrinhos vem antes do roteador financeiro. Uma frase como
+    // Agenda/previsão vem antes de cofrinhos e parser financeiro. Isso garante que
+    // “todo dia 10 gasto 300 no cofrinho Cartão” seja previsão, não gasto imediato.
+    const scheduled = await handleCashScheduleDeterministic(context);
+    if (scheduled) return scheduled;
+
+    // Administração de cofrinhos vem antes do parser financeiro. Uma frase como
     // “criar cofrinho Emprego” nunca pode cair no parser de despesa.
     const pocketCommand = await handleCashPocketCommand(context);
     if (pocketCommand) return pocketCommand;
@@ -234,8 +240,6 @@ export class CashAccessHandler implements VerticalHandler {
     const ledger = await handleCashLedgerDeterministic(context);
     if (ledger) return ledger;
 
-    // Exclusão continua com alta prioridade para números como “apaga 4 registros”
-    // jamais serem interpretados como dinheiro.
     if (isCashDeletionCommand(combinedText)) {
       const bulk = await handleCashBulkDeletionCommand(context);
       if (bulk) return bulk;
@@ -245,8 +249,8 @@ export class CashAccessHandler implements VerticalHandler {
     const fastFaq = await fastCashFaq(context);
     if (fastFaq) return fastFaq;
 
-    // IA é fallback semântico para linguagem fora das centenas de combinações
-    // determinísticas. Ela classifica/reescreve; o Core e o banco continuam executando.
+    // O GPT só entra depois de agenda, cofrinhos, saldo, simulação, exclusões,
+    // FAQ e do corpus conversacional determinístico interno do AiFirstHandler.
     return await personalizePaymentMenu(company.id, await cashAiFirstHandler.handle(context));
   }
 }
