@@ -120,9 +120,9 @@ export function parseCashPocketCreateNames(input: string): string[] {
     }
 
     const explicitPatterns = [
-      /^(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:(?:um|outro|mais\s+um)\s+)?cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i,
+      /^(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:(?:um|o|outro|mais\s+um)\s+)?cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i,
       /^(?:e\s+)?(?:novo|nova)\s+cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i,
-      /^(?:e\s+)?quero\s+(?:um\s+)?cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i
+      /^(?:e\s+)?quero\s+(?:(?:um|o)\s+)?cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i
     ];
 
     let explicitName: string | null = null;
