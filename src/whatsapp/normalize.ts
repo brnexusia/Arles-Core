@@ -34,8 +34,7 @@ function contextInfoFrom(message: any): any {
 }
 
 function quotedTextFrom(message: any): string {
-  const contextInfo = contextInfoFrom(message);
-  return messageText(contextInfo?.quotedMessage ?? {});
+  return messageText(contextInfoFrom(message)?.quotedMessage ?? {});
 }
 
 function quotedMessageIdFrom(message: any): string {
@@ -43,6 +42,64 @@ function quotedMessageIdFrom(message: any): string {
   return String(
     contextInfo?.stanzaId ??
     contextInfo?.quotedMessage?.key?.id ??
+    ''
+  ).trim();
+}
+
+function firstData(body: any): any {
+  const raw = body?.data ?? {};
+  return Array.isArray(raw) ? (raw[0] ?? {}) : raw;
+}
+
+function resolveAddress(body: any, data: any) {
+  const key = data?.key ?? data?.update?.key ?? body?.key ?? {};
+  const rawJid = String(
+    body?.phone ??
+    key?.remoteJid ??
+    data?.remoteJid ??
+    data?.sender ??
+    body?.sender ??
+    ''
+  ).trim();
+
+  const altJid = String(
+    key?.remoteJidAlt ??
+    key?.participantAlt ??
+    data?.senderPn ??
+    data?.remoteJidAlt ??
+    ''
+  ).trim();
+
+  let replyJid = rawJid;
+  if (rawJid.includes('@lid') && altJid) replyJid = altJid;
+  if (replyJid && !replyJid.includes('@') && /^\+?\d+$/.test(replyJid)) {
+    replyJid = `${digits(replyJid)}@s.whatsapp.net`;
+  }
+
+  return { key, rawJid, replyJid, phone: digits(replyJid || rawJid) };
+}
+
+function editedPayload(data: any): any {
+  return (
+    data?.update?.message?.editedMessage?.message ??
+    data?.message?.editedMessage?.message ??
+    data?.editedMessage?.message ??
+    data?.update?.message?.protocolMessage?.editedMessage ??
+    data?.message?.protocolMessage?.editedMessage ??
+    data?.protocolMessage?.editedMessage ??
+    null
+  );
+}
+
+function editedTargetId(data: any): string {
+  return String(
+    data?.update?.message?.protocolMessage?.key?.id ??
+    data?.message?.protocolMessage?.key?.id ??
+    data?.protocolMessage?.key?.id ??
+    data?.key?.id ??
+    data?.update?.key?.id ??
+    data?.keyId ??
+    data?.messageId ??
     ''
   ).trim();
 }
@@ -92,12 +149,55 @@ export function normalizeEvolutionPresence(payload: any): NormalizedEvolutionPre
   return { instanceName, phone, presence };
 }
 
+/**
+ * Evolution já expôs edições como MESSAGES_EDITED e, em algumas versões, dentro
+ * de MESSAGES_UPDATE/protocolMessage. Esta normalização aceita os formatos sem
+ * transformar updates de status/ACK em uma mensagem financeira.
+ */
+export function normalizeEvolutionEditedMessage(payload: any): NormalizedMessage | null {
+  const body = payload?.body ?? payload ?? {};
+  const event = normalizedEvent(body?.event);
+  const data = firstData(body);
+  const edited = editedPayload(data);
+  const editedText = messageText(edited ?? {});
+  const targetId = editedTargetId(data);
+
+  const eventAllowsEdit = event === 'MESSAGES_EDITED' || event === 'MESSAGE_EDITED' || event === 'MESSAGES_UPDATE' || event === 'MESSAGE_UPDATE' || Boolean(edited);
+  if (!eventAllowsEdit || !edited || !editedText || !targetId) return null;
+
+  const instanceName = String(
+    body?.instance_name ??
+    body?.instance ??
+    data?.instance ??
+    ''
+  ).trim();
+  const { key, rawJid, replyJid, phone } = resolveAddress(body, data);
+  if (!instanceName || !phone) return null;
+
+  return {
+    messageId: String(data?.id ?? data?.messageId ?? body?.message_id ?? targetId),
+    instanceName,
+    remoteJid: rawJid,
+    replyJid,
+    phone,
+    pushName: String(data?.pushName ?? body?.pushName ?? ''),
+    fromMe: body?.from_me === true || key?.fromMe === true,
+    isGroup: rawJid.endsWith('@g.us'),
+    isBroadcast: rawJid.includes('@broadcast') || rawJid.includes('status@broadcast'),
+    event,
+    type: 'text',
+    text: editedText,
+    isEdit: true,
+    editedMessageId: targetId,
+    raw: payload
+  };
+}
+
 export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   const body = payload?.body ?? payload ?? {};
-  const data = body?.data ?? {};
-  const key = data?.key ?? body?.key ?? {};
+  const data = firstData(body);
+  const { key, rawJid, replyJid, phone } = resolveAddress(body, data);
   const message = data?.message ?? body?.message ?? {};
-
   const event = normalizedEvent(body?.event);
 
   const instanceName = String(
@@ -106,34 +206,6 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
     data?.instance ??
     ''
   ).trim();
-
-  const rawJid = String(
-    body?.phone ??
-    key?.remoteJid ??
-    data?.sender ??
-    body?.sender ??
-    ''
-  ).trim();
-
-  const altJid = String(
-    key?.remoteJidAlt ??
-    key?.participantAlt ??
-    data?.senderPn ??
-    data?.remoteJidAlt ??
-    ''
-  ).trim();
-
-  let replyJid = rawJid;
-
-  if (rawJid.includes('@lid') && altJid) {
-    replyJid = altJid;
-  }
-
-  if (replyJid && !replyJid.includes('@') && /^\+?\d+$/.test(replyJid)) {
-    replyJid = `${digits(replyJid)}@s.whatsapp.net`;
-  }
-
-  const phone = digits(replyJid || rawJid);
 
   const text = String(
     typeof body?.message === 'string'
@@ -145,15 +217,11 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   const quotedMessageId = quotedMessageIdFrom(message);
 
   let type: NormalizedMessage['type'] = 'unsupported';
-
   if (
     message?.conversation ||
     message?.extendedTextMessage?.text ||
     (text && !message?.imageMessage && !message?.audioMessage)
-  ) {
-    type = 'text';
-  }
-
+  ) type = 'text';
   if (message?.imageMessage) type = 'image';
   if (message?.audioMessage) type = 'audio';
 
@@ -166,9 +234,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
     pushName: String(data?.pushName ?? body?.pushName ?? ''),
     fromMe: body?.from_me === true || key?.fromMe === true,
     isGroup: rawJid.endsWith('@g.us'),
-    isBroadcast:
-      rawJid.includes('@broadcast') ||
-      rawJid.includes('status@broadcast'),
+    isBroadcast: rawJid.includes('@broadcast') || rawJid.includes('status@broadcast'),
     event,
     type,
     text,
@@ -180,4 +246,8 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
 
 export function isMessageUpsert(event: string): boolean {
   return event === 'MESSAGES_UPSERT' || event === 'MESSAGE_UPSERT';
+}
+
+export function isMessageEditEvent(event: string): boolean {
+  return event === 'MESSAGES_EDITED' || event === 'MESSAGE_EDITED' || event === 'MESSAGES_UPDATE' || event === 'MESSAGE_UPDATE';
 }
