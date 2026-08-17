@@ -35,14 +35,14 @@ function reportKey(companyId: string, phone: string): string {
 }
 
 function directKind(value: string): CashReportKind | null {
-  const weekly = /\b(relatorio|resumo|fechamento)\b.*\bsemana\b/.test(value)
+  const weekly = /\b(relatorio|resumo|fechamento)\b.*\b(semana|semanal)\b/.test(value)
     || /^como foi a semana(?: passada| atual)?$/.test(value)
-    || /^(?:me manda|manda|mostra|me mostra|quero)\s+(?:o\s+)?(?:relatorio|resumo)\s+(?:da\s+)?semana/.test(value);
+    || /^(?:me manda|manda|mostra|me mostra|quero)\s+(?:o\s+)?(?:relatorio|resumo)\s+(?:da\s+)?(?:semana|semanal)/.test(value);
   if (weekly) return 'weekly';
 
-  const monthly = /\b(relatorio|resumo|fechamento)\b.*\bmes\b/.test(value)
+  const monthly = /\b(relatorio|resumo|fechamento)\b.*\b(mes|mensal)\b/.test(value)
     || /^como foi o mes(?: passado| atual)?$/.test(value)
-    || /^(?:me manda|manda|mostra|me mostra|quero)\s+(?:o\s+)?(?:relatorio|resumo)\s+(?:do\s+)?mes/.test(value);
+    || /^(?:me manda|manda|mostra|me mostra|quero)\s+(?:o\s+)?(?:relatorio|resumo)\s+(?:do\s+)?(?:mes|mensal)/.test(value);
   if (monthly) return 'monthly';
 
   return null;
