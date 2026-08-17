@@ -68,6 +68,98 @@ function normalized(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function addPocketName(target: string[], rawName: string): void {
+  const name = cleanPocketDisplayName(rawName);
+  if (!validPocketName(name)) return;
+  const key = normalizeCashPocketName(name);
+  if (target.some(item => normalizeCashPocketName(item) === key)) return;
+  target.push(name);
+}
+
+/**
+ * Extrai uma ou várias criações de cofrinho da mesma mensagem.
+ *
+ * A criação em lote precisa ser resolvida antes do parser de comando único,
+ * porque frases como "cria X e outro chamado Y" não podem deixar o segundo
+ * comando grudado no nome do primeiro cofrinho.
+ */
+export function parseCashPocketCreateNames(input: string): string[] {
+  const original = String(input ?? '').trim();
+  if (!original) return [];
+
+  const value = normalized(original);
+  const hasCreationVerb = /\b(cria|criar|crie|abre|abrir|faz|faca|faça|quero|novo|nova)\b/.test(value);
+  const hasPocketWord = /\bcofrinh(?:o|os)\b/.test(value);
+  if (!hasCreationVerb || !hasPocketWord) return [];
+
+  // Separa continuidades inline antes de extrair os nomes. Isso cobre:
+  // "criar cofrinho Casa e outro chamado Lazer".
+  const prepared = original
+    .replace(/\s+(?=(?:e\s+)?(?:cria(?:r|e)?\s+)?outro(?:\s+cofrinho)?\s+(?:chamad[oa]|de|s[oó])\b)/gi, '\n')
+    .replace(/\s+(?=(?:e\s+)?cria(?:r|e)?\s+outro\s+cofrinho\b)/gi, '\n');
+
+  const lines = prepared
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const names: string[] = [];
+  let creationContext = false;
+  let plainListMode = false;
+
+  for (const line of lines) {
+    const pluralHeader = line.match(
+      /^(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:os\s+)?cofrinhos?\s*:?[\s-]*(.*)$/i
+    );
+    if (pluralHeader) {
+      creationContext = true;
+      plainListMode = true;
+      const tail = String(pluralHeader[1] ?? '').trim();
+      if (tail) {
+        for (const candidate of tail.split(/[,;]+/)) addPocketName(names, candidate);
+      }
+      continue;
+    }
+
+    const explicitPatterns = [
+      /^(?:e\s+)?(?:cria|criar|crie|abre|abrir|faz|faca|faça)\s+(?:(?:um|outro|mais\s+um)\s+)?cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i,
+      /^(?:e\s+)?(?:novo|nova)\s+cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i,
+      /^(?:e\s+)?quero\s+(?:um\s+)?cofrinho\s+(?:chamad[oa]\s+|de\s+)?(.+)$/i
+    ];
+
+    let explicitName: string | null = null;
+    for (const pattern of explicitPatterns) {
+      const match = line.match(pattern);
+      if (match?.[1]) {
+        explicitName = match[1];
+        break;
+      }
+    }
+    if (explicitName) {
+      creationContext = true;
+      plainListMode = false;
+      addPocketName(names, explicitName);
+      continue;
+    }
+
+    if (creationContext) {
+      const continuation = line.match(
+        /^(?:e\s+)?(?:cria\s+)?(?:outro|mais\s+um)(?:\s+cofrinho)?\s+(?:(?:chamad[oa]|de|s[oó])\s+)?(.+)$/i
+      );
+      if (continuation?.[1]) {
+        addPocketName(names, continuation[1]);
+        continue;
+      }
+
+      if (plainListMode && !/[?:]$/.test(line) && !/\b(saldo|extrato|quanto|gastei|recebi|paguei|ganhei)\b/i.test(line)) {
+        for (const candidate of line.split(/[,;]+/)) addPocketName(names, candidate);
+      }
+    }
+  }
+
+  return names;
+}
+
 function extractNameAfterCofrinho(original: string): string | null {
   const match = original.match(/\bcofrinh(?:o|os)\s+(?:chamad[oa]\s+|d[oa]\s+|de\s+)?([^\n,;.!?]+)$/i);
   let name = cleanPocketDisplayName(match?.[1] ?? '');
@@ -91,18 +183,8 @@ export function parseCashPocketCommand(input: string): CashPocketCommand {
   const movement = /\b(gastei|gasto|paguei|comprei|recebi|ganhei|entrou|vendi|faturei|guardei|reservei|separei)\b/.test(value);
   const question = /\b(quanto|qual|total|soma|me mostra|mostra|liste|lista|quais|extrato|historico|historico|registros|lancamentos|movimentacoes)\b/.test(value) || /\?$/.test(input.trim());
 
-  if (/\b(cria|criar|crie|novo|nova|abre|abrir|faz|faca|faça|quero)\b/.test(value) && /\bcofrinho\b/.test(value)) {
-    const patterns = [
-      /\b(?:cria|criar|crie|abre|abrir|faz|faça|faca)\s+(?:um\s+|o\s+)?cofrinho\s+(?:chamado\s+|chamada\s+|de\s+)?(.+)$/i,
-      /\b(?:novo|nova)\s+cofrinho\s+(?:chamado\s+|chamada\s+|de\s+)?(.+)$/i,
-      /\bquero\s+(?:um\s+)?cofrinho\s+(?:chamado\s+|chamada\s+|de\s+)?(.+)$/i
-    ];
-    for (const pattern of patterns) {
-      const match = input.match(pattern);
-      const name = cleanPocketDisplayName(match?.[1] ?? '');
-      if (validPocketName(name)) return { kind: 'create', name };
-    }
-  }
+  const createNames = parseCashPocketCreateNames(input);
+  if (createNames.length === 1) return { kind: 'create', name: createNames[0] };
 
   if (!movement && /\b(lista|listar|liste|mostra|mostrar|mostre|quais|meus|ver)\b/.test(value) && /\bcofrinhos\b/.test(value)) {
     return { kind: 'list' };
@@ -270,6 +352,37 @@ function pocketLine(pocket: CashPocketBalance): string {
 }
 
 export async function handleCashPocketCommand(context: VerticalContext): Promise<VerticalResult | null> {
+  const createNames = parseCashPocketCreateNames(context.combinedText);
+  if (createNames.length) {
+    const created: string[] = [];
+    const existing: string[] = [];
+
+    for (const name of createNames) {
+      const result = await cashPocketService.create(context.company.id, name);
+      (result.created ? created : existing).push(result.pocket.name);
+    }
+
+    if (createNames.length === 1) {
+      const name = created[0] ?? existing[0];
+      return created.length
+        ? text([`🐷 Cofrinho *${name}* criado.`, '', `Para usar: “recebi 500 no cofrinho ${name}” ou “gastei 30 do cofrinho ${name}”.`].join('\n'))
+        : text(`🐷 O cofrinho *${name}* já existe. O saldo e os lançamentos dele continuam separados.`);
+    }
+
+    const lines = ['🐷 *Cofrinhos organizados*', ''];
+    if (created.length) {
+      lines.push(`✅ Criados (${created.length}):`);
+      lines.push(...created.map(name => `• ${name}`));
+    }
+    if (existing.length) {
+      if (created.length) lines.push('');
+      lines.push(`↩️ Já existiam (${existing.length}):`);
+      lines.push(...existing.map(name => `• ${name}`));
+    }
+    lines.push('', 'Agora você pode registrar entradas e saídas dizendo o nome do cofrinho.');
+    return text(lines.join('\n'));
+  }
+
   const command = parseCashPocketCommand(context.combinedText);
   if (!command) return null;
 
