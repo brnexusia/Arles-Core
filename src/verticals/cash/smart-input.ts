@@ -38,6 +38,7 @@ const BatchSchema = z.object({
 });
 
 type BatchItem = z.infer<typeof BatchItemSchema>;
+type BatchSection = 'income' | 'expense' | null;
 
 export type CashSmartInput =
   | { kind: 'result'; result: VerticalResult }
@@ -97,13 +98,25 @@ function hasSeveralMoneyValues(input: string): boolean {
 }
 
 function hasMovementLanguage(input: string): boolean {
-  return /\b(ganhei|recebi|entrou|salario|salário|gastei|paguei|comprei|custou|guardei|reservei|separei|pague|comprei)\b/i.test(input);
+  return /\b(ganhei|recebi|entrou|salario|salário|gastei|paguei|comprei|custou|guardei|reservei|separei|pague|despesas?|gastos?|sa[ií]das?|entradas?|receitas?|ganhos?)\b/i.test(input);
+}
+
+export function cashBatchSectionHeader(input: string): BatchSection {
+  const value = normalize(input).replace(/[:\-–—]+$/g, '').trim();
+  if (/^(despesas?|gastos?|saidas?|compras?)$/.test(value)) return 'expense';
+  if (/^(entradas?|receitas?|ganhos?|recebimentos?)$/.test(value)) return 'income';
+  return null;
+}
+
+function hasBatchListHeader(input: string): boolean {
+  return /(?:^|\n)\s*(despesas?|gastos?|sa[ií]das?|compras?|entradas?|receitas?|ganhos?|recebimentos?)\s*[:\-–—]?\s*(?:$|\n)/im.test(input)
+    || /\b(despesas?|gastos?|sa[ií]das?|entradas?|receitas?)\s*:\s*[^\n]+/i.test(input);
 }
 
 export function looksLikeCashBatch(input: string): boolean {
   if (!hasSeveralMoneyValues(input) || !hasMovementLanguage(input)) return false;
   const verbs = input.match(/\b(ganhei|recebi|entrou|gastei|paguei|comprei|guardei|reservei|separei)\b/gi) ?? [];
-  return verbs.length >= 2 || input.includes('\n');
+  return verbs.length >= 2 || input.includes('\n') || input.includes(';') || hasBatchListHeader(input);
 }
 
 function missingAmountExpense(input: string): boolean {
@@ -120,7 +133,14 @@ function simpleSegments(input: string): string[] {
     .split(/\n+|;+/)
     .map(value => value.trim())
     .filter(Boolean)
-    .slice(0, 12);
+    .slice(0, 24);
+}
+
+function sectionPrefix(segment: string): { section: BatchSection; remainder: string } {
+  const match = segment.match(/^\s*(despesas?|gastos?|sa[ií]das?|compras?|entradas?|receitas?|ganhos?|recebimentos?)\s*[:\-–—]\s*(.*)$/i);
+  if (!match) return { section: null, remainder: segment };
+  const section = cashBatchSectionHeader(match[1] ?? '');
+  return { section, remainder: String(match[2] ?? '').trim() };
 }
 
 export function adjustCashRemainder(segment: string, transaction: CashTransactionInput): CashTransactionInput {
@@ -136,10 +156,39 @@ export function adjustCashRemainder(segment: string, transaction: CashTransactio
 
 async function fallbackBatch(input: string): Promise<CashTransactionInput[]> {
   const rows: CashTransactionInput[] = [];
-  for (const segment of simpleSegments(input)) {
+  let section: BatchSection = null;
+
+  for (const rawSegment of simpleSegments(input)) {
+    const directHeader = cashBatchSectionHeader(rawSegment);
+    if (directHeader) {
+      section = directHeader;
+      continue;
+    }
+
+    const prefixed = sectionPrefix(rawSegment);
+    if (prefixed.section) section = prefixed.section;
+    const segment = prefixed.remainder;
+    if (!segment) continue;
+
     if (/\b(sobrou|restou)\b/i.test(segment) && !/\b(comprei|gastei|paguei)\b/i.test(segment)) continue;
-    const parsed = await cashParser.parse(segment);
-    if (parsed) rows.push(adjustCashRemainder(segment, parsed));
+
+    const candidate = section && !/\b(ganhei|recebi|entrou|gastei|paguei|comprei|guardei|reservei|separei)\b/i.test(segment)
+      ? `${section === 'income' ? 'recebi' : 'gastei'} ${segment}`
+      : segment;
+
+    const parsed = await cashParser.parse(candidate);
+    if (!parsed) continue;
+
+    const typed = section
+      ? {
+          ...parsed,
+          type: section,
+          category: section === 'income' ? 'Receita' : parsed.category === 'Receita' ? 'Outros' : parsed.category
+        } satisfies CashTransactionInput
+      : parsed;
+
+    rows.push(adjustCashRemainder(segment, typed));
+    if (rows.length >= 12) break;
   }
   return rows;
 }
@@ -156,6 +205,8 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
             'Você separa uma mensagem do Arles Cash em lançamentos financeiros distintos.',
             'A mensagem pode misturar receita, dinheiro reservado e várias despesas.',
             'Crie um item por movimento REAL. Nunca junte movimentos diferentes em uma descrição.',
+            'Listas com cabeçalhos devem herdar o tipo. Ex.: “Despesas:\nMercado 50\nUber 20” = duas despesas; “Entradas:\nFreela 300\nVenda 200” = duas receitas.',
+            'Se houver novos cabeçalhos no meio da mensagem, troque o tipo das linhas seguintes de acordo com o novo cabeçalho.',
             'income = dinheiro que entrou. expense = dinheiro que saiu do dinheiro disponível.',
             '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva.',
             '“sobrou 20” sozinho NÃO é lançamento.',
@@ -269,8 +320,6 @@ export async function preprocessCashInput(context: VerticalContext): Promise<Cas
     return { kind: 'result', result: text('Consigo registrar isso, mas preciso do valor 😊\nExemplo: “paguei R$100 nas unhas e R$100 na bicicleta”.') };
   }
 
-  // Consultas seguem para o roteador/consulta. Todo possível lançamento novo passa
-  // pelo parser híbrido e vira apenas um resumo pendente; nada é salvo aqui.
   if (!looksLikeFinancialQuery(input)) {
     const parsed = await cashParser.parse(source);
     if (parsed) {
