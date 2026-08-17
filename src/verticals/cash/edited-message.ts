@@ -114,6 +114,19 @@ async function replaceConfirmedRecords(input: {
   });
   if (!oldRows.length) return text('✏️ Vi que a mensagem foi editada. Como ela ainda não tinha um lançamento confirmado ligado a ela, não alterei seu saldo.');
 
+  // Uma edição que muda a quantidade de itens de uma mensagem já confirmada é
+  // destrutiva. Não inferimos que o usuário quis apagar/criar lançamentos só porque
+  // o parser enxergou uma quantidade diferente após a edição.
+  if (oldRows.length > 1 && input.transactions.length !== oldRows.length) {
+    return text([
+      '✏️ Vi que você editou uma mensagem que originou vários lançamentos.',
+      `Antes havia ${oldRows.length} registros e agora identifiquei ${input.transactions.length}.`,
+      '',
+      'Para não apagar ou criar registros por engano, mantive o ledger como estava.',
+      'Se quiser alterar a estrutura da lista, cite a mensagem e diga qual item quer editar/apagar, ou envie os lançamentos novamente.'
+    ].join('\n'));
+  }
+
   const prepared = await prepareCashPocketTransactions(input.company.id, input.source, input.transactions);
   if (prepared.error) return text(prepared.error);
 
