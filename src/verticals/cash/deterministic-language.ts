@@ -2,6 +2,7 @@ import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashConversationHandler } from './conversation.js';
+import { rememberCashQueryContext } from './conversation-state.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
@@ -131,8 +132,6 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'future_data', canonical: input };
   }
 
-  // As camadas de corpus entram cedo para remover linguagem conversacional e
-  // entregar ao motor financeiro apenas a intenção e a frase canônica seguras.
   const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
   if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
 
@@ -225,7 +224,9 @@ export async function handleCashDeterministicLanguage(context: VerticalContext):
   }
 
   if (route.intent === 'query') {
-    return await cashQuery.handle(context.company.id, route.canonical);
+    const result = await cashQuery.handle(context.company.id, route.canonical);
+    if (result) await rememberCashQueryContext(context.company.id, context.message.phone, route.canonical);
+    return result;
   }
 
   if (route.intent === 'history' || route.intent === 'undo') {
