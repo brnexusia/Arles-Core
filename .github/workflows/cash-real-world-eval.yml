@@ -9,6 +9,7 @@ on:
       - 'tests/cash-real-world-5000.test.ts'
       - 'tests/cash-natural-language-mass.test.ts'
       - 'tests/cash-conversation-safety.test.ts'
+      - 'tests/cash-all-time-aggregate-grammar.test.ts'
       - '.github/workflows/cash-real-world-eval.yml'
   workflow_dispatch:
     inputs:
@@ -62,7 +63,7 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
           EVOLUTION_BASE_URL: http://127.0.0.1:8080
           EVOLUTION_API_KEY: test
-        run: npx vitest run tests/cash-natural-language-mass.test.ts tests/cash-conversation-safety.test.ts
+        run: npx vitest run tests/cash-natural-language-mass.test.ts tests/cash-conversation-safety.test.ts tests/cash-all-time-aggregate-grammar.test.ts
 
   eval:
     name: Cash eval parte ${{ matrix.shard }}
@@ -141,10 +142,10 @@ jobs:
         run: |
           if [ "$TYPECHECK_RESULT" = "success" ] && [ "$EVAL_RESULT" = "success" ]; then
             state="success"
-            description="96k+ linguagem + proteção conversacional + 5.000 mensagens passaram"
+            description="96k+ linguagem + agregação semântica + proteção + 5.000 mensagens passaram"
           else
             state="failure"
-            description="Falha no typecheck, proteção conversacional ou eval de 5.000 mensagens"
+            description="Falha no typecheck, gramática semântica, proteção ou eval de 5.000 mensagens"
           fi
 
           target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
