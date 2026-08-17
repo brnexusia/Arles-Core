@@ -29,10 +29,9 @@ const ParsedTransactionSchema = z.object({
 });
 
 const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague|guardei|reservei|separei|retirei|retirou|retiraram|saquei|sacou)\b/i;
-const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
+const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance|vendas?)\b/i;
 const MOVEMENT = /\b(gastei|gasto|paguei|comprei|guardei|reservei|separei|retirei|retirou|retiraram|saquei|sacou|recebi|ganhei|entrou|vendi|faturei|depositaram)\b/gi;
-
-const WEEKDAY_INDEX: Record<string, number> = {
+const WEEKDAYS: Record<string, number> = {
   domingo: 0,
   segunda: 1,
   'segunda-feira': 1,
@@ -72,22 +71,22 @@ function transactionType(text: string, amount: number | null): CashTransactionTy
   if (EXPENSE.test(text)) return 'expense';
   if (!amount) return null;
 
+  // Linguagem compacta comum: “mercado 20”, “farmácia 45”.
   const usefulText = text.replace(/[\d.,R$\s]/gi, '');
   return usefulText.length >= 2 ? 'expense' : null;
 }
 
-function weekdayDateFrom(text: string): string | null {
-  const value = String(text ?? '')
+function normalizeWord(value: string): string {
+  return value
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
-  const match = value.match(/\b(domingo|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado)\b/);
-  if (!match?.[1]) return null;
-  const target = WEEKDAY_INDEX[match[1]];
-  if (target == null) return null;
-  const today = brazilParts();
-  const delta = (today.weekday - target + 7) % 7;
-  return dateIsoOffset(-delta);
+}
+
+function previousWeekdayIso(targetWeekday: number, from = new Date()): string {
+  const current = brazilParts(from).weekday;
+  const delta = (current - targetWeekday + 7) % 7;
+  return dateIsoOffset(-delta, from);
 }
 
 function dateFrom(text: string): string {
@@ -95,25 +94,28 @@ function dateFrom(text: string): string {
   if (/\banteontem\b/i.test(text)) return dateIsoOffset(-2);
   if (/\bhoje\b/i.test(text)) return isoBrazil();
 
-  const explicit = text.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/);
-  if (explicit) {
-    const now = brazilParts();
-    const yearRaw = explicit[3];
-    const year = yearRaw ? Number(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw) : now.year;
-    const month = Number(explicit[2]);
-    const day = Number(explicit[1]);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    if (
-      !Number.isNaN(date.getTime()) &&
-      date.getUTCFullYear() === year &&
-      date.getUTCMonth() === month - 1 &&
-      date.getUTCDate() === day
-    ) {
-      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    }
+  const weekday = text.match(/\b(domingo|segunda(?:-feira)?|terça(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|sabado)\b/i)?.[1];
+  if (weekday) {
+    const target = WEEKDAYS[normalizeWord(weekday)];
+    if (target != null) return previousWeekdayIso(target);
   }
 
-  return weekdayDateFrom(text) ?? isoBrazil();
+  const explicit = text.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/);
+  if (!explicit) return isoBrazil();
+
+  const now = brazilParts();
+  const yearRaw = explicit[3];
+  const year = yearRaw ? Number(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw) : now.year;
+  const month = Number(explicit[2]);
+  const day = Number(explicit[1]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return isoBrazil();
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 export function categoryFrom(text: string, type: CashTransactionType): string {
@@ -121,7 +123,7 @@ export function categoryFrom(text: string, type: CashTransactionType): string {
   const value = text.toLowerCase();
 
   if (/\b(guardei|reservei|separei|poupança|poupanca|reserva)\b/.test(value)) return 'Reserva';
-  if (/mercado|supermercado|feira|açougue|acougue|padaria|pizzaria|pizza|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery/.test(value)) return 'Alimentação';
+  if (/mercado|supermercado|feira|açougue|acougue|padaria|almoço|almoco|jantar|lanche|acaraj[eé]|ifood|delivery|pizzaria|pizza/.test(value)) return 'Alimentação';
   if (/uber|\b99\b|gasolina|combustível|combustivel|estacionamento|ônibus|onibus|metrô|metro|passagem|bicicleta/.test(value)) return 'Transporte';
   if (/farmácia|farmacia|médico|medico|consulta|exame|plano de saúde|plano de saude|remédio|remedio|xarope/.test(value)) return 'Saúde';
   if (/\bluz\b|\bágua\b|\bagua\b|internet|aluguel|condomínio|condominio|\bgás\b|\bgas\b/.test(value)) return 'Moradia';
@@ -142,9 +144,11 @@ function merchantFrom(text: string): string {
 export function descriptionFrom(text: string): string {
   let value = text.trim();
   value = value
-    .replace(/^\s*eu\s+/i, '')
     .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
     .replace(/\b(domingo|segunda(?:-feira)?|terça(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|sabado)\b/gi, ' ')
+    // Depois de remover “ontem/hoje”, uma frase como “Ontem eu gastei...” passa a
+    // começar por “eu”. Limpa o pronome antes de remover o verbo financeiro.
+    .replace(/^\s*eu\s+/i, '')
     .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
     .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|guardei|reservei|separei|retirei|retirou|retiraram|saquei|sacou|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
     .replace(/(?:\b(?:por|de)\s+)?(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:[.,]\d{1,2})?(?:\s*reais?)?/gi, ' ')
@@ -233,16 +237,15 @@ export class CashParser {
               'Nunca invente valor, data, loja, pessoa ou descrição que não estejam sustentados pela mensagem.',
               'expense é dinheiro que realmente saiu do disponível; income é dinheiro que realmente entrou.',
               '“guardei”, “reservei” ou “separei dinheiro” é expense na categoria Reserva.',
-              '“retirei”, “retirou”, “sacou” ou equivalente é saída real quando houver valor.',
               'Frases como “120 no almoço” ou “farmácia 45” são despesas somente quando estão sendo informadas como fato, não pergunta/simulação.',
               'Se não houver lançamento REAL e valor identificáveis, is_transaction=false.',
               'Use SOMENTE: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
               'Toda entrada usa Receita. Dinheiro guardado usa Reserva.',
               'merchant é loja, pessoa ou local somente quando estiver claro.',
-              'description deve ser curta e humana, sem repetir verbo, valor, data nem o nome do cofrinho.',
+              'description deve ser curta e humana, sem repetir verbo, valor e data.',
               'Quando o usuário citar vários itens dentro do mesmo gasto, preserve os nomes dos itens na description.',
               'Nunca troque uma lista explícita por “itens diversos”, “compras diversas”, “coisas diversas” ou equivalente.',
-              `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas e dias da semana para YYYY-MM-DD.`
+              `Hoje no fuso UTC-3 é ${isoBrazil()}. Converta datas relativas para YYYY-MM-DD.`
             ].join('\n')
           },
           { role: 'user', content: text }
@@ -258,10 +261,7 @@ export class CashParser {
         category: parsed.type === 'income' ? 'Receita' : parsed.category,
         merchant: parsed.merchant.trim().slice(0, 120),
         description: specificDescription(text, parsed.description, deterministic),
-        transactionDate: weekdayDateFrom(text)
-          ?? (/^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date)
-            ? parsed.transaction_date
-            : deterministic?.transactionDate ?? isoBrazil())
+        transactionDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.transaction_date) ? parsed.transaction_date : deterministic?.transactionDate ?? isoBrazil()
       };
     } catch (error) {
       console.error('[CashParser] falha na IA; usando fallback determinístico:', error);
