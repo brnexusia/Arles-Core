@@ -39,7 +39,7 @@ const SOURCE_EXAMPLES = [...SOURCE_INDEX.values()];
 
 export const CASH_NATURAL_LANGUAGE_COLLOQUIAL_EXAMPLES: CashNaturalLanguageExample[] = SOURCE_EXAMPLES.map(
   (example, index) => ({
-    input: TRANSFORMS[index % TRANSFORMS.length](example.input),
+    input: TRANSFORMS[index % TRANSFORMS.length]!(example.input),
     intent: example.intent,
     canonical: example.canonical
   })
