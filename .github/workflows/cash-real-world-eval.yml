@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fix/cash-deterministic-context-v2
     paths:
       - 'src/verticals/cash/**'
       - 'tests/cash-real-world-5000.test.ts'
