@@ -7,6 +7,8 @@ export interface CashTransactionInput {
   merchant: string;
   description: string;
   transactionDate: string;
+  pocketId?: string | null;
+  pocketName?: string | null;
 }
 
 export interface CashSummary {
