@@ -1,4 +1,4 @@
-name: Cash 5000-message real-world eval
+name: Cash 10000-message synthetic eval
 
 on:
   push:
@@ -19,6 +19,43 @@ concurrency:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic
+          POSTGRES_DB: arles_cash_synthetic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U synthetic -d arles_cash_synthetic"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://synthetic:synthetic@127.0.0.1:5432/arles_cash_synthetic
+      REDIS_URL: redis://127.0.0.1:6379
+      EVOLUTION_BASE_URL: http://127.0.0.1:65535
+      EVOLUTION_API_KEY: synthetic-only
+      OPENAI_API_KEY: ''
+      CASH_OFFICIAL_NUMBER: '5500000000000'
+      CASH_PAYMENT_MONTHLY_URL: https://example.invalid/mensal
+      CASH_PAYMENT_QUARTERLY_URL: https://example.invalid/trimestral
+      CASH_PAYMENT_ANNUAL_URL: https://example.invalid/anual
+      CASH_MESSAGE_SILENCE_MS: '0'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,26 +70,19 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        env:
-          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
-          REDIS_URL: redis://127.0.0.1:6379
-          EVOLUTION_BASE_URL: http://127.0.0.1:8080
-          EVOLUTION_API_KEY: test
         run: npm run typecheck
 
-      - name: Run 5000-message Cash eval
-        env:
-          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
-          REDIS_URL: redis://127.0.0.1:6379
-          EVOLUTION_BASE_URL: http://127.0.0.1:8080
-          EVOLUTION_API_KEY: test
+      - name: Run 5000-message routing eval
         run: npx vitest run tests/cash-real-world-5000.test.ts
 
+      - name: Build isolated test runtime
+        if: always()
+        run: npm run build
+
+      - name: Migrate isolated test database
+        if: always()
+        run: npm run migrate
+
       - name: Run 5000-message stateful Cash eval
-        if: hashFiles('tests/cash-daily-stateful-5000.test.ts') != ''
-        env:
-          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
-          REDIS_URL: redis://127.0.0.1:6379
-          EVOLUTION_BASE_URL: http://127.0.0.1:8080
-          EVOLUTION_API_KEY: test
+        if: always() && hashFiles('tests/cash-daily-stateful-5000.test.ts') != ''
         run: npx vitest run tests/cash-daily-stateful-5000.test.ts
