@@ -5,12 +5,17 @@ import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
+import {
+  classifyCashCorpus,
+  handleCashConversationCorpus
+} from './conversation-corpus.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import {
   handleCashLedgerDeterministic,
   isCashProtectedNonTransaction
 } from './ledger.js';
 import { deletionTarget } from './management.js';
+import { handleCashQuotedManagement } from './quoted-management.js';
 
 const SemanticSchema = z.object({
   intent: z.enum([
@@ -19,6 +24,8 @@ const SemanticSchema = z.object({
     'balance',
     'projection',
     'pocket',
+    'forecast_schedule',
+    'forecast_query',
     'history',
     'weekly_report',
     'monthly_report',
@@ -88,30 +95,33 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
         {
           role: 'system',
           content: [
-            'Você é a camada de FALLBACK de compreensão do Arles Cash, um assistente financeiro pessoal no WhatsApp.',
-            'A maior parte das frases já foi resolvida por regras. Você entra apenas quando a linguagem ficou fora dessas rotas.',
+            'Você é a camada de ÚLTIMO RECURSO de compreensão do Arles Cash.',
+            'Antes de você ser chamado, o Core já tentou um corpus grande de rotas determinísticas para lançamentos, consultas, saldo, simulações, cofrinhos, agenda e gestão.',
             'Entenda português brasileiro natural, erros, gírias, frases incompletas e contexto de mensagem respondida.',
             'Você NÃO consulta banco, NÃO calcula saldo real, NÃO salva e NÃO apaga nada. Apenas classifica e reescreve para o Core seguro executar.',
-            'transaction: a pessoa afirma um lançamento NOVO e REAL que já aconteceu/acontece. Nunca classifique hipótese, pergunta ou simulação como transaction.',
-            'query: quer consultar registros, gastos, receitas, lojas, categorias, períodos ou listas. rewritten_text deve preservar filtros.',
-            'balance: quer saber o saldo real atual/acumulado. rewritten_text pode ser “saldo”.',
-            'projection: quer simular quanto sobrará/terá caso gaste ou receba um valor. rewritten_text DEVE manter todos os valores e virar frase explícita como “se eu gastar 5,67, quanto fica meu saldo?”.',
-            'pocket: quer criar/listar/consultar um cofrinho, caixinha, envelope ou separação de dinheiro. Reescreva usando a palavra “cofrinho” e preserve o nome. Ex.: “faz uma caixinha trabalho” -> “criar cofrinho Trabalho”.',
-            'history: quer ver lançamentos recentes quando disser explicitamente histórico, últimos ou recentes.',
-            'weekly_report/monthly_report: quer relatório/fechamento da semana ou mês.',
-            'edit: quer explicitamente corrigir um lançamento existente.',
-            'delete: quer explicitamente apagar um lançamento existente. Nunca use para apagar conta, cadastro, perfil ou dados pessoais.',
-            'undo: quer desfazer a última exclusão de lançamento.',
-            'help: quer aprender como usar alguma função.',
-            'plans: quer preço, assinatura, plano ou pagar.',
-            'trial: pergunta sobre teste grátis, período gratuito, validade ou status do trial.',
-            'categories: pergunta sobre categorias.',
-            'schedule: pergunta quando relatórios automáticos são enviados.',
-            'acknowledgement: resposta social curta sem nova ação.',
-            'unknown: conversa que não cabe com segurança nas funções acima.',
-            'IMPORTANTE: “tenho saldo de 10, se eu gastar 5,67 quanto fica?” é projection, NUNCA transaction.',
-            'IMPORTANTE: “se eu receber 100 e gastar 20 quanto terei?” é projection, NUNCA dois lançamentos.',
-            'IMPORTANTE: números em perguntas não são prova de lançamento.',
+            'transaction: lançamento NOVO, REAL e já ocorrido. Nunca use para hipótese, previsão, recorrência ou pergunta.',
+            'query: consulta de registros reais. rewritten_text preserva filtros e período.',
+            'balance: saldo real atual/acumulado.',
+            'projection: simulação pontual do tipo “se eu gastar/receber X, quanto fica?”. Preserve todos os valores.',
+            'pocket: criar/listar/consultar cofrinho, caixinha ou envelope. Reescreva usando “cofrinho”.',
+            'forecast_schedule: criar uma previsão/agendamento financeiro futuro ou recorrente. Preserve valor, tipo, descrição, data e recorrência. Ex.: “todo dia 10 pago 300 do cartão”.',
+            'forecast_query: consultar agendamentos, gastos/entradas previstos ou saldo projetado. Preserve horizonte: fim do mês, data, etc.',
+            'history: últimos registros reais.',
+            'weekly_report/monthly_report: relatório real da semana/mês.',
+            'edit: corrigir lançamento existente.',
+            'delete: apagar lançamento existente. Nunca use para conta/cadastro/perfil.',
+            'undo: desfazer última exclusão.',
+            'help: aprender a usar.',
+            'plans: preço/assinatura/pagamento.',
+            'trial: teste grátis/status do trial.',
+            'categories: categorias.',
+            'schedule: somente agenda dos relatórios automáticos do produto; NÃO use para previsão financeira.',
+            'acknowledgement: resposta social curta.',
+            'unknown: fora das funções ou inseguro.',
+            'CRÍTICO: “tenho saldo de 10, se eu gastar 5,67 quanto fica?” = projection, nunca transaction.',
+            'CRÍTICO: “todo dia 10 gasto 300 no cartão” = forecast_schedule, nunca transaction.',
+            'CRÍTICO: “quanto vou ter no fim do mês?” = forecast_query.',
+            'CRÍTICO: previsões não são lançamentos reais e não alteram o saldo atual.',
             'Se houver mensagem citada, use-a como contexto sem inventar conteúdo.',
             quoted ? `Mensagem citada/respondida: ${quoted}` : 'Não há mensagem citada nesta interação.'
           ].join('\n')
@@ -143,14 +153,29 @@ function canonical(intent: SemanticIntent['intent']): string | null {
 
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
+    // Citação/resposta do WhatsApp é contexto mais forte que qualquer regex genérica.
+    // “corrige essa”, “apaga essa”, “essa foi entrada” continuam usando o ID exato.
+    if (context.message.quotedMessageId || context.message.quotedText) {
+      const quoted = await handleCashQuotedManagement(context);
+      if (quoted) return quoted;
+    }
+
+    // Primeiro passa pelo corpus. É aqui que centenas/milhares de variações comuns
+    // deixam de consumir IA e vão direto para as funções do Core.
+    const corpusResult = await handleCashConversationCorpus(context);
+    if (corpusResult) return corpusResult;
+
+    const corpusRoute = classifyCashCorpus(context.combinedText);
+    if (corpusRoute.intent === 'plans' || corpusRoute.intent === 'trial' || corpusRoute.intent === 'categories') {
+      return await cashBroadHandler.handle({ ...context, combinedText: corpusRoute.canonical ?? context.combinedText });
+    }
+
     if (isCashNaturalRecordListRequest(context.combinedText)) {
       return await cashBroadHandler.handle({ ...context, combinedText: 'quais foram meus registros hoje?' });
     }
 
     if (deletionTarget(context.combinedText)) return await cashBroadHandler.handle(context);
 
-    // Uma segunda trava de leitura/cálculo antes do parser. Normalmente AccessHandler
-    // já resolveu isso; aqui protege chamadas internas e reescritas futuras.
     if (isCashProtectedNonTransaction(context.combinedText)) {
       const ledger = await handleCashLedgerDeterministic(context);
       if (ledger) return ledger;
@@ -158,6 +183,7 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     if (obviousTransaction(context.combinedText)) return await cashBroadHandler.handle(context);
 
+    // Só depois de todas as rotas determinísticas acima a IA é chamada.
     const understood = await semanticRoute(context);
     if (!understood || understood.intent === 'unknown') return await cashBroadHandler.handle(context);
 
@@ -194,6 +220,13 @@ export class CashAiFirstHandler implements VerticalHandler {
       const result = await handleCashPocketCommand({ ...context, combinedText: rewritten });
       if (result) return result;
       return text('Entendi que você está falando de um cofrinho. Pode dizer, por exemplo, “criar cofrinho Emprego”, “meus cofrinhos” ou “saldo do cofrinho Emprego”.');
+    }
+
+    if (understood.intent === 'forecast_schedule' || understood.intent === 'forecast_query') {
+      const rewritten = understood.rewritten_text?.trim() || context.combinedText;
+      const result = await handleCashConversationCorpus({ ...context, combinedText: rewritten });
+      if (result) return result;
+      return text('Entendi que você está falando de uma previsão financeira. Tente manter valor e data/recorrência, por exemplo: “todo dia 10 pago 300 do cartão” ou “quanto vou ter no fim do mês?”.');
     }
 
     if (understood.intent === 'edit' || understood.intent === 'delete') {

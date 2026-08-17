@@ -119,7 +119,7 @@ export function isCashHypotheticalOrCalculation(input: string): boolean {
   const value = normalize(input);
   if (!value) return false;
   if (/\b(simula|simular|simulacao|simulação|hipoteticamente|supondo|imaginando|faria uma conta|faz a conta|calcula|calcular)\b/.test(value)) return true;
-  if (/\b(se|caso|e se)\b/.test(value) && /\b(gastar|gaste|pagar|pague|comprar|receber|ganhar|entrar|cair|sair|sobrar|restar|ficar|saldo)\b/.test(value)) return true;
+  if (/\b(se|caso|e se)\b/.test(value) && /\b(?:gast\w*|pag\w*|compr\w*|receb\w*|ganh\w*|entr\w*|cai\w*|sai\w*|sobr\w*|rest\w*|fic\w*|saldo)\b/.test(value)) return true;
   if (/\b(quanto|qual)\b.*\b(ficaria|fica|sobraria|sobra|restaria|resta|teria|terei|vai sobrar|vai ficar)\b/.test(value)) return true;
   if (/\b(?:vou|irei|pretendo)\s+(?:gastar|pagar|comprar|receber|ganhar)\b/.test(value) && /\b(quanto|saldo|sobra|fica|ficaria)\b/.test(value)) return true;
   if (/\b(?:saldo|tenho)\b.*\b(?:menos|mais)\b\s*(?:r\$\s*)?\d/.test(value)) return true;
@@ -154,9 +154,24 @@ export function isCashDirectBalanceRequest(input: string): boolean {
   return /\b(quanto eu tenho|quanto tenho|quanto que eu tenho|quanto que tenho|quanto tem|quanto que tem|quanto sobrou|quanto que sobrou|quanto me resta|quanto resta|quanto tenho disponivel|quanto tenho disponível|qual e meu saldo|qual é meu saldo|como esta meu saldo|como está meu saldo|meu dinheiro agora|quanto tenho de dinheiro|quanto ficou meu saldo)\b/.test(value);
 }
 
+export function isCashForecastLanguage(input: string): boolean {
+  const value = normalize(input);
+  if (!value) return false;
+
+  // Recorrência explícita é sempre previsão, nunca lançamento já realizado.
+  if (/\b(todo dia|todos os dias|toda semana|todo mes|todo mês|todo ano|diariamente|semanalmente|mensalmente|anualmente|a cada\s+\d+\s+(?:dias|semanas|meses|anos))\b/.test(value)) return true;
+  if (/\b(agend\w*|program\w*|previs\w*|previst\w*|saldo projetado|contas futuras)\b/.test(value)) return true;
+
+  // Futuro pontual com verbo de dinheiro: “amanhã vou pagar 100”.
+  const futureTime = /\b(amanha|depois de amanha|daqui a\s+\d+\s+dias?|no dia\s+\d{1,2}|dia\s+\d{1,2}[\/-]\d{1,2})\b/.test(value);
+  const futureVerb = /\b(?:vou|irei|pretendo)\s+(?:gast\w*|pag\w*|compr\w*|receb\w*|ganh\w*|fatur\w*)\b/.test(value);
+  return futureTime && futureVerb;
+}
+
 export function isCashProtectedNonTransaction(input: string): boolean {
   const value = normalize(input);
   if (!value) return false;
+  if (isCashForecastLanguage(value)) return true;
   if (isCashHypotheticalOrCalculation(value) || isCashDirectBalanceRequest(value)) return true;
   if (/\?$/.test(String(input).trim()) && /\b(quanto|qual|quais|como|se|saldo|sobr|rest|ficaria|teria)\b/.test(value)) return true;
   if (/\b(nao registra|não registra|sem registrar|so calcula|só calcula|apenas calcula|e uma simulacao|é uma simulação)\b/.test(value)) return true;
