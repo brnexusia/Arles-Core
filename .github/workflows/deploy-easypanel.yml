@@ -1,0 +1,31 @@
+name: Deploy Arles Core to Easypanel
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: arles-core-production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Easypanel deployment
+        env:
+          EASYPANEL_DEPLOY_URL: ${{ secrets.EASYPANEL_DEPLOY_URL }}
+        run: |
+          if [ -z "$EASYPANEL_DEPLOY_URL" ]; then
+            echo "EASYPANEL_DEPLOY_URL secret is not configured."
+            exit 1
+          fi
+
+          curl --fail --show-error --silent \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 15 \
+            --max-time 60 \
+            "$EASYPANEL_DEPLOY_URL"
