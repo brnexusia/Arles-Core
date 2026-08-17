@@ -3,6 +3,7 @@ import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertic
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
 import { cashConversationHandler } from './conversation.js';
+import { handleCashOrganizationContext } from './context-organization.js';
 import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
@@ -235,6 +236,11 @@ export class CashAccessHandler implements VerticalHandler {
     const pocketCommand = await handleCashPocketContextCommand(context);
     if (pocketCommand) return pocketCommand;
 
+    // Organização contextual trata demonstrativos, separação de operações e movimentação
+    // de registros entre cofrinhos antes que números soltos cheguem ao parser financeiro.
+    const organization = await handleCashOrganizationContext(context);
+    if (organization) return organization;
+
     // Saldo e simulações são operações de leitura/cálculo. Nunca criam lançamento e
     // são resolvidas 100% por script + banco antes de qualquer chamada de IA.
     const ledger = await handleCashLedgerDeterministic(context);
@@ -249,8 +255,8 @@ export class CashAccessHandler implements VerticalHandler {
     const fastFaq = await fastCashFaq(context);
     if (fastFaq) return fastFaq;
 
-    // O GPT só entra depois de agenda, cofrinhos, saldo, simulação, exclusões,
-    // FAQ e do corpus conversacional determinístico interno do AiFirstHandler.
+    // O GPT só entra depois de agenda, cofrinhos, organização, saldo, simulação,
+    // exclusões, FAQ e do corpus conversacional determinístico interno do AiFirstHandler.
     return await personalizePaymentMenu(company.id, await cashAiFirstHandler.handle(context));
   }
 }
