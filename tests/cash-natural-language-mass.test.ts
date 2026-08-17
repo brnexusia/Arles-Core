@@ -4,8 +4,11 @@ let classifyCashDeterministicLanguage: (input: string) => { intent: string; cano
 let deterministicCashQuery: (input: string) => unknown;
 let examples: Array<{ input: string; intent: string; canonical: string }>;
 let expandedExamples: Array<{ input: string; intent: string; canonical: string }>;
+let colloquialExamples: Array<{ input: string; intent: string; canonical: string }>;
 let exampleCount: number;
 let expandedExampleCount: number;
+let colloquialExampleCount: number;
+let previousUniqueCount: number;
 
 beforeAll(async () => {
   process.env.DATABASE_URL ||= 'postgresql://test:test@127.0.0.1:5432/test';
@@ -23,6 +26,11 @@ beforeAll(async () => {
   const expanded = await import('../src/verticals/cash/natural-language-corpus-expanded.js');
   expandedExamples = expanded.CASH_NATURAL_LANGUAGE_EXPANDED_EXAMPLES;
   expandedExampleCount = expanded.CASH_NATURAL_LANGUAGE_EXPANDED_EXAMPLE_COUNT;
+
+  const colloquial = await import('../src/verticals/cash/natural-language-corpus-colloquial.js');
+  colloquialExamples = colloquial.CASH_NATURAL_LANGUAGE_COLLOQUIAL_EXAMPLES;
+  colloquialExampleCount = colloquial.CASH_NATURAL_LANGUAGE_COLLOQUIAL_EXAMPLE_COUNT;
+  previousUniqueCount = colloquial.CASH_NATURAL_LANGUAGE_PREVIOUS_UNIQUE_COUNT;
 });
 
 function normalize(value: string): string {
@@ -41,13 +49,20 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(exampleCount).toBeGreaterThan(1500);
   });
 
-  it('adiciona mais de 4.500 novas formas humanas sem IA', () => {
+  it('mantém mais de 4.500 formas na primeira expansão', () => {
     expect(expandedExampleCount).toBeGreaterThan(4500);
   });
 
-  it('mantém mais de 6.000 frases únicas somando os dois corpus', () => {
-    const unique = new Set([...examples, ...expandedExamples].map(example => normalize(example.input)));
-    expect(unique.size).toBeGreaterThan(6000);
+  it('dobra a capacidade anterior com uma nova frase para cada frase única já existente', () => {
+    expect(previousUniqueCount).toBeGreaterThan(6000);
+    expect(colloquialExampleCount).toBe(previousUniqueCount);
+  });
+
+  it('mantém mais de 12.000 frases únicas somando todas as camadas', () => {
+    const unique = new Set(
+      [...examples, ...expandedExamples, ...colloquialExamples].map(example => normalize(example.input))
+    );
+    expect(unique.size).toBeGreaterThan(12000);
   });
 
   it('classifica todo o corpus original sem depender de IA', () => {
@@ -63,7 +78,7 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(failures, JSON.stringify(failures.slice(0, 50), null, 2)).toEqual([]);
   });
 
-  it('classifica todas as 4.500+ novas frases sem depender de IA', () => {
+  it('classifica toda a primeira expansão sem depender de IA', () => {
     const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
 
     for (const example of expandedExamples) {
@@ -76,9 +91,22 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
   });
 
+  it('classifica toda a nova camada coloquial que dobra a capacidade sem depender de IA', () => {
+    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
+
+    for (const example of colloquialExamples) {
+      const route = classifyCashDeterministicLanguage(example.input);
+      if (route?.intent !== example.intent) {
+        failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
+      }
+    }
+
+    expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
+  });
+
   it('transforma todas as perguntas de soma/total em consultas válidas ao banco', () => {
     const failures: string[] = [];
-    const all = [...examples, ...expandedExamples];
+    const all = [...examples, ...expandedExamples, ...colloquialExamples];
     for (const example of all.filter(item => item.intent === 'query')) {
       const route = classifyCashDeterministicLanguage(example.input);
       if (!route || !deterministicCashQuery(route.canonical)) failures.push(example.input);
@@ -121,5 +149,16 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     const route = classifyCashDeterministicLanguage(input);
     expect(route?.intent).toBe('query');
     expect(deterministicCashQuery(route!.canonical)).not.toBeNull();
+  });
+
+  it.each([
+    'seguinte, saldo',
+    'ó, me mostra meus gastos hoje',
+    'só uma coisa: quanto entrou e quanto saiu hoje',
+    'pra eu conferir, meus registros',
+    'quando puder, meus cofrinhos',
+    'faz um favor, planos'
+  ])('aceita novas formas coloquiais da camada dobrada: %s', input => {
+    expect(classifyCashDeterministicLanguage(input)).not.toBeNull();
   });
 });
