@@ -142,10 +142,10 @@ function merchantFrom(text: string): string {
 export function descriptionFrom(text: string): string {
   let value = text.trim();
   value = value
-    .replace(/^\s*eu\s+/i, '')
     .replace(/\b(hoje|ontem|anteontem|agora)\b/gi, ' ')
     .replace(/\b(domingo|segunda(?:-feira)?|terça(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|sabado)\b/gi, ' ')
     .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
+    .replace(/^\s*eu\s+/i, '')
     .replace(/^\s*(?:gastei|gasto|paguei|pague|comprei|despesa|saiu|debitei|custou|guardei|reservei|separei|retirei|retirou|retiraram|saquei|sacou|recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram)\s+/i, '')
     .replace(/(?:\b(?:por|de)\s+)?(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:[.,]\d{1,2})?(?:\s*reais?)?/gi, ' ')
     .replace(/\s+(?:no|na|do|da|de)\s+cofrinho\s+[^,.!?;]+$/i, ' ')
