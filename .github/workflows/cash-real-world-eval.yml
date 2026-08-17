@@ -8,6 +8,7 @@ on:
       - 'src/verticals/cash/**'
       - 'tests/cash-real-world-5000.test.ts'
       - 'tests/cash-natural-language-mass.test.ts'
+      - 'tests/cash-conversation-safety.test.ts'
       - '.github/workflows/cash-real-world-eval.yml'
   workflow_dispatch:
     inputs:
@@ -49,13 +50,13 @@ jobs:
           EVOLUTION_API_KEY: test
         run: npm run typecheck
 
-      - name: Testar corpus massivo de linguagem natural
+      - name: Testar linguagem natural e proteção conversacional
         env:
           DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
           REDIS_URL: redis://127.0.0.1:6379
           EVOLUTION_BASE_URL: http://127.0.0.1:8080
           EVOLUTION_API_KEY: test
-        run: npx vitest run tests/cash-natural-language-mass.test.ts
+        run: npx vitest run tests/cash-natural-language-mass.test.ts tests/cash-conversation-safety.test.ts
 
   eval:
     name: Cash eval parte ${{ matrix.shard }}
