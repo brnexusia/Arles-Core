@@ -21,7 +21,8 @@ export type CashPocketCommand =
   | { kind: 'create'; name: string }
   | { kind: 'list' }
   | { kind: 'balance'; name: string }
-  | { kind: 'statement'; name: string }
+  | { kind: 'statement'; name: string; type?: 'income' | 'expense' }
+  | { kind: 'flow'; name: string; type: 'income' | 'expense' }
   | null;
 
 function text(value: string): VerticalResult {
@@ -69,8 +70,18 @@ function normalized(value: string): string {
 
 function extractNameAfterCofrinho(original: string): string | null {
   const match = original.match(/\bcofrinh(?:o|os)\s+(?:chamad[oa]\s+|d[oa]\s+|de\s+)?([^\n,;.!?]+)$/i);
-  const name = cleanPocketDisplayName(match?.[1] ?? '');
+  let name = cleanPocketDisplayName(match?.[1] ?? '');
+  name = name.replace(/\s+(?:hoje|ontem|esse mês|este mês|no mês|na semana|agora)$/i, '').trim();
   return validPocketName(name) ? name : null;
+}
+
+function namedPocket(input: string): string | null {
+  return extractNameAfterCofrinho(input)
+    ?? (() => {
+      const before = input.match(/\bcofrinho\s+(.+?)(?:\s+(?:tem|tenho|saldo|quanto|disponivel|disponível|extrato|movimentações|movimentacoes|lançamentos|lancamentos|registros))\b/i)?.[1];
+      const clean = cleanPocketDisplayName(before ?? '');
+      return validPocketName(clean) ? clean : null;
+    })();
 }
 
 export function parseCashPocketCommand(input: string): CashPocketCommand {
@@ -78,6 +89,7 @@ export function parseCashPocketCommand(input: string): CashPocketCommand {
   if (!value || !/\bcofrinh/.test(value)) return null;
 
   const movement = /\b(gastei|gasto|paguei|comprei|recebi|ganhei|entrou|vendi|faturei|guardei|reservei|separei)\b/.test(value);
+  const question = /\b(quanto|qual|total|soma|me mostra|mostra|liste|lista|quais|extrato|historico|historico|registros|lancamentos|movimentacoes)\b/.test(value) || /\?$/.test(input.trim());
 
   if (/\b(cria|criar|crie|novo|nova|abre|abrir|faz|faca|faça|quero)\b/.test(value) && /\bcofrinho\b/.test(value)) {
     const patterns = [
@@ -96,16 +108,27 @@ export function parseCashPocketCommand(input: string): CashPocketCommand {
     return { kind: 'list' };
   }
 
-  if (!movement && /\b(saldo|quanto|quanto tem|quanto tenho|valor|disponivel|disponível)\b/.test(value)) {
-    const name = extractNameAfterCofrinho(input)
-      ?? cleanPocketDisplayName(input.match(/\bcofrinho\s+(.+?)(?:\s+(?:tem|tenho|saldo|quanto|disponivel|disponível))\b/i)?.[1] ?? '');
-    if (validPocketName(name)) return { kind: 'balance', name };
+  const name = namedPocket(input);
+  if (!name) return null;
+
+  if (question && /\b(quanto|total|soma)\b/.test(value) && /\b(gastei|gasto|gastos|despesa|despesas|saiu|saidas|saída|saídas|paguei)\b/.test(value)) {
+    return { kind: 'flow', name, type: 'expense' };
+  }
+  if (question && /\b(quanto|total|soma)\b/.test(value) && /\b(recebi|receita|receitas|entrou|entradas|ganhei|ganhos|faturei)\b/.test(value)) {
+    return { kind: 'flow', name, type: 'income' };
   }
 
-  if (!movement && /\b(extrato|movimentacoes|movimentações|lancamentos|lançamentos|registros|historico|histórico)\b/.test(value)) {
-    const name = extractNameAfterCofrinho(input)
-      ?? cleanPocketDisplayName(input.match(/\bcofrinho\s+(.+?)(?:\s+(?:extrato|movimentacoes|movimentações|lancamentos|lançamentos|registros|historico|histórico))\b/i)?.[1] ?? '');
-    if (validPocketName(name)) return { kind: 'statement', name };
+  if (!movement && /\b(saldo|quanto tem|quanto tenho|valor|disponivel|disponível)\b/.test(value)) {
+    return { kind: 'balance', name };
+  }
+
+  if (question && /\b(extrato|movimentacoes|movimentações|lancamentos|lançamentos|registros|historico|histórico|mostra|lista|liste)\b/.test(value)) {
+    const type = /\b(gast|despes|said|pague)\w*/.test(value)
+      ? 'expense'
+      : /\b(receit|entrad|ganh|receb)\w*/.test(value)
+        ? 'income'
+        : undefined;
+    return { kind: 'statement', name, type };
   }
 
   return null;
@@ -217,14 +240,24 @@ export class CashPocketService {
     };
   }
 
-  async statement(companyId: string, pocketId: string, limit = 10): Promise<any[]> {
+  async flowTotal(companyId: string, pocketId: string, type: 'income' | 'expense'): Promise<{ amount: number; count: number }> {
+    const result = await db.query(
+      `select coalesce(sum(amount),0)::float8 as amount,count(*)::int as count
+       from cash_transactions
+       where company_id=$1 and pocket_id=$2 and type=$3`,
+      [companyId, pocketId, type]
+    );
+    return { amount: Number(result.rows[0]?.amount ?? 0), count: Number(result.rows[0]?.count ?? 0) };
+  }
+
+  async statement(companyId: string, pocketId: string, limit = 10, type?: 'income' | 'expense'): Promise<any[]> {
     const result = await db.query(
       `select id::text,type,amount::float8,category,merchant,description,transaction_date,created_at
        from cash_transactions
-       where company_id=$1 and pocket_id=$2
+       where company_id=$1 and pocket_id=$2 and ($4::text is null or type=$4)
        order by transaction_date desc,created_at desc
        limit $3`,
-      [companyId, pocketId, Math.max(1, Math.min(30, limit))]
+      [companyId, pocketId, Math.max(1, Math.min(30, limit)), type ?? null]
     );
     return result.rows;
   }
@@ -249,9 +282,7 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
 
   if (command.kind === 'list') {
     const pockets = await cashPocketService.list(context.company.id);
-    if (!pockets.length) {
-      return text('Você ainda não tem cofrinhos. Para criar um: “criar cofrinho Emprego”.');
-    }
+    if (!pockets.length) return text('Você ainda não tem cofrinhos. Para criar um: “criar cofrinho Emprego”.');
     return text(['🐷 *Seus cofrinhos*', '', ...pockets.map(pocketLine), '', 'Para ver um deles: “saldo do cofrinho Emprego”.'].join('\n'));
   }
 
@@ -271,10 +302,16 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
     ].join('\n'));
   }
 
-  const rows = await cashPocketService.statement(context.company.id, pocket.id, 10);
-  if (!rows.length) return text(`🐷 O cofrinho *${pocket.name}* ainda não tem lançamentos.`);
+  if (command.kind === 'flow') {
+    const flow = await cashPocketService.flowTotal(context.company.id, pocket.id, command.type);
+    const label = command.type === 'income' ? 'entrou' : 'saiu';
+    return text(`🐷 No cofrinho *${pocket.name}*, ${label} *${brl(flow.amount)}* em ${flow.count} lançamento${flow.count === 1 ? '' : 's'}.`);
+  }
+
+  const rows = await cashPocketService.statement(context.company.id, pocket.id, 10, command.type);
+  if (!rows.length) return text(`🐷 O cofrinho *${pocket.name}* ainda não tem ${command.type === 'income' ? 'entradas' : command.type === 'expense' ? 'saídas' : 'lançamentos'}.`);
   return text([
-    `🐷 *Últimos lançamentos — ${pocket.name}*`,
+    `🐷 *Últimos ${command.type === 'income' ? 'recebimentos' : command.type === 'expense' ? 'gastos' : 'lançamentos'} — ${pocket.name}*`,
     '',
     ...rows.map((row, index) => {
       const icon = row.type === 'income' ? '💰' : '💸';
