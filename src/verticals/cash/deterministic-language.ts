@@ -1,4 +1,5 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
+import { isCashAllTimeTotalsRequest } from './aggregate-intent.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashConversationHandler } from './conversation.js';
@@ -130,6 +131,12 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
   if (/\b(?:ainda\s+)?(?:vou|irei)\s+(?:enviar|mandar|passar|informar)\b/.test(value)
     && /\b(devendo|deve|caixa|saldo|vendas?|gastos?|informacoes?)\b/.test(value)) {
     return { intent: 'future_data', canonical: input };
+  }
+
+  // Totais gerais precisam ganhar da regra histórica “sem período = hoje”.
+  // A decisão é semântica por grupos de palavras, não por frase exata.
+  if (isCashAllTimeTotalsRequest(input)) {
+    return { intent: 'balance', canonical: 'saldo' };
   }
 
   const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
