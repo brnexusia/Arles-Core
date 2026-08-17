@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
 let parseCashPocketCreateNames: (input: string) => string[];
+let normalizeCashPocketBatchInput: (input: string) => string;
 
 beforeAll(async () => {
   process.env.DATABASE_URL ||= 'postgresql://test:test@127.0.0.1:5432/test';
@@ -8,6 +9,7 @@ beforeAll(async () => {
   process.env.EVOLUTION_BASE_URL ||= 'http://127.0.0.1:8080';
   process.env.EVOLUTION_API_KEY ||= 'test';
   ({ parseCashPocketCreateNames } = await import('../src/verticals/cash/cofrinhos.js'));
+  ({ normalizeCashPocketBatchInput } = await import('../src/verticals/cash/pocket-context.js'));
 });
 
 describe('cash cofrinhos em lote', () => {
@@ -24,6 +26,17 @@ describe('cash cofrinhos em lote', () => {
       'Arles Delivery',
       'Arles beauty',
       'arles'
+    ]);
+  });
+
+  it('separa comandos completos agrupados pelo debounce sem grudar comandos no nome', () => {
+    const input = "Criar cofrinho chamado 'Sinapse'. Criar cofrinho chamado 'Arles Cash'. Criar cofrinho chamado 'Arles Del'";
+    const normalized = normalizeCashPocketBatchInput(input);
+
+    expect(parseCashPocketCreateNames(normalized)).toEqual([
+      'Sinapse',
+      'Arles Cash',
+      'Arles Del'
     ]);
   });
 
