@@ -91,18 +91,26 @@ export function classifyCashCorpus(input: string): CashCorpusRoute {
     return { intent: 'acknowledgement', confidence: 'high' };
   }
 
+  // Hipóteses vencem qualquer linguagem de futuro. “Quanto vou ter se...” é conta,
+  // não agenda e nunca lançamento.
+  if (/\b(se|caso|e se|simula|simular|calcula|calcular)\b/.test(value)
+    && /\b(gastar|pagar|comprar|receber|ganhar|entrar|sair|saldo|sobrar|ficar|ter)\b/.test(value)) {
+    return { intent: 'projection', confidence: 'high', canonical: input };
+  }
+
+  // Lotes vêm antes de consulta porque “Despesas:” e “Receitas:” são cabeçalhos de dados.
+  if (looksBatch(input)) return { intent: 'batch_transaction', confidence: 'high', canonical: input };
+
+  // Agenda/previsão financeira real: criação recorrente/futura ou consulta projetada.
+  if (/\b(agend|program|previst|previs|todo dia|toda semana|todo mes|todo mês|todo ano|mensalmente|semanalmente|diariamente|a cada|contas futuras|saldo projetado|projecao|projeção|quanto vou ter|quanto terei|quanto vai sobrar|quanto vou gastar|quanto vou receber|quanto vou ganhar)\w*/.test(value)) {
+    return { intent: 'schedule', confidence: 'high', canonical: input };
+  }
+
+  // Agenda dentro de um cofrinho continua agenda; por isso cofrinho vem depois.
   if (/\b(cofrinho|caixinha|envelope|potinho|pote|separacao|separação)\b/.test(value)) {
     return { intent: 'pocket', confidence: 'high', canonical: pocketSynonymRewrite(input) ?? input };
   }
 
-  if (/\b(agend|program|previst|previs|todo dia|toda semana|todo mes|todo mês|todo ano|mensalmente|semanalmente|diariamente|saldo projetado|projecao|projeção|quanto vou ter|quanto terei|contas futuras)\w*/.test(value)) {
-    return { intent: 'schedule', confidence: 'high', canonical: input };
-  }
-
-  if (/\b(se|caso|e se|simula|simular|calcula|calcular)\b/.test(value)
-    && /\b(gastar|pagar|comprar|receber|ganhar|entrar|sair|saldo|sobrar|ficar)\b/.test(value)) {
-    return { intent: 'projection', confidence: 'high', canonical: input };
-  }
   if (/^(saldo|meu saldo|saldo atual|quanto tenho|quanto eu tenho|quanto sobrou|quanto me resta|qual e meu saldo|qual é meu saldo|como esta meu saldo|como está meu saldo)/.test(value)) {
     return { intent: 'balance', confidence: 'high', canonical: 'saldo' };
   }
@@ -141,7 +149,6 @@ export function classifyCashCorpus(input: string): CashCorpusRoute {
   }
 
   if (deterministicCashQuery(input)) return { intent: 'query', confidence: 'high', canonical: input };
-  if (looksBatch(input)) return { intent: 'batch_transaction', confidence: 'high', canonical: input };
   if (!isCashProtectedNonTransaction(input) && explicitMovement(value) && hasMoney(value)) {
     return { intent: 'transaction', confidence: 'high', canonical: input };
   }
@@ -226,18 +233,22 @@ export async function handleCashConversationCorpus(context: VerticalContext): Pr
     return text('Perfeito 😊 Pode continuar falando comigo do seu jeito.');
   }
 
-  if (route.intent === 'pocket') {
-    const result = await handleCashPocketCommand({ ...context, combinedText: route.canonical ?? context.combinedText });
-    if (result) return result;
-  }
   if (route.intent === 'schedule') {
     const result = await handleCashScheduleDeterministic({ ...context, combinedText: route.canonical ?? context.combinedText });
     if (result) return result;
   }
+  if (route.intent === 'projection') {
+    // Se for previsão baseada em agenda, resolve aqui. Se for “se eu gastar...”,
+    // schedules retorna null e o ledger hipotético assume no AiFirstHandler.
+    const result = await handleCashScheduleDeterministic({ ...context, combinedText: route.canonical ?? context.combinedText });
+    if (result) return result;
+  }
+  if (route.intent === 'pocket') {
+    const result = await handleCashPocketCommand({ ...context, combinedText: route.canonical ?? context.combinedText });
+    if (result) return result;
+  }
 
   if (route.intent === 'query') {
-    // Só entra aqui quando deterministicCashQuery já confirmou a rota; cashQuery.handle
-    // portanto não precisa do fallback de IA para esse pedido.
     const result = await cashQuery.handle(context.company.id, route.canonical ?? context.combinedText);
     if (result) return result;
   }
