@@ -1,5 +1,6 @@
 import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
+import { cashPocketService } from './cofrinhos.js';
 
 export interface CashLedgerSnapshot {
   income: number;
@@ -52,7 +53,8 @@ function explicitBaseBalance(input: string): number | null {
     new RegExp(`\\b(?:tenho|estou com|to com|tô com)\\s+(?:um\\s+)?saldo\\s+(?:de\\s+)?(?:r\\$\\s*)?${MONEY}`),
     new RegExp(`\\bmeu saldo(?: atual)?\\s+(?:e|é|esta|está|fica)?\\s*(?:em|de)?\\s*(?:r\\$\\s*)?${MONEY}`),
     new RegExp(`\\bsaldo(?: atual)?\\s+(?:e|é|de|igual a)\\s*(?:r\\$\\s*)?${MONEY}`),
-    new RegExp(`\\b(?:partindo|parto|começando|comecando)\\s+(?:de|com)\\s*(?:um\\s+)?saldo\\s+(?:de\\s+)?(?:r\\$\\s*)?${MONEY}`)
+    new RegExp(`\\b(?:partindo|parto|começando|comecando)\\s+(?:de|com)\\s*(?:um\\s+)?saldo\\s+(?:de\\s+)?(?:r\\$\\s*)?${MONEY}`),
+    new RegExp(`\\b(?:considera|considere|usa|use)\\s+(?:um\\s+)?saldo\\s+(?:de\\s+)?(?:r\\$\\s*)?${MONEY}`)
   ];
   for (const pattern of patterns) {
     const match = value.match(pattern);
@@ -71,7 +73,7 @@ function operationMatches(input: string): Array<{ index: number; operation: Cash
     },
     {
       type: 'expense',
-      regex: new RegExp(`\\b(?:vou|irei)\\s+(?:gastar|pagar|comprar|usar)\\s+(?:r\\$\\s*)?${MONEY}`, 'g')
+      regex: new RegExp(`\\b(?:vou|irei|pretendo)\\s+(?:gastar|pagar|comprar|usar)\\s+(?:r\\$\\s*)?${MONEY}`, 'g')
     },
     {
       type: 'expense',
@@ -83,7 +85,7 @@ function operationMatches(input: string): Array<{ index: number; operation: Cash
     },
     {
       type: 'income',
-      regex: new RegExp(`\\b(?:vou|irei)\\s+(?:receber|ganhar|faturar)\\s+(?:r\\$\\s*)?${MONEY}`, 'g')
+      regex: new RegExp(`\\b(?:vou|irei|pretendo)\\s+(?:receber|ganhar|faturar)\\s+(?:r\\$\\s*)?${MONEY}`, 'g')
     },
     {
       type: 'income',
@@ -105,7 +107,6 @@ function operationMatches(input: string): Array<{ index: number; operation: Cash
     }
   }
 
-  // Remove duplicatas causadas por padrões sobrepostos e mantém a ordem da frase.
   const unique = new Map<string, { index: number; operation: CashProjectionOperation }>();
   for (const item of found) {
     const key = `${item.index}:${item.operation.type}:${item.operation.amount}`;
@@ -117,10 +118,10 @@ function operationMatches(input: string): Array<{ index: number; operation: Cash
 export function isCashHypotheticalOrCalculation(input: string): boolean {
   const value = normalize(input);
   if (!value) return false;
-  if (/\\b(simula|simular|simulacao|simulação|hipoteticamente|supondo|imaginando|faria uma conta|faz a conta|calcula|calcular)\\b/.test(value)) return true;
+  if (/\b(simula|simular|simulacao|simulação|hipoteticamente|supondo|imaginando|faria uma conta|faz a conta|calcula|calcular)\b/.test(value)) return true;
   if (/\b(se|caso|e se)\b/.test(value) && /\b(gastar|gaste|pagar|pague|comprar|receber|ganhar|entrar|cair|sair|sobrar|restar|ficar|saldo)\b/.test(value)) return true;
   if (/\b(quanto|qual)\b.*\b(ficaria|fica|sobraria|sobra|restaria|resta|teria|terei|vai sobrar|vai ficar)\b/.test(value)) return true;
-  if (/\b(?:vou|irei)\s+(?:gastar|pagar|comprar|receber|ganhar)\b/.test(value) && /\b(quanto|saldo|sobra|fica|ficaria)\b/.test(value)) return true;
+  if (/\b(?:vou|irei|pretendo)\s+(?:gastar|pagar|comprar|receber|ganhar)\b/.test(value) && /\b(quanto|saldo|sobra|fica|ficaria)\b/.test(value)) return true;
   if (/\b(?:saldo|tenho)\b.*\b(?:menos|mais)\b\s*(?:r\$\s*)?\d/.test(value)) return true;
   return false;
 }
@@ -147,10 +148,10 @@ export function isCashDirectBalanceRequest(input: string): boolean {
   const value = normalize(input).replace(/[!?.,]+$/g, '').trim();
   if (!value || isCashHypotheticalOrCalculation(value) || /\bcofrinho\b/.test(value)) return false;
 
-  const exact = /^(?:me diz |me fala |fala |mostra |mostre )?(?:meu |o meu )?(?:saldo|saldo atual|saldo disponivel|saldo disponível|balanco|balanço)(?: agora| hoje)?$/;
+  const exact = /^(?:me diz |me fala |fala |mostra |mostre |diz )?(?:meu |o meu )?(?:saldo|saldo atual|saldo disponivel|saldo disponível|balanco|balanço)(?: agora| hoje)?$/;
   if (exact.test(value)) return true;
 
-  return /\b(quanto eu tenho|quanto tenho|quanto sobrou|quanto me resta|quanto resta|quanto tenho disponivel|quanto tenho disponível|qual e meu saldo|qual é meu saldo|como esta meu saldo|como está meu saldo|meu dinheiro agora|quanto tenho de dinheiro|quanto ficou meu saldo)\b/.test(value);
+  return /\b(quanto eu tenho|quanto tenho|quanto que eu tenho|quanto que tenho|quanto tem|quanto que tem|quanto sobrou|quanto que sobrou|quanto me resta|quanto resta|quanto tenho disponivel|quanto tenho disponível|qual e meu saldo|qual é meu saldo|como esta meu saldo|como está meu saldo|meu dinheiro agora|quanto tenho de dinheiro|quanto ficou meu saldo)\b/.test(value);
 }
 
 export function isCashProtectedNonTransaction(input: string): boolean {
@@ -196,8 +197,14 @@ function projectionResult(base: number, projection: CashProjection): number {
 export async function handleCashLedgerDeterministic(context: VerticalContext): Promise<VerticalResult | null> {
   const projection = parseCashProjection(context.combinedText);
   if (projection) {
+    const pocketRef = await cashPocketService.findMentioned(context.company.id, context.combinedText);
+    if (pocketRef.explicit && !pocketRef.pocket) {
+      const name = pocketRef.requestedName || 'informado';
+      return text(`Não encontrei o cofrinho *${name}*. Mande “meus cofrinhos” para conferir os nomes.`);
+    }
+
     const snapshot = projection.explicitBase == null
-      ? await cashLedgerService.snapshot(context.company.id)
+      ? await cashLedgerService.snapshot(context.company.id, pocketRef.pocket?.id ?? null)
       : null;
     const base = projection.explicitBase ?? snapshot?.balance ?? 0;
     const result = projectionResult(base, projection);
@@ -205,7 +212,7 @@ export async function handleCashLedgerDeterministic(context: VerticalContext): P
       `${operation.type === 'income' ? '➕' : '➖'} ${brl(operation.amount)}`
     );
     return text([
-      '🧮 *Simulação de saldo*',
+      `🧮 *Simulação de saldo${pocketRef.pocket ? ` — ${pocketRef.pocket.name}` : ''}*`,
       `Saldo usado: ${brl(base)}`,
       ...operations,
       `Saldo projetado: *${brl(result)}*`,
