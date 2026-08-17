@@ -37,7 +37,9 @@ function normalize(value: string): string {
     .toLowerCase()
     .trim()
     .replace(/[!?.,]+$/g, '')
-    .replace(/\s+(?:por favor|pfv|pra mim|para mim)$/g, '')
+    .replace(/\s+(?:por favor|pfv)$/g, '')
+    .replace(/\s+(?:pra mim|para mim)$/g, '')
+    .replace(/\s+(?:por favor|pfv)$/g, '')
     .replace(/[!?.,]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -62,8 +64,8 @@ function firstMoney(value: string): string | null {
 function projectionCanonical(input: string, value: string): string | null {
   const base = value.match(/\b(?:considera|considere|usa|use|partindo de|com)\s+(?:um\s+)?saldo\s+(?:de\s+)?(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1]
     ?? value.match(/\bsaldo\s+(?:de|igual a)\s*(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
-  const expense = value.match(/\b(?:tira|tiro|retira|desconta|gasto|pago|sai)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
-  const income = value.match(/\b(?:recebo|ganho|entra)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
+  const expense = value.match(/\b(?:tira|tiro|retira|desconta|gasto|gastar|gastando|pago|pagar|pagando|sai|sair|saindo)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
+  const income = value.match(/\b(?:recebo|receber|recebendo|ganho|ganhar|ganhando|entra|entrar|entrando)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
 
   if (base && expense) return `saldo de ${base} menos ${expense} quanto fica?`;
   if (base && income) return `saldo de ${base} mais ${income} quanto fica?`;
@@ -126,12 +128,12 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'history', canonical: 'histórico' };
   }
 
-  if (/\b(?:me mostra|mostra|mostre)\s+(?:tudo\s+que\s+)?(?:entrou|recebimentos?)\b/.test(value)
+  if (/\b(?:me mostra|mostra|mostre)\s+(?:os\s+|as\s+)?(?:tudo\s+que\s+)?(?:entrou|recebimentos?)\b/.test(value)
     || /\bquanto foi de entrada\b/.test(value)) {
     return { intent: 'query', canonical: `quanto recebi ${queryPeriod(value)}?` };
   }
 
-  if (/\b(?:me mostra|mostra|mostre)\s+(?:tudo\s+que\s+)?saiu\b/.test(value)) {
+  if (/\b(?:me mostra|mostra|mostre)\s+(?:os\s+|as\s+)?(?:tudo\s+que\s+)?saiu\b/.test(value)) {
     return { intent: 'query', canonical: `quanto gastei ${queryPeriod(value)}?` };
   }
 
