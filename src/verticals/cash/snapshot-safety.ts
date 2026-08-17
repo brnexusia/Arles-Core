@@ -1,5 +1,12 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 
+export type CashSnapshotSummary = {
+  totalSold: number | null;
+  cash: number | null;
+  receivable: number | null;
+  withdrawals: number;
+};
+
 function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
 }
@@ -11,15 +18,31 @@ function normalize(value: string): string {
     .toLowerCase();
 }
 
+function parseMoney(raw: string): number | null {
+  const clean = String(raw ?? '').replace(/r\$/gi, '').trim();
+  const normalized = /^-?\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(clean)
+    ? clean.replace(/\./g, '').replace(',', '.')
+    : clean.replace(',', '.');
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+
+function decimalMoneyInLine(line: string): number | null {
+  // Datas como 31/07/2026 nunca podem virar dinheiro. Para snapshots livres,
+  // só aceitamos valor explícito em reais/decimal (ex.: 1.640,00 ou 530,00).
+  const withoutDates = String(line ?? '').replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ');
+  const match = withoutDates.match(/(?:r\$\s*)?(-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|-?\d+[.,]\d{1,2})/i);
+  return match?.[1] ? parseMoney(match[1]) : null;
+}
+
 function moneyValues(input: string): number[] {
   const values: number[] = [];
-  for (const match of String(input ?? '').matchAll(/(?:r\$\s*)?(-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|-?\d+(?:[.,]\d{1,2})?)/gi)) {
-    const raw = String(match[1] ?? '').trim();
-    const normalized = /^-?\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(raw)
-      ? raw.replace(/\./g, '').replace(',', '.')
-      : raw.replace(',', '.');
-    const value = Number(normalized);
-    if (Number.isFinite(value)) values.push(value);
+  for (const line of String(input ?? '').split(/\r?\n+/)) {
+    const withoutDates = line.replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ');
+    for (const match of withoutDates.matchAll(/(?:r\$\s*)?(-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|-?\d+[.,]\d{1,2})/gi)) {
+      const value = parseMoney(match[1] ?? '');
+      if (value != null) values.push(value);
+    }
   }
   return values;
 }
@@ -36,45 +59,62 @@ export function isCashMixedSnapshotMessage(input: string): boolean {
   return markers >= 2;
 }
 
-function firstAmountAfter(input: string, pattern: RegExp): number | null {
-  const match = String(input ?? '').match(pattern);
-  if (!match?.[1]) return null;
-  const raw = match[1];
-  const normalized = /^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(raw)
-    ? raw.replace(/\./g, '').replace(',', '.')
-    : raw.replace(',', '.');
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
+function amountAtOrAfterHeading(input: string, heading: RegExp): number | null {
+  const lines = String(input ?? '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (!heading.test(normalize(line))) continue;
+
+    const sameLine = decimalMoneyInLine(line);
+    if (sameLine != null) return sameLine;
+
+    // O formato comum do WhatsApp é um título em uma linha e o valor logo abaixo.
+    // Procuramos no máximo as duas linhas seguintes para não capturar outro bloco.
+    for (let offset = 1; offset <= 2 && index + offset < lines.length; offset += 1) {
+      const next = String(lines[index + offset] ?? '').trim();
+      if (!next) continue;
+      const value = decimalMoneyInLine(next);
+      if (value != null) return value;
+      if (/\b(em caixa|falta cobrar|a receber|retirou|retirada)\b/i.test(next)) break;
+    }
+  }
+  return null;
 }
 
 function lastCashAmount(input: string): number | null {
-  const matches = [...String(input ?? '').matchAll(/\bem caixa\s+(?:tem\s+)?(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|\d+(?:[.,]\d{1,2})?)/gi)];
-  const raw = matches.at(-1)?.[1];
-  if (!raw) return null;
-  const normalized = /^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(raw)
-    ? raw.replace(/\./g, '').replace(',', '.')
-    : raw.replace(',', '.');
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
+  const lines = String(input ?? '').split(/\r?\n/);
+  let last: number | null = null;
+  for (const line of lines) {
+    if (!/\bem caixa\b/i.test(normalize(line))) continue;
+    const value = decimalMoneyInLine(line);
+    if (value != null) last = value;
+  }
+  return last;
+}
+
+function withdrawalCount(input: string): number {
+  const lines = String(input ?? '').split(/\r?\n+/);
+  return lines.filter(line => /\b(retirou|retirei|retirada|saquei|sacou)\b/i.test(line) && decimalMoneyInLine(line) != null).length;
+}
+
+export function extractCashSnapshotSummary(input: string): CashSnapshotSummary {
+  return {
+    totalSold: amountAtOrAfterHeading(input, /\btotal\b.*\bvendid\w*/),
+    cash: lastCashAmount(input),
+    receivable: amountAtOrAfterHeading(input, /\b(falta cobrar|a receber)\b/),
+    withdrawals: withdrawalCount(input)
+  };
 }
 
 function brl(value: number): string {
   return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function withdrawalCount(input: string): number {
-  const lines = String(input ?? '').split(/\r?\n+/);
-  return lines.filter(line => /\b(retirou|retirei|retirada|saquei|sacou)\b/i.test(line) && /\d/.test(line)).length;
-}
-
 export async function handleCashSnapshotSafety(context: VerticalContext): Promise<VerticalResult | null> {
   const input = context.combinedText;
   if (!isCashMixedSnapshotMessage(input)) return null;
 
-  const totalSold = firstAmountAfter(input, /\btotal[^\n]*?vendid\w*[^\d]*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|\d+(?:[.,]\d{1,2})?)/i);
-  const cash = lastCashAmount(input);
-  const receivable = firstAmountAfter(input, /\b(?:falta cobrar|a receber)[^\d]*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|\d+(?:[.,]\d{1,2})?)/i);
-  const withdrawals = withdrawalCount(input);
+  const { totalSold, cash, receivable, withdrawals } = extractCashSnapshotSummary(input);
 
   const lines = [
     'Entendi os dados, mas eles misturam *movimentos* com *saldos/totais*. Então não vou transformar tudo em despesas.',
