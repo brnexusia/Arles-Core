@@ -91,22 +91,17 @@ export function classifyCashCorpus(input: string): CashCorpusRoute {
     return { intent: 'acknowledgement', confidence: 'high' };
   }
 
-  // Hipóteses vencem qualquer linguagem de futuro. “Quanto vou ter se...” é conta,
-  // não agenda e nunca lançamento.
   if (/\b(se|caso|e se|simula|simular|calcula|calcular)\b/.test(value)
-    && /\b(gastar|pagar|comprar|receber|ganhar|entrar|sair|saldo|sobrar|ficar|ter)\b/.test(value)) {
+    && /\b(?:gast\w*|pag\w*|compr\w*|receb\w*|ganh\w*|entr\w*|sai\w*|saldo|sobr\w*|fic\w*|ter\w*)\b/.test(value)) {
     return { intent: 'projection', confidence: 'high', canonical: input };
   }
 
-  // Lotes vêm antes de consulta porque “Despesas:” e “Receitas:” são cabeçalhos de dados.
   if (looksBatch(input)) return { intent: 'batch_transaction', confidence: 'high', canonical: input };
 
-  // Agenda/previsão financeira real: criação recorrente/futura ou consulta projetada.
   if (/\b(agend|program|previst|previs|todo dia|toda semana|todo mes|todo mês|todo ano|mensalmente|semanalmente|diariamente|a cada|contas futuras|saldo projetado|projecao|projeção|quanto vou ter|quanto terei|quanto vai sobrar|quanto vou gastar|quanto vou receber|quanto vou ganhar)\w*/.test(value)) {
     return { intent: 'schedule', confidence: 'high', canonical: input };
   }
 
-  // Agenda dentro de um cofrinho continua agenda; por isso cofrinho vem depois.
   if (/\b(cofrinho|caixinha|envelope|potinho|pote|separacao|separação)\b/.test(value)) {
     return { intent: 'pocket', confidence: 'high', canonical: pocketSynonymRewrite(input) ?? input };
   }
@@ -238,8 +233,6 @@ export async function handleCashConversationCorpus(context: VerticalContext): Pr
     if (result) return result;
   }
   if (route.intent === 'projection') {
-    // Se for previsão baseada em agenda, resolve aqui. Se for “se eu gastar...”,
-    // schedules retorna null e o ledger hipotético assume no AiFirstHandler.
     const result = await handleCashScheduleDeterministic({ ...context, combinedText: route.canonical ?? context.combinedText });
     if (result) return result;
   }
