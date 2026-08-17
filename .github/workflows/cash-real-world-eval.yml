@@ -21,9 +21,15 @@ on:
           - '10'
           - '20'
 
+permissions:
+  contents: read
+  statuses: write
+
 concurrency:
   group: cash-real-world-eval-${{ github.ref }}
-  cancel-in-progress: false
+  # Um commit novo torna a execução antiga obsoleta. Isso NÃO altera o fail-fast
+  # das 20 partes: dentro da mesma versão todas continuam até o fim.
+  cancel-in-progress: true
 
 jobs:
   typecheck:
@@ -119,3 +125,38 @@ jobs:
           EVOLUTION_BASE_URL: http://127.0.0.1:8080
           EVOLUTION_API_KEY: test
         run: npx vitest run tests/cash-real-world-5000.test.ts
+
+  final-status:
+    name: Publicar status final do Cash
+    if: always()
+    needs: [typecheck, eval]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publicar resultado verificável no commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          EVAL_RESULT: ${{ needs.eval.result }}
+        run: |
+          if [ "$TYPECHECK_RESULT" = "success" ] && [ "$EVAL_RESULT" = "success" ]; then
+            state="success"
+            description="96k+ linguagem + proteção conversacional + 5.000 mensagens passaram"
+          else
+            state="failure"
+            description="Falha no typecheck, proteção conversacional ou eval de 5.000 mensagens"
+          fi
+
+          payload=$(jq -n \
+            --arg state "$state" \
+            --arg context "cash/conversation-safety" \
+            --arg description "$description" \
+            '{state:$state, context:$context, description:$description}')
+
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -d "$payload"
