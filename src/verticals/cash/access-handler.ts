@@ -11,6 +11,7 @@ import { handleCashPocketOrganization } from './pocket-organization.js';
 import { cashReports } from './reports.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
+import { handleCashSnapshotSafety } from './snapshot-safety.js';
 
 function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
@@ -235,6 +236,11 @@ export class CashAccessHandler implements VerticalHandler {
     // precisam acontecer antes do parser genérico de cofrinhos e de consultas.
     const pocketOrganization = await handleCashPocketOrganization(context);
     if (pocketOrganization) return pocketOrganization;
+
+    // Mensagens que misturam total vendido, caixa, retiradas e valores a receber não
+    // podem virar um lote de despesas por semelhança textual.
+    const snapshotSafety = await handleCashSnapshotSafety(context);
+    if (snapshotSafety) return snapshotSafety;
 
     // Administração e contexto de cofrinhos vêm antes da exclusão de registros. Assim,
     // depois de “quais cofrinhos eu tenho?”, “apaga ele” não pode apagar uma transação.
