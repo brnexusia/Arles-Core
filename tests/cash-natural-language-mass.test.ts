@@ -6,12 +6,15 @@ let examples: Array<{ input: string; intent: string; canonical: string }>;
 let expandedExamples: Array<{ input: string; intent: string; canonical: string }>;
 let colloquialExamples: Array<{ input: string; intent: string; canonical: string }>;
 let quadrupledExamples: Array<{ input: string; intent: string; canonical: string }>;
+let doubledExamples: Array<{ input: string; intent: string; canonical: string }>;
 let exampleCount: number;
 let expandedExampleCount: number;
 let colloquialExampleCount: number;
 let previousUniqueCount: number;
 let currentUniqueCount: number;
 let quadrupledExampleCount: number;
+let preDoublingUniqueCount: number;
+let doubledExampleCount: number;
 
 beforeAll(async () => {
   process.env.DATABASE_URL ||= 'postgresql://test:test@127.0.0.1:5432/test';
@@ -39,6 +42,11 @@ beforeAll(async () => {
   quadrupledExamples = quadrupled.CASH_NATURAL_LANGUAGE_QUADRUPLED_EXAMPLES;
   currentUniqueCount = quadrupled.CASH_NATURAL_LANGUAGE_CURRENT_UNIQUE_COUNT;
   quadrupledExampleCount = quadrupled.CASH_NATURAL_LANGUAGE_QUADRUPLED_EXAMPLE_COUNT;
+
+  const doubled = await import('../src/verticals/cash/natural-language-corpus-doubled.js');
+  doubledExamples = doubled.CASH_NATURAL_LANGUAGE_DOUBLED_EXAMPLES;
+  preDoublingUniqueCount = doubled.CASH_NATURAL_LANGUAGE_PRE_DOUBLING_UNIQUE_COUNT;
+  doubledExampleCount = doubled.CASH_NATURAL_LANGUAGE_DOUBLED_EXAMPLE_COUNT;
 });
 
 function normalize(value: string): string {
@@ -67,17 +75,23 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(currentUniqueCount).toBeGreaterThan(12000);
   });
 
-  it('quadruplica a capacidade atual criando três novas frases para cada frase única existente', () => {
+  it('mantém a expansão 4x anterior acima de 48.000 formas únicas totais', () => {
     expect(quadrupledExampleCount).toBe(currentUniqueCount * 3);
+    expect(preDoublingUniqueCount).toBeGreaterThan(48000);
+    expect(preDoublingUniqueCount).toBe(currentUniqueCount * 4);
   });
 
-  it('mantém mais de 48.000 frases únicas somando todas as camadas', () => {
+  it('dobra a capacidade de 48.000+ criando uma nova frase para cada frase única existente', () => {
+    expect(doubledExampleCount).toBe(preDoublingUniqueCount);
+  });
+
+  it('mantém mais de 96.000 frases únicas somando todas as camadas', () => {
     const unique = new Set(
-      [...examples, ...expandedExamples, ...colloquialExamples, ...quadrupledExamples]
+      [...examples, ...expandedExamples, ...colloquialExamples, ...quadrupledExamples, ...doubledExamples]
         .map(example => normalize(example.input))
     );
-    expect(unique.size).toBeGreaterThan(48000);
-    expect(unique.size).toBe(currentUniqueCount * 4);
+    expect(unique.size).toBeGreaterThan(96000);
+    expect(unique.size).toBe(preDoublingUniqueCount * 2);
   });
 
   it('classifica todo o corpus original sem depender de IA', () => {
@@ -119,7 +133,7 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
   });
 
-  it('classifica todas as novas formas que levam a capacidade a 4x sem depender de IA', () => {
+  it('classifica todas as formas da expansão 4x sem depender de IA', () => {
     const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
 
     for (const example of quadrupledExamples) {
@@ -132,9 +146,22 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
   });
 
+  it('classifica todas as novas formas que dobram a capacidade para 96.000+ sem depender de IA', () => {
+    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
+
+    for (const example of doubledExamples) {
+      const route = classifyCashDeterministicLanguage(example.input);
+      if (route?.intent !== example.intent) {
+        failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
+      }
+    }
+
+    expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
+  });
+
   it('transforma todas as perguntas de soma/total em consultas válidas ao banco', () => {
     const failures: string[] = [];
-    const all = [...examples, ...expandedExamples, ...colloquialExamples, ...quadrupledExamples];
+    const all = [...examples, ...expandedExamples, ...colloquialExamples, ...quadrupledExamples, ...doubledExamples];
     for (const example of all.filter(item => item.intent === 'query')) {
       const route = classifyCashDeterministicLanguage(example.input);
       if (!route || !deterministicCashQuery(route.canonical)) failures.push(example.input);
@@ -179,19 +206,21 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(deterministicCashQuery(route!.canonical)).not.toBeNull();
   });
 
-  it('aceita amostras reais espalhadas pela camada que leva a capacidade a 4x', () => {
+  it('aceita amostras reais espalhadas pela nova camada que dobra para 96.000+', () => {
     const indexes = [
       0,
-      Math.floor(quadrupledExamples.length / 6),
-      Math.floor(quadrupledExamples.length / 3),
-      Math.floor(quadrupledExamples.length / 2),
-      Math.floor((quadrupledExamples.length * 2) / 3),
-      Math.floor((quadrupledExamples.length * 5) / 6),
-      quadrupledExamples.length - 1
+      Math.floor(doubledExamples.length / 8),
+      Math.floor(doubledExamples.length / 4),
+      Math.floor((doubledExamples.length * 3) / 8),
+      Math.floor(doubledExamples.length / 2),
+      Math.floor((doubledExamples.length * 5) / 8),
+      Math.floor((doubledExamples.length * 3) / 4),
+      Math.floor((doubledExamples.length * 7) / 8),
+      doubledExamples.length - 1
     ];
 
     for (const index of indexes) {
-      const example = quadrupledExamples[index];
+      const example = doubledExamples[index];
       expect(example).toBeDefined();
       const route = classifyCashDeterministicLanguage(example!.input);
       expect(route?.intent).toBe(example!.intent);
