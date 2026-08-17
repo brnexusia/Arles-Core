@@ -4,7 +4,8 @@ import {
   clearCashRecentRecordReference,
   consumeCashRecentRecordReference,
   getCashQueryContext,
-  rememberCashDeferredQuery
+  rememberCashDeferredQuery,
+  rememberCashQueryContext
 } from './conversation-state.js';
 import { deterministicCashParse } from './parser.js';
 import { deterministicCashQuery } from './query.js';
@@ -27,10 +28,6 @@ function financialish(value: string): boolean {
   return /\b(gast|pag|compr|receb|ganh|entr|sai|saldo|despes|receit|registro|lancamento|moviment|cofrinh|caixinh|quanto|qnt|qto|qnto|soma|some|total|historico|relatorio|previs|simul)\w*/.test(text);
 }
 
-/**
- * Corrige abreviações/erros muito comuns de WhatsApp sem tentar "corrigir português" inteiro.
- * A transformação só roda quando a frase já parece financeira, evitando mexer em nomes de loja.
- */
 export function normalizeCashNoisyLanguage(input: string): string {
   const original = String(input ?? '').trim();
   if (!original || !financialish(original)) return original;
@@ -52,9 +49,6 @@ export function normalizeCashNoisyLanguage(input: string): string {
   ];
 
   for (const [pattern, replacement] of replacements) value = value.replace(pattern, replacement);
-
-  // "q" isolado é comum em transcrição/WhatsApp, mas só trocamos dentro de frases
-  // que já têm sinal financeiro para não transformar nome de estabelecimento.
   value = value.replace(/\bq\b/gi, 'que');
   return value.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
@@ -69,7 +63,6 @@ function queryLike(value: string): boolean {
   return /\b(quanto|saldo|qual|quais|mostra|lista|historico|registros?|lancamentos?|gastei|recebi|entrou|saiu|sobrou|resta|tenho)\b/.test(text);
 }
 
-/** Separa apenas o caso perigoso e frequente: lançamento + consulta na mesma mensagem. */
 export function parseCashMultiIntent(input: string): CashMultiIntent | null {
   const clean = String(input ?? '').trim();
   if (!clean) return null;
@@ -145,10 +138,6 @@ function switchQueryType(previous: string, current: string): string | null {
   return null;
 }
 
-/**
- * Expande follow-ups curtos usando a última consulta real do MESMO company+telefone.
- * Não inventa contexto: só aceita período, categoria/local, faixa de valor, tipo e ranking.
- */
 export function expandCashQueryContext(previous: string, current: string): string | null {
   const prior = String(previous ?? '').trim();
   const now = String(current ?? '').trim();
@@ -202,7 +191,6 @@ function appendSafetyNote(result: VerticalResult, note: string): VerticalResult 
   return { ...result, actions: [...result.actions, { type: 'text', text: note }] };
 }
 
-/** Camada anterior aos handlers financeiros: normaliza, usa contexto e bloqueia ambiguidades. */
 export async function handleCashConversationSafety(context: VerticalContext): Promise<VerticalResult | null> {
   const normalizedInput = normalizeCashNoisyLanguage(context.combinedText);
   if (normalizedInput) context.combinedText = normalizedInput;
@@ -237,6 +225,12 @@ export async function handleCashConversationSafety(context: VerticalContext): Pr
     if (expanded) context.combinedText = expanded;
   }
 
+  // Toda consulta determinística válida vira contexto para o próximo follow-up curto.
+  // Como a chave inclui company + telefone, nunca há vazamento entre usuários.
+  if (deterministicCashQuery(context.combinedText)) {
+    await rememberCashQueryContext(companyId, phone, context.combinedText);
+  }
+
   if (!quoted && isCashAmbiguousCalculationRemoval(context.combinedText)) {
     await clearCashRecentRecordReference(companyId, phone);
     return text([
@@ -257,8 +251,6 @@ export async function handleCashConversationSafety(context: VerticalContext): Pr
     return null;
   }
 
-  // A referência pronominal só vale imediatamente após um lançamento confirmado.
-  // Qualquer novo assunto substantivo invalida esse "ele/esse/isso" para não apagar algo antigo.
   if (!acknowledgement(context.combinedText)) {
     await clearCashRecentRecordReference(companyId, phone);
   }
