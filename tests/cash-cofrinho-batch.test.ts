@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { parseCashPocketCreateNames } from '../src/verticals/cash/cofrinhos.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+let parseCashPocketCreateNames: (input: string) => string[];
+
+beforeAll(async () => {
+  process.env.DATABASE_URL ||= 'postgresql://test:test@127.0.0.1:5432/test';
+  process.env.REDIS_URL ||= 'redis://127.0.0.1:6379';
+  process.env.EVOLUTION_BASE_URL ||= 'http://127.0.0.1:8080';
+  process.env.EVOLUTION_API_KEY ||= 'test';
+  ({ parseCashPocketCreateNames } = await import('../src/verticals/cash/cofrinhos.js'));
+});
 
 describe('cash cofrinhos em lote', () => {
   it('separa exatamente os cinco cofrinhos do cenário real do WhatsApp', () => {
