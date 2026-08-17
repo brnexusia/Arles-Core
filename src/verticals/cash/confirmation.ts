@@ -8,6 +8,10 @@ import {
   parseCashEditPatch,
   type CashEditPatch
 } from './management.js';
+import {
+  assignCashTransactionPocket,
+  prepareCashPocketTransactions
+} from './pocket-assignment.js';
 
 const TTL_SECONDS = 15 * 60;
 
@@ -45,6 +49,7 @@ function line(item: CashTransactionInput, index?: number): string {
   return [
     `${prefix}${icon} ${type}: ${brl(item.amount)}`,
     `📂 ${item.category}`,
+    item.pocketName ? `🐷 Cofrinho: ${item.pocketName}` : '',
     item.description ? `📝 ${item.description}` : '',
     `📅 ${formatBrazilDate(item.transactionDate)}`
   ].filter(Boolean).join('\n');
@@ -90,6 +95,13 @@ async function getPending(companyId: string, phone: string): Promise<PendingCash
   } catch {
     return null;
   }
+}
+
+export async function getCashPendingRegistration(
+  companyId: string,
+  phone: string
+): Promise<PendingCashRegistration | null> {
+  return await getPending(companyId, phone);
 }
 
 async function savePending(companyId: string, phone: string, pending: PendingCashRegistration): Promise<void> {
@@ -147,19 +159,22 @@ export async function stageCashRegistration(
   transactions: CashTransactionInput[],
   sourceMessage = context.combinedText
 ): Promise<VerticalResult> {
+  const prepared = await prepareCashPocketTransactions(context.company.id, sourceMessage, transactions);
+  if (prepared.error) return text(prepared.error);
+
   const pending: PendingCashRegistration = {
     sourceMessageId: context.message.messageId || `cash:${Date.now()}`,
     sourceMessage: sourceMessage.slice(0, 1000),
-    transactions: transactions.slice(0, 12)
+    transactions: prepared.transactions.slice(0, 12)
   };
   await savePending(context.company.id, context.message.phone, pending);
 
   return text([
-    transactions.length === 1
+    pending.transactions.length === 1
       ? '🧾 Antes de registrar, confirma se entendi certo:'
-      : `🧾 Antes de registrar, confirma estes ${transactions.length} lançamentos:`,
+      : `🧾 Antes de registrar, confirma estes ${pending.transactions.length} lançamentos:`,
     '',
-    summary(transactions),
+    summary(pending.transactions),
     '',
     'Está certo?',
     options()
@@ -179,7 +194,7 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
     const saved: CashTransactionInput[] = [];
     for (let index = 0; index < pending.transactions.length; index += 1) {
       const transaction = pending.transactions[index]!;
-      await cashService.createTransaction({
+      const created = await cashService.createTransaction({
         companyId: context.company.id,
         phone: context.message.phone,
         sourceMessageId: pending.transactions.length === 1
@@ -188,6 +203,7 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
         sourceMessage: pending.sourceMessage,
         transaction
       });
+      await assignCashTransactionPocket(context.company.id, String(created.id), transaction.pocketId);
       saved.push(transaction);
     }
     await clearPending(context.company.id, context.message.phone);
