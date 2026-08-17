@@ -27,6 +27,10 @@ export function hasCashExplicitAggregatePeriod(input: string): boolean {
     || /\b(?:do|desse|deste|no|nesse|neste)\s+ano\b/.test(value);
 }
 
+function historicalBoundaryCue(value: string): boolean {
+  return /\b(?:desde o inicio|desde que comecei|desde sempre|ate agora|ate hoje|vida toda)\b/.test(value);
+}
+
 function allTimeCue(value: string): boolean {
   return /\b(?:total geral|geral|global|acumulad\w*|historico completo|historico todo|todo o historico|desde o inicio|desde que comecei|desde sempre|ate agora|ate hoje|no geral|ao todo|de tudo|tudo que|tudo o que|todos? os lancamentos|todos? os registros|todas? as movimentacoes|vida toda)\b/.test(value);
 }
@@ -61,20 +65,14 @@ export function isCashAllTimeTotalsRequest(input: string): boolean {
   const aggregate = aggregateCue(value);
   const allTime = allTimeCue(value);
   const explicitPeriod = hasCashExplicitAggregatePeriod(value);
+  const historicalBoundary = historicalBoundaryCue(value);
 
-  // “total de hoje / deste mês / semana passada” deve continuar indo para o motor por período.
-  if (explicitPeriod && !allTime) return false;
+  // “total de tudo hoje / neste mês” ainda é daquele período; “até hoje” é histórico.
+  if (explicitPeriod && !historicalBoundary) return false;
 
-  // Escopo explicitamente histórico/acumulado + qualquer sinal financeiro relevante.
   if (allTime && (aggregate || income || expense || records || /\bsaldo\b/.test(value))) return true;
-
-  // Pedidos sem período que somam entradas + saídas são, por natureza, balanço acumulado.
   if (!explicitPeriod && aggregate && income && expense) return true;
-
-  // “some todos os lançamentos”, “valor total dos registros”, etc.
   if (!explicitPeriod && aggregate && records) return true;
-
-  // Formulações naturais pareadas sem a palavra “total”: “quanto já entrou e quanto já saiu”.
   if (!explicitPeriod && income && expense && /\bquanto\b/.test(value) && /\b(?:ja|tudo|geral|acumulado)\b/.test(value)) return true;
 
   return false;
