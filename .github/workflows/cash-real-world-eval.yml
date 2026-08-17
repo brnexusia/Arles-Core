@@ -1,0 +1,47 @@
+name: Cash 5000-message real-world eval
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/verticals/cash/**'
+      - 'tests/cash-real-world-5000.test.ts'
+      - '.github/workflows/cash-real-world-eval.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cash-real-world-eval
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
+          REDIS_URL: redis://127.0.0.1:6379
+          EVOLUTION_BASE_URL: http://127.0.0.1:8080
+          EVOLUTION_API_KEY: test
+        run: npm run typecheck
+
+      - name: Run 5000-message Cash eval
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/test
+          REDIS_URL: redis://127.0.0.1:6379
+          EVOLUTION_BASE_URL: http://127.0.0.1:8080
+          EVOLUTION_API_KEY: test
+        run: npx vitest run tests/cash-real-world-5000.test.ts
