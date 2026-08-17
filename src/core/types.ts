@@ -33,5 +33,6 @@ export interface NormalizedMessage {
   type: 'text' | 'image' | 'audio' | 'unsupported';
   text: string;
   quotedText?: string;
+  quotedMessageId?: string;
   raw: unknown;
 }

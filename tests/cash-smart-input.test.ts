@@ -7,6 +7,7 @@ process.env.EVOLUTION_API_KEY ||= 'test-key';
 
 const {
   adjustCashRemainder,
+  cashBatchSectionHeader,
   isCashCasualAcknowledgement,
   isCashExpenseListRequest,
   looksLikeCashBatch
@@ -37,6 +38,29 @@ describe('cash smart input', () => {
     expect(looksLikeCashBatch(message)).toBe(true);
   });
 
+  it('entende lista de despesas sem repetir o verbo em cada linha', () => {
+    const message = [
+      'Despesas:',
+      'Mercado 50,00',
+      'Uber 22,90',
+      'Unhas 100,00'
+    ].join('\n');
+
+    expect(cashBatchSectionHeader('Despesas:')).toBe('expense');
+    expect(looksLikeCashBatch(message)).toBe(true);
+  });
+
+  it('entende lista de entradas sem repetir recebi em cada linha', () => {
+    const message = [
+      'Entradas:',
+      'Freela 300,00',
+      'Venda 200,00'
+    ].join('\n');
+
+    expect(cashBatchSectionHeader('Entradas')).toBe('income');
+    expect(looksLikeCashBatch(message)).toBe(true);
+  });
+
   it('trata dinheiro guardado como Reserva', () => {
     expect(deterministicCashParse('Guardei 300 reais hoje')).toMatchObject({
       type: 'expense',
@@ -60,7 +84,7 @@ describe('cash smart input', () => {
     expect(adjusted.amount).toBe(80);
   });
 
-  it('preserva o texto da mensagem citada no WhatsApp', () => {
+  it('preserva texto e id da mensagem citada no WhatsApp', () => {
     const message = normalizeEvolutionMessage({
       event: 'messages.upsert',
       instance: 'cash',
@@ -68,10 +92,11 @@ describe('cash smart input', () => {
         key: { id: 'msg-2', remoteJid: '5575999999999@s.whatsapp.net', fromMe: false },
         message: {
           extendedTextMessage: {
-            text: 'Eu já citei acima com o que foi os meus gastos',
+            text: 'Corrige essa para 80',
             contextInfo: {
+              stanzaId: 'msg-original-1',
               quotedMessage: {
-                conversation: 'Eu ganhei 600 e paguei 100 nas unhas'
+                conversation: 'Gastei 100 nas unhas'
               }
             }
           }
@@ -79,7 +104,8 @@ describe('cash smart input', () => {
       }
     });
 
-    expect(message.text).toBe('Eu já citei acima com o que foi os meus gastos');
-    expect(message.quotedText).toBe('Eu ganhei 600 e paguei 100 nas unhas');
+    expect(message.text).toBe('Corrige essa para 80');
+    expect(message.quotedText).toBe('Gastei 100 nas unhas');
+    expect(message.quotedMessageId).toBe('msg-original-1');
   });
 });

@@ -10,6 +10,7 @@ import { cashService } from './service.js';
 import { preprocessCashInput } from './smart-input.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import { formatBrazilDate } from './time.js';
+import { handleCashQuotedManagement } from './quoted-management.js';
 
 const BroadFallbackSchema = z.object({
   intent: z.enum([
@@ -184,6 +185,11 @@ async function retryCanonical(context: VerticalContext, rewrittenText: string): 
 
 export class CashBroadHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
+    // Uma resposta/citação do WhatsApp define um alvo muito mais preciso do que
+    // “último registro”. Tratamos esse contexto antes de regex, IA ou parser financeiro.
+    const quotedManagement = await handleCashQuotedManagement(context);
+    if (quotedManagement) return quotedManagement;
+
     const guideSection = cashHelpSection(context.combinedText);
     if (guideSection) return text(cashHelpMessage(guideSection));
 
