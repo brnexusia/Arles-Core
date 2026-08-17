@@ -7,6 +7,7 @@ import { handleCashLedgerDeterministic } from './ledger.js';
 import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
 import { matchCashNaturalLanguageExpandedExample } from './natural-language-corpus-expanded.js';
 import { matchCashNaturalLanguageColloquialExample } from './natural-language-corpus-colloquial.js';
+import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-corpus-quadrupled.js';
 import { cashQuery } from './query.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 
@@ -136,6 +137,9 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
 
   const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
   if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
+
+  const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
+  if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
 
   const schedule = scheduleCanonical(input, value);
   if (schedule) return { intent: 'schedule', canonical: schedule };
