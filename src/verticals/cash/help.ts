@@ -20,14 +20,16 @@ export function cashHelpSection(input: string): CashHelpSection | null {
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(cofrinho|cofrinhos|caixinha|caixinhas|separar dinheiro)\b/.test(value)
     || /^(?:cofrinho|cofrinhos|caixinha|caixinhas)$/.test(value)) return 'pockets';
 
+  // Gestão vem antes de “registro”: “como edito um registro?” é ajuda de edição,
+  // não instrução de como registrar uma movimentação nova.
+  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(editar|edito|corrigir|corrijo|alterar|altero|apagar|apago|remover|removo|excluir|excluo|desfazer|desfaco)\b/.test(value)
+    || /^(?:editar|corrigir|apagar|remover|excluir|desfazer)$/.test(value)) return 'manage';
+
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(registrar|registro|lancar|lancamento|despesa|receita|guardar|reserva)\b/.test(value)
     || /^(?:registrar|registro|lancamentos?|despesas?|receitas?)$/.test(value)) return 'register';
 
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(consultar|consulta|pesquisar|pesquisa|buscar|gastos|saldo|historico|lista|simular|simulacao)\b/.test(value)
     || /^(?:consultar|consulta|pesquisar|pesquisa|historico|saldo|simular|simulacao)$/.test(value)) return 'query';
-
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(editar|corrigir|alterar|apagar|remover|excluir|desfazer)\b/.test(value)
-    || /^(?:editar|corrigir|apagar|remover|excluir|desfazer)$/.test(value)) return 'manage';
 
   if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(relatorio|relatorios|semanal|mensal)\b/.test(value)
     || /^(?:relatorios?|semanal|mensal)$/.test(value)) return 'reports';
