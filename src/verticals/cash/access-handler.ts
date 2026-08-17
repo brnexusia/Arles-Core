@@ -7,6 +7,7 @@ import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { handleCashPocketContextCommand } from './pocket-context.js';
+import { handleCashPocketOrganization } from './pocket-organization.js';
 import { cashReports } from './reports.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
@@ -229,6 +230,11 @@ export class CashAccessHandler implements VerticalHandler {
     // “todo dia 10 gasto 300 no cofrinho Cartão” seja previsão, não gasto imediato.
     const scheduled = await handleCashScheduleDeterministic(context);
     if (scheduled) return scheduled;
+
+    // Pedidos naturais de organização como “registre os gastos deste mês no cofrinho X”
+    // precisam acontecer antes do parser genérico de cofrinhos e de consultas.
+    const pocketOrganization = await handleCashPocketOrganization(context);
+    if (pocketOrganization) return pocketOrganization;
 
     // Administração e contexto de cofrinhos vêm antes da exclusão de registros. Assim,
     // depois de “quais cofrinhos eu tenho?”, “apaga ele” não pode apagar uma transação.
