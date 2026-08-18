@@ -41,11 +41,15 @@ function normalize(value: string): string {
     .trim();
 }
 
-function pocketTypos(value: string): string {
+export function normalizeCashPocketSynonyms(value: string): string {
   return String(value ?? '')
     .replace(/\bconfrinho\b/gi, 'cofrinho')
     .replace(/\bcofrino\b/gi, 'cofrinho')
-    .replace(/\bconfrino\b/gi, 'cofrinho');
+    .replace(/\bconfrino\b/gi, 'cofrinho')
+    .replace(/\bcaixinha\b/gi, 'cofrinho')
+    .replace(/\benvelope\b/gi, 'cofrinho')
+    .replace(/\bpotinho\b/gi, 'cofrinho')
+    .replace(/\bporquinho\b/gi, 'cofrinho');
 }
 
 function money(raw: string): number | null {
@@ -71,21 +75,21 @@ function hasFutureScheduleLanguage(value: string): boolean {
 }
 
 export function parseCashPocketTransferIntent(input: string): CashPocketTransferIntent {
-  const canonical = pocketTypos(input);
+  const canonical = normalizeCashPocketSynonyms(input);
   const value = normalize(canonical);
   if (!/\bcofrinh(?:o|os)\b/.test(value)) return null;
 
   const amount = amountFrom(canonical);
   if (!amount) return null;
 
-  const simulation = /\b(se eu|se colocar|se guardar|se separar|se reservar|quanto (?:vou|vai|iria|ficaria)|quanto sobra|quanto fica|como fica|ficaria|vou ter|terei|saldo livre|disponivel|disponível)\b/.test(value)
+  const simulation = /\b(se eu|se colocar|se guardar|se separar|se reservar|quanto (?:vou|vai|iria|ficaria)|quanto sobra|quanto fica|como fica|ficaria|vou ter|terei|saldo livre|disponivel|disponível|sem incluir|sem contar|sem mexer)\b/.test(value)
     || /\?$/.test(String(input).trim());
 
   // Recorrências e datas futuras pertencem ao motor de previsões, nunca viram uma
   // reserva imediata por engano. Simulações explícitas continuam permitidas.
   if (hasFutureScheduleLanguage(value) && !simulation) return null;
 
-  const out = /\b(tirar|tira|retirar|retira|resgatar|resgata|sacar|saca|devolver|devolve|liberar|libera)\b/.test(value)
+  const out = /\b(tirar|tira|retirar|retira|resgatar|resgata|sacar|saca|devolver|devolve|liberar|libera|desreservar|desreserva)\b/.test(value)
     || /\b(?:mover|move|transferir|transfere)\b.*\b(?:do|de)\s+cofrinho\b/.test(value);
   if (out) return { direction: 'out', amount, simulation };
 
@@ -142,7 +146,7 @@ async function rememberedPocket(context: VerticalContext): Promise<CashPocketBal
 }
 
 async function resolvePocket(context: VerticalContext): Promise<{ pocket: CashPocketBalance | null; error: string | null }> {
-  const canonical = pocketTypos(context.combinedText);
+  const canonical = normalizeCashPocketSynonyms(context.combinedText);
   const mentioned = await cashPocketService.findMentioned(context.company.id, canonical);
   const all = await cashPocketService.list(context.company.id);
 
@@ -183,7 +187,7 @@ async function balances(companyId: string): Promise<{ total: number; pockets: Ca
 }
 
 function isAvailabilityQuery(input: string): boolean {
-  const value = normalize(pocketTypos(input));
+  const value = normalize(normalizeCashPocketSynonyms(input));
   const asksAvailable = /\b(disponivel|saldo livre|dinheiro livre|quanto posso gastar|quanto tenho fora|quanto sobra fora|sem incluir|sem contar|sem mexer)\b/.test(value);
   return asksAvailable && /\bcofrinh(?:o|os)\b/.test(value);
 }
@@ -201,7 +205,7 @@ export async function handleCashPocketAvailabilityQuery(context: VerticalContext
   ].join('\n'));
 }
 
-async function preview(context: VerticalContext, pending: PendingPocketTransfer): Promise<{ message: string; allowed: boolean }> {
+async function preview(context: VerticalContext, pending: PendingPocketTransfer, confirmationPrompt = true): Promise<{ message: string; allowed: boolean }> {
   const state = await balances(context.company.id);
   const pocket = state.pockets.find(item => item.id === pending.pocketId);
   if (!pocket) return { message: `Não encontrei mais o cofrinho *${pending.pocketName}*.`, allowed: false };
@@ -214,7 +218,7 @@ async function preview(context: VerticalContext, pending: PendingPocketTransfer)
           `🐷 Você quer guardar *${brl(pending.amount)}* no cofrinho *${pocket.name}*.`,
           `Hoje há *${brl(state.available)}* disponível fora dos cofrinhos.`,
           '',
-          'Esse valor ultrapassa o disponível livre, então não fiz a reserva.'
+          'Esse valor ultrapassa o disponível livre, então não movi nada.'
         ].join('\n')
       };
     }
@@ -222,13 +226,13 @@ async function preview(context: VerticalContext, pending: PendingPocketTransfer)
     return {
       allowed: true,
       message: [
-        `🐷 *Reserva no cofrinho ${pocket.name}*`,
+        confirmationPrompt ? `🐷 *Reserva no cofrinho ${pocket.name}*` : `🧮 *Simulação — cofrinho ${pocket.name}*`,
         `Valor: *${brl(pending.amount)}*`,
         `Disponível fora dos cofrinhos: ${brl(state.available)} → *${brl(state.available - pending.amount)}*`,
         `No cofrinho ${pocket.name}: ${brl(pocket.balance)} → *${brl(Number(pocket.balance) + pending.amount)}*`,
         `Saldo total: *${brl(state.total)}* — não muda.`,
         '',
-        'Responda *sim* para confirmar ou *não* para cancelar.'
+        confirmationPrompt ? 'Responda *sim* para confirmar ou *não* para cancelar.' : 'Foi apenas uma simulação. Nenhum dinheiro foi movido.'
       ].join('\n')
     };
   }
@@ -240,7 +244,7 @@ async function preview(context: VerticalContext, pending: PendingPocketTransfer)
         `🐷 O cofrinho *${pocket.name}* tem *${brl(Number(pocket.balance))}*.`,
         `Você pediu para liberar ${brl(pending.amount)}.`,
         '',
-        'Não fiz a retirada porque o valor é maior que o saldo do cofrinho.'
+        confirmationPrompt ? 'Não fiz a retirada porque o valor é maior que o saldo do cofrinho.' : 'Essa retirada não seria possível porque o valor é maior que o saldo do cofrinho.'
       ].join('\n')
     };
   }
@@ -248,13 +252,13 @@ async function preview(context: VerticalContext, pending: PendingPocketTransfer)
   return {
     allowed: true,
     message: [
-      `🐷 *Retirada do cofrinho ${pocket.name}*`,
+      confirmationPrompt ? `🐷 *Retirada do cofrinho ${pocket.name}*` : `🧮 *Simulação — cofrinho ${pocket.name}*`,
       `Valor: *${brl(pending.amount)}*`,
       `No cofrinho ${pocket.name}: ${brl(pocket.balance)} → *${brl(Number(pocket.balance) - pending.amount)}*`,
       `Disponível fora dos cofrinhos: ${brl(state.available)} → *${brl(state.available + pending.amount)}*`,
       `Saldo total: *${brl(state.total)}* — não muda.`,
       '',
-      'Responda *sim* para confirmar ou *não* para cancelar.'
+      confirmationPrompt ? 'Responda *sim* para confirmar ou *não* para cancelar.' : 'Foi apenas uma simulação. Nenhum dinheiro foi movido.'
     ].join('\n')
   };
 }
@@ -273,7 +277,12 @@ export async function handleCashPocketTransfer(context: VerticalContext): Promis
     amount: intent.amount
   };
 
-  const result = await preview(context, pending);
+  if (intent.simulation) {
+    const result = await preview(context, pending, false);
+    return text(result.message);
+  }
+
+  const result = await preview(context, pending, true);
   if (!result.allowed) return text(result.message);
 
   await savePending(context, pending);
@@ -308,7 +317,7 @@ export async function handleCashPendingPocketTransfer(context: VerticalContext):
   const nextAmount = editedAmount(context.combinedText);
   if (nextAmount) {
     pending.amount = nextAmount;
-    const result = await preview(context, pending);
+    const result = await preview(context, pending, true);
     if (!result.allowed) {
       await clearPending(context);
       return text(result.message);
@@ -318,7 +327,7 @@ export async function handleCashPendingPocketTransfer(context: VerticalContext):
   }
 
   if (!confirmation(context.combinedText)) {
-    const result = await preview(context, pending);
+    const result = await preview(context, pending, true);
     return text([
       'Tenho uma movimentação de cofrinho aguardando confirmação.',
       '',
@@ -326,7 +335,7 @@ export async function handleCashPendingPocketTransfer(context: VerticalContext):
     ].join('\n'));
   }
 
-  const before = await preview(context, pending);
+  const before = await preview(context, pending, true);
   if (!before.allowed) {
     await clearPending(context);
     return text(before.message);
