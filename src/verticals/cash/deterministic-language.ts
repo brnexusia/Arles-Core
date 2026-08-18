@@ -1,9 +1,10 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
-import { isCashAllTimeTotalsRequest } from './aggregate-intent.js';
+import { parseCashAggregateIntent } from './aggregate-intent.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashConversationHandler } from './conversation.js';
 import { rememberCashQueryContext } from './conversation-state.js';
+import { handleCashFinancialSummary } from './financial-summary.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
@@ -16,6 +17,7 @@ import { handleCashScheduleDeterministic } from './schedules.js';
 
 export type CashDeterministicLanguageIntent =
   | 'balance'
+  | 'aggregate'
   | 'projection'
   | 'schedule'
   | 'query'
@@ -58,14 +60,14 @@ function queryPeriod(value: string): string {
   if (/\bontem\b/.test(value)) return 'ontem';
   if (/\banteontem\b/.test(value)) return 'anteontem';
   if (/\bhoje\b/.test(value)) return 'hoje';
-  if (/\b(?:este|esse|deste|desse) mes\b|\bmes atual\b/.test(value)) return 'este mês';
+  if (/\b(?:este|esse|neste|nesse|deste|desse) mes\b|\bmes atual\b/.test(value)) return 'este mês';
   if (/\bmes passado\b|\bultimo mes\b/.test(value)) return 'mês passado';
   if (/\bsemana passada\b|\bultima semana\b/.test(value)) return 'semana passada';
-  if (/\b(?:esta|essa|desta|dessa) semana\b|\bsemana atual\b/.test(value)) return 'esta semana';
-  if (/\b(?:este|esse) ano\b|\bano atual\b/.test(value)) return 'este ano';
+  if (/\b(?:esta|essa|nesta|nessa|desta|dessa) semana\b|\bsemana atual\b/.test(value)) return 'esta semana';
+  if (/\b(?:este|esse|neste|nesse|deste|desse) ano\b|\bano atual\b/.test(value)) return 'este ano';
   if (/\bano passado\b|\bultimo ano\b/.test(value)) return 'ano passado';
 
-  const lastDays = value.match(/\bultimos?\s+(\d{1,3})\s+dias?\b/);
+  const lastDays = value.match(/\bultim(?:os|as)\s+(\d{1,3})\s+dias?\b/);
   if (lastDays?.[1]) return `últimos ${lastDays[1]} dias`;
 
   const month = value.match(new RegExp(`\\b(${MONTHS})(?:\\s+de\\s+(20\\d{2}))?\\b`));
@@ -107,21 +109,14 @@ function scheduleCanonical(input: string, value: string): string | null {
   return null;
 }
 
-function aggregateQueryCanonical(value: string): string | null {
-  const aggregation = /\b(?:soma|some|somar|somando|total|totaliza|totalizar|totalizando|valor total|ao todo|no total|quanto deu|quanto foi|quanto ficou|fechamento|fecha|feche|balanco|resumo)\b/.test(value);
-  const asksHowMuch = /\bquanto\b/.test(value) && /\b(?:ganh\w*|gast\w*|receb\w*|pag\w*|entr\w*|sai\w*|despes\w*|receit\w*)\b/.test(value);
-  if (!aggregation && !asksHowMuch) return null;
+function directBalance(value: string): boolean {
+  return /^(?:(?:me )?(?:diz|fala|mostra|mostre)\s+)?(?:o\s+)?(?:meu\s+)?(?:saldo|saldo atual|saldo disponivel|balanco)(?:\s+(?:agora|hoje))?$/.test(value)
+    || /\b(?:quanto eu tenho|quanto tenho|quanto que eu tenho|quanto sobrou|quanto me resta|quanto tenho de dinheiro|quanto tenho disponivel|qual e meu saldo|me fala meu saldo atual|quanto ficou meu saldo)\b/.test(value);
+}
 
-  const income = /\b(?:ganhei|ganho|ganhos|recebi|recebido|recebimentos?|receitas?|entradas?|entrou|entraram|caiu|vendi|vendas?|faturei|faturamento)\b/.test(value);
-  const expense = /\b(?:gastei|gasto|gastos|despesas?|saidas?|saiu|sairam|paguei|pagamentos?|comprei|compras?)\b/.test(value);
-  const records = /\b(?:lancamentos?|registros?|movimentacoes?)\b/.test(value);
-  if (!income && !expense && !records) return null;
-
-  const period = queryPeriod(value);
-  if ((income && expense) || (records && !income && !expense)) return `quanto entrou e quanto saiu ${period}?`;
-  if (expense) return `quanto gastei ${period}?`;
-  if (income) return `quanto recebi ${period}?`;
-  return null;
+function directHistory(value: string): boolean {
+  return /^(?:(?:me )?(?:fala|mostra|mostre|lista|liste|traz|traga)\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value)
+    || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value);
 }
 
 export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
@@ -133,24 +128,8 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'future_data', canonical: input };
   }
 
-  // Totais gerais precisam ganhar da regra histórica “sem período = hoje”.
-  // A decisão é semântica por grupos de palavras, não por frase exata.
-  if (isCashAllTimeTotalsRequest(input)) {
-    return { intent: 'balance', canonical: 'saldo' };
-  }
-
-  const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
-  if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
-
-  const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
-  if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
-
-  const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
-  if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
-
-  const doubledCorpus = matchCashNaturalLanguageDoubledExample(input);
-  if (doubledCorpus) return { intent: doubledCorpus.intent, canonical: doubledCorpus.canonical };
-
+  // A gramática financeira pequena e previsível vem antes dos corpus gigantes.
+  // Corpus continua existindo como compatibilidade/fallback, não como fonte de verdade.
   const schedule = scheduleCanonical(input, value);
   if (schedule) return { intent: 'schedule', canonical: schedule };
 
@@ -174,21 +153,12 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'pocket', canonical: input };
   }
 
-  const aggregate = aggregateQueryCanonical(value);
-  if (aggregate) return { intent: 'query', canonical: aggregate };
-
-  const corpus = matchCashNaturalLanguageExample(input);
-  if (corpus) return { intent: corpus.intent, canonical: corpus.canonical };
-
-  if (/^(?:(?:me )?(?:diz|fala|mostra|mostre)\s+)?(?:o\s+)?(?:meu\s+)?(?:saldo|saldo atual|saldo disponivel|balanco)(?:\s+(?:agora|hoje))?$/.test(value)
-    || /\b(?:quanto eu tenho|quanto tenho|quanto que eu tenho|quanto sobrou|quanto me resta|quanto tenho de dinheiro|quanto tenho disponivel|qual e meu saldo|me fala meu saldo atual|quanto ficou meu saldo)\b/.test(value)) {
-    return { intent: 'balance', canonical: 'saldo' };
+  if (parseCashAggregateIntent(input)) {
+    return { intent: 'aggregate', canonical: input };
   }
 
-  if (/^(?:(?:me )?(?:fala|mostra|mostre|lista|liste|traz|traga)\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value)
-    || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value)) {
-    return { intent: 'history', canonical: 'histórico' };
-  }
+  if (directBalance(value)) return { intent: 'balance', canonical: 'saldo' };
+  if (directHistory(value)) return { intent: 'history', canonical: 'histórico' };
 
   if (/\b(?:me mostra|mostra|mostre)\s+(?:os\s+|as\s+)?(?:tudo\s+que\s+)?(?:entrou|recebimentos?)\b/.test(value)
     || /\bquanto foi de entrada\b/.test(value)) {
@@ -211,6 +181,21 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'help', canonical: input };
   }
 
+  const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
+  if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
+
+  const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
+  if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
+
+  const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
+  if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
+
+  const doubledCorpus = matchCashNaturalLanguageDoubledExample(input);
+  if (doubledCorpus) return { intent: doubledCorpus.intent, canonical: doubledCorpus.canonical };
+
+  const corpus = matchCashNaturalLanguageExample(input);
+  if (corpus) return { intent: corpus.intent, canonical: corpus.canonical };
+
   return null;
 }
 
@@ -220,6 +205,10 @@ export async function handleCashDeterministicLanguage(context: VerticalContext):
 
   if (route.intent === 'future_data') {
     return text('Perfeito. Pode me mandar quem está devendo, os valores e quanto tem no caixa. Vou separar saldo, retiradas e valores a receber sem registrar número solto como despesa.');
+  }
+
+  if (route.intent === 'aggregate') {
+    return await handleCashFinancialSummary({ ...context, combinedText: route.canonical });
   }
 
   if (route.intent === 'balance' || route.intent === 'projection') {
