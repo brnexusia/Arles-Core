@@ -41,9 +41,10 @@ export async function rememberCashFinancialIntentContext(
   phone: string,
   intent: CashFinancialIntent
 ): Promise<void> {
-  // Só leituras confirmadas viram contexto. Um lançamento ainda aguardando "sim"
-  // não pode ser tratado como referência financeira consolidada.
-  if (intent.kind === 'transaction' || intent.kind === 'future_data' || intent.needsClarification) return;
+  // Lançamento ainda aguardando "sim" e aviso de dados futuros não viram contexto.
+  // Já uma consulta aguardando período DEVE ser lembrada: assim uma resposta curta
+  // como "este mês" completa exatamente a intenção que acabou de ser perguntada.
+  if (intent.kind === 'transaction' || intent.kind === 'future_data') return;
 
   const snapshot: CashFinancialIntentContext = {
     version: 1,
