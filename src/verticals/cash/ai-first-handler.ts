@@ -170,6 +170,14 @@ export class CashAiFirstHandler implements VerticalHandler {
       return await cashBroadHandler.handle({ ...context, combinedText: corpusRoute.canonical ?? context.combinedText });
     }
 
+    // Uma narrativa mista já foi reconhecida pelo corpus como lote, porém a camada
+    // determinística não consegue separar frases corridas sem IA. Envie diretamente
+    // ao smart-input antes que palavras como “se”, “estimo” ou “todo dia” façam a
+    // proteção de previsões tratar o texto inteiro como uma única simulação/agendamento.
+    if (corpusRoute.intent === 'batch_transaction') {
+      return await cashBroadHandler.handle(context);
+    }
+
     if (isCashNaturalRecordListRequest(context.combinedText)) {
       return await cashBroadHandler.handle({ ...context, combinedText: 'quais foram meus registros hoje?' });
     }
