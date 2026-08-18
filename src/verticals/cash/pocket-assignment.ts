@@ -1,20 +1,10 @@
 import { db } from '../../infrastructure/db.js';
 import type { CashTransactionInput } from './types.js';
 import { cashPocketService, type CashPocket } from './cofrinhos.js';
+import { normalizeCashPocketLanguage } from './pocket-language.js';
 
 function brl(value: number): string {
   return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
-
-function normalizePocketReference(value: string): string {
-  return String(value ?? '')
-    .replace(/\bconfrinho\b/gi, 'cofrinho')
-    .replace(/\bcofrino\b/gi, 'cofrinho')
-    .replace(/\bconfrino\b/gi, 'cofrinho')
-    .replace(/\bcaixinha\b/gi, 'cofrinho')
-    .replace(/\benvelope\b/gi, 'cofrinho')
-    .replace(/\bpotinho\b/gi, 'cofrinho')
-    .replace(/\bporquinho\b/gi, 'cofrinho');
 }
 
 export async function prepareCashPocketTransactions(
@@ -22,7 +12,7 @@ export async function prepareCashPocketTransactions(
   source: string,
   transactions: CashTransactionInput[]
 ): Promise<{ transactions: CashTransactionInput[]; error: string | null }> {
-  const reference = await cashPocketService.findMentioned(companyId, normalizePocketReference(source));
+  const reference = await cashPocketService.findMentioned(companyId, normalizeCashPocketLanguage(source));
   if (!reference.explicit) return { transactions, error: null };
 
   let pocket: CashPocket | null = reference.pocket;
@@ -76,6 +66,54 @@ export async function prepareCashPocketTransactions(
   };
 }
 
+function looksLikeReceivedMoney(source: string): boolean {
+  const value = String(source ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return /\b(recebi|entrou|caiu|depositaram|me pagou|me pagaram|foi pago|foi recebido)\b/.test(value);
+}
+
+async function settleMatchingReceivable(
+  companyId: string,
+  transactionId: string,
+  pocketId: string
+): Promise<void> {
+  const transactionResult = await db.query<{
+    type: string;
+    amount: number;
+    source_message: string | null;
+  }>(
+    `select type,amount::float8,source_message
+     from cash_transactions
+     where company_id=$1 and id=$2
+     limit 1`,
+    [companyId, transactionId]
+  );
+  const transaction = transactionResult.rows[0];
+  if (!transaction || transaction.type !== 'income' || !looksLikeReceivedMoney(transaction.source_message ?? '')) return;
+
+  // Só baixamos automaticamente quando existe uma pendência do mesmo valor no mesmo
+  // cofrinho. Isso evita transformar qualquer receita nova em quitação por engano.
+  await db.query(
+    `with target as (
+       select id
+       from cash_pocket_receivables
+       where company_id=$1
+         and pocket_id=$2
+         and status='pending'
+         and amount=$3::numeric
+       order by due_date asc nulls last,created_at asc
+       limit 1
+     )
+     update cash_pocket_receivables r
+     set status='received',received_transaction_id=$4,updated_at=now()
+     from target
+     where r.id=target.id`,
+    [companyId, pocketId, Number(transaction.amount), transactionId]
+  );
+}
+
 export async function assignCashTransactionPocket(
   companyId: string,
   transactionId: string,
@@ -88,4 +126,5 @@ export async function assignCashTransactionPocket(
      where company_id=$1 and id=$2`,
     [companyId, transactionId, pocketId]
   );
+  await settleMatchingReceivable(companyId, transactionId, pocketId);
 }
