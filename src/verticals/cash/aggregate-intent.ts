@@ -29,7 +29,7 @@ function allTimeCue(value: string): boolean {
 }
 
 function aggregateCue(value: string): boolean {
-  return /\b(?:soma|some|somar|somando|total|totaliza|totalizar|totalizando|valor total|valor acumulado|acumulado|balanco|fechamento|quanto deu|quanto ficou|quanto foi|quanto ja|ao todo|no total|resumo)\b/.test(value);
+  return /\b(?:soma|some|somar|somando|calculo|calcula|calcule|calcular|total|totaliza|totalizar|totalizando|valor total|valor acumulado|acumulado|balanco|fechamento|quanto deu|quanto ficou|quanto foi|quanto ja|ao todo|no total|resumo)\b/.test(value);
 }
 
 function incomeCue(value: string): boolean {
@@ -45,7 +45,7 @@ function recordCue(value: string): boolean {
 }
 
 function requestCue(value: string): boolean {
-  return /\b(?:quanto|qual|quero saber|me diz|me diga|me fala|mostra|mostre|manda|mande|passa|passe|traz|traga|calcula|calcule|soma|some|somar|totaliza|totalizar|resumo|balanco|fechamento)\b/.test(value);
+  return /\b(?:quanto|qual|quero saber|me diz|me diga|me fala|mostra|mostre|manda|mande|passa|passe|traz|traga|calculo|calcula|calcule|calcular|soma|some|somar|totaliza|totalizar|resumo|balanco|fechamento)\b/.test(value);
 }
 
 function hasMoney(value: string): boolean {
@@ -149,11 +149,8 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
   if (!aggregate && !asksHowMuch) return null;
   if (!income && !expense && !records && !genericSummary) return null;
 
-  // Filtros específicos devem continuar no mecanismo de consulta detalhada.
   if (hasSpecificFilter(value)) return null;
 
-  // Uma frase factual com valor não deve virar consulta só porque contém “total”.
-  // Ex.: “gastei 50 no total” continua sendo lançamento.
   if (hasMoney(value) && !requestCue(value) && !/\?$/.test(String(input).trim())) return null;
 
   const flow: CashAggregateFlow = income && expense
