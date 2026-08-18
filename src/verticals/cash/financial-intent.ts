@@ -64,6 +64,19 @@ function destructive(value: string): boolean {
   return /\b(?:apaga|apagar|exclui|excluir|remove|remover|deleta|deletar|cancela|cancelar|edita|editar|corrige|corrigir|altera|alterar|muda|mudar)\b/.test(value);
 }
 
+function belongsToSpecializedDomain(value: string): boolean {
+  // Cofrinhos possuem entidade, saldo e extrato próprios; nunca devem passar pelo
+  // agregador/query genérico, mesmo quando a frase contém "quanto" ou "total".
+  if (/\b(?:cofrinh|caixinh|envelope|potinh|pote)\w*/.test(value)) return true;
+
+  // Relatórios têm formatação/comparativos próprios. O interpretador financeiro
+  // central não substitui "resumo/fechamento semanal ou mensal" por uma soma simples.
+  if (/\b(?:relatorio|resumo|fechamento)\w*\b.*\b(?:semana|semanal|mes|mensal)\w*\b/.test(value)) return true;
+  if (/^como foi (?:a )?semana$|^como foi (?:o )?mes$/.test(value)) return true;
+
+  return false;
+}
+
 function recentBatchReference(value: string): boolean {
   if (/\b(?:ultimo|ultima|ultimos|ultimas)\s+(?:mes|semana|ano|dia|dias)\b/.test(value)) return false;
   return /\b(?:ultimo|ultima|mais recente)\s+(?:envio|mensagem|lote|dados?|informacoes?|lancamento|registro)\b/.test(value)
@@ -134,7 +147,7 @@ export function interpretCashFinancialIntent(input: string): CashFinancialIntent
   const value = normalize(original);
   if (!value) return null;
 
-  if (destructive(value)) return null;
+  if (destructive(value) || belongsToSpecializedDomain(value)) return null;
 
   if (futureData(value)) {
     return {
