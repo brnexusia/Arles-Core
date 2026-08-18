@@ -30,7 +30,11 @@ describe('Cash pocket reserves', () => {
     'bota 120 no cofrinho Sonho',
     'separa 120 no cofrinho Sonho',
     'reserva 120 no cofrinho Sonho',
-    'transfere 120 para o cofrinho Sonho'
+    'transfere 120 para o cofrinho Sonho',
+    'guarda 120 na caixinha Sonho',
+    'coloca 120 no envelope Sonho',
+    'bota 120 no potinho Sonho',
+    'separa 120 no porquinho Sonho'
   ])('aceita linguagem natural para guardar: %s', input => {
     expect(parseCashPocketTransferIntent(input)?.direction).toBe('in');
     expect(parseCashPocketTransferIntent(input)?.amount).toBe(120);
@@ -40,7 +44,9 @@ describe('Cash pocket reserves', () => {
     'tira 100 do cofrinho Sonho',
     'retira 100 do cofrinho Sonho',
     'resgata 100 do cofrinho Sonho',
-    'transfere 100 do cofrinho Sonho'
+    'transfere 100 do cofrinho Sonho',
+    'tira 100 da caixinha Sonho',
+    'libera 100 do envelope Sonho'
   ])('aceita linguagem natural para liberar: %s', input => {
     expect(parseCashPocketTransferIntent(input)?.direction).toBe('out');
     expect(parseCashPocketTransferIntent(input)?.amount).toBe(100);
@@ -67,6 +73,14 @@ describe('Cash pocket reserves', () => {
 
   it('entende pergunta de projeção da reserva', () => {
     expect(parseCashPocketTransferIntent('se eu guardar 450 no cofrinho Sonho quanto vou ter disponível?')).toEqual({
+      direction: 'in',
+      amount: 450,
+      simulation: true
+    });
+  });
+
+  it('entende erro comum de digitação do nome cofrinho', () => {
+    expect(parseCashPocketTransferIntent('se eu colocar 450 no confrinho Sonho quanto fica disponível?')).toEqual({
       direction: 'in',
       amount: 450,
       simulation: true
