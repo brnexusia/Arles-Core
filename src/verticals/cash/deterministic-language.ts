@@ -1,9 +1,14 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
-import { parseCashAggregateIntent, type CashAggregateIntent } from './aggregate-intent.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
+import { stageCashRegistration } from './confirmation.js';
 import { cashConversationHandler } from './conversation.js';
 import { rememberCashQueryContext } from './conversation-state.js';
+import {
+  cashFinancialIntentAudit,
+  interpretCashFinancialIntent,
+  type CashFinancialIntent
+} from './financial-intent.js';
 import { handleCashFinancialSummary } from './financial-summary.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
@@ -13,6 +18,7 @@ import { matchCashNaturalLanguageColloquialExample } from './natural-language-co
 import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-corpus-quadrupled.js';
 import { matchCashNaturalLanguageDoubledExample } from './natural-language-corpus-doubled.js';
 import { cashQuery } from './query.js';
+import { handleCashRecentBatchReference } from './recent-batch.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 
 export type CashDeterministicLanguageIntent =
@@ -22,6 +28,8 @@ export type CashDeterministicLanguageIntent =
   | 'schedule'
   | 'query'
   | 'history'
+  | 'transaction'
+  | 'recent_batch'
   | 'help'
   | 'plans'
   | 'trial'
@@ -48,64 +56,9 @@ function normalize(value: string): string {
     .replace(/[!?.,]+$/g, '')
     .replace(/\s+(?:por favor|pfv)$/g, '')
     .replace(/\s+(?:pra mim|para mim)$/g, '')
-    .replace(/\s+(?:por favor|pfv)$/g, '')
     .replace(/[!?.,]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-const MONTHS = 'janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro';
-
-function queryPeriod(value: string): string {
-  if (/\bontem\b/.test(value)) return 'ontem';
-  if (/\banteontem\b/.test(value)) return 'anteontem';
-  if (/\bhoje\b/.test(value)) return 'hoje';
-  if (/\b(?:este|esse|neste|nesse|deste|desse) mes\b|\bmes atual\b/.test(value)) return 'este mês';
-  if (/\bmes passado\b|\bultimo mes\b/.test(value)) return 'mês passado';
-  if (/\bsemana passada\b|\bultima semana\b/.test(value)) return 'semana passada';
-  if (/\b(?:esta|essa|nesta|nessa|desta|dessa) semana\b|\bsemana atual\b/.test(value)) return 'esta semana';
-  if (/\b(?:este|esse|neste|nesse|deste|desse) ano\b|\bano atual\b/.test(value)) return 'este ano';
-  if (/\bano passado\b|\bultimo ano\b/.test(value)) return 'ano passado';
-
-  const lastDays = value.match(/\bultim(?:os|as)\s+(\d{1,3})\s+dias?\b/);
-  if (lastDays?.[1]) return `últimos ${lastDays[1]} dias`;
-
-  const month = value.match(new RegExp(`\\b(${MONTHS})(?:\\s+de\\s+(20\\d{2}))?\\b`));
-  if (month?.[1]) {
-    const name = month[1] === 'marco' ? 'março' : month[1];
-    return month[2] ? `${name} de ${month[2]}` : name;
-  }
-
-  return 'hoje';
-}
-
-function aggregatePeriodCanonical(intent: CashAggregateIntent): string {
-  const period = intent.periodCanonical || 'hoje';
-  if (intent.flow === 'income') return `quanto recebi ${period}?`;
-  if (intent.flow === 'expense') return `quanto gastei ${period}?`;
-  return `quanto entrou e quanto saiu ${period}?`;
-}
-
-function firstMoney(value: string): string | null {
-  const match = value.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/);
-  return match?.[1] ?? null;
-}
-
-function projectionCanonical(input: string, value: string): string | null {
-  const base = value.match(/\b(?:considera|considere|usa|use|partindo de|com)\s+(?:um\s+)?saldo\s+(?:de\s+)?(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1]
-    ?? value.match(/\bsaldo\s+(?:de|igual a)\s*(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
-  const expense = value.match(/\b(?:tira|tiro|retira|desconta|gasto|gastar|gastando|pago|pagar|pagando|sai|sair|saindo)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
-  const income = value.match(/\b(?:recebo|receber|recebendo|ganho|ganhar|ganhando|entra|entrar|entrando)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/)?.[1];
-
-  if (base && expense) return `saldo de ${base} menos ${expense} quanto fica?`;
-  if (base && income) return `saldo de ${base} mais ${income} quanto fica?`;
-
-  const simulation = /\b(?:simulacao|simula|so calcula|apenas calcula|sem registrar|nao registra)\w*/.test(value);
-  if (simulation && expense) return `se eu gastar ${expense} quanto sobra?`;
-  if (simulation && income) return `se eu receber ${income} quanto fica meu saldo?`;
-
-  if (/\b(?:se|e se)\b/.test(value) && firstMoney(value)) return input;
-  return null;
 }
 
 function scheduleCanonical(input: string, value: string): string | null {
@@ -116,32 +69,23 @@ function scheduleCanonical(input: string, value: string): string | null {
   return null;
 }
 
-function directBalance(value: string): boolean {
-  return /^(?:(?:me )?(?:diz|fala|mostra|mostre)\s+)?(?:o\s+)?(?:meu\s+)?(?:saldo|saldo atual|saldo disponivel|balanco)(?:\s+(?:agora|hoje))?$/.test(value)
-    || /\b(?:quanto eu tenho|quanto tenho|quanto que eu tenho|quanto sobrou|quanto me resta|quanto tenho de dinheiro|quanto tenho disponivel|qual e meu saldo|me fala meu saldo atual|quanto ficou meu saldo)\b/.test(value);
+function mapCentralIntent(intent: CashFinancialIntent): CashDeterministicLanguageRoute {
+  return { intent: intent.kind, canonical: intent.canonical };
 }
 
-function directHistory(value: string): boolean {
-  return /^(?:(?:me )?(?:fala|mostra|mostre|lista|liste|traz|traga)\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value)
-    || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value);
-}
-
+/**
+ * Classificador público mantido por compatibilidade com testes/corpus.
+ * A fonte de verdade para semântica financeira agora é financial-intent.ts.
+ */
 export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
+  const central = interpretCashFinancialIntent(input);
+  if (central) return mapCentralIntent(central);
+
   const value = normalize(input);
   if (!value) return null;
 
-  if (/\b(?:ainda\s+)?(?:vou|irei)\s+(?:enviar|mandar|passar|informar)\b/.test(value)
-    && /\b(devendo|deve|caixa|saldo|vendas?|gastos?|informacoes?)\b/.test(value)) {
-    return { intent: 'future_data', canonical: input };
-  }
-
-  // A gramática financeira pequena e previsível vem antes dos corpus gigantes.
-  // Corpus continua existindo como compatibilidade/fallback, não como fonte de verdade.
   const schedule = scheduleCanonical(input, value);
   if (schedule) return { intent: 'schedule', canonical: schedule };
-
-  const projection = projectionCanonical(input, value);
-  if (projection) return { intent: 'projection', canonical: projection };
 
   if (/\b(trial|teste gratis|periodo gratuito|dias gratis)\b/.test(value)) {
     return { intent: 'trial', canonical: 'trial' };
@@ -160,28 +104,6 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'pocket', canonical: input };
   }
 
-  const aggregate = parseCashAggregateIntent(input);
-  if (aggregate) {
-    if (aggregate.scope === 'all_time') return { intent: 'aggregate', canonical: input };
-    return { intent: 'query', canonical: aggregatePeriodCanonical(aggregate) };
-  }
-
-  if (directBalance(value)) return { intent: 'balance', canonical: 'saldo' };
-  if (directHistory(value)) return { intent: 'history', canonical: 'histórico' };
-
-  if (/\b(?:me mostra|mostra|mostre)\s+(?:os\s+|as\s+)?(?:tudo\s+que\s+)?(?:entrou|recebimentos?)\b/.test(value)
-    || /\bquanto foi de entrada\b/.test(value)) {
-    return { intent: 'query', canonical: `quanto recebi ${queryPeriod(value)}?` };
-  }
-
-  if (/\b(?:me mostra|mostra|mostre)\s+(?:os\s+|as\s+)?(?:tudo\s+que\s+)?saiu\b/.test(value)) {
-    return { intent: 'query', canonical: `quanto gastei ${queryPeriod(value)}?` };
-  }
-
-  if (/\bcompra mais cara\b/.test(value)) {
-    return { intent: 'query', canonical: `qual foi meu maior gasto ${queryPeriod(value)}?` };
-  }
-
   if (/\b(?:coloca|bota|poe)(?:\s+(?:ele|ela|isso|o registro|o lancamento))?\s+(?:de novo|novamente)\b/.test(value)) {
     return { intent: 'undo', canonical: 'coloca ele de novo' };
   }
@@ -190,6 +112,8 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'help', canonical: input };
   }
 
+  // Os corpus antigos permanecem apenas como compatibilidade para formas que ainda
+  // não fazem parte da gramática financeira central. Eles nunca vencem o interpretador.
   const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
   if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
 
@@ -208,30 +132,82 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
   return null;
 }
 
-export async function handleCashDeterministicLanguage(context: VerticalContext): Promise<VerticalResult | null> {
-  const route = classifyCashDeterministicLanguage(context.combinedText);
-  if (!route) return null;
+function periodClarification(intent: CashFinancialIntent): VerticalResult {
+  const subject = intent.flow === 'income'
+    ? 'receitas/entradas'
+    : intent.flow === 'expense'
+      ? 'gastos/saídas'
+      : 'lançamentos';
+  return text([
+    `Entendi que você quer consultar ${subject}, mas o período ficou aberto.`,
+    'Para não assumir “hoje” e te dar um número errado, me diga o período.',
+    '',
+    'Exemplos:',
+    '• “hoje”',
+    '• “este mês”',
+    '• “mês passado”',
+    '• “no total / desde o início”'
+  ].join('\n'));
+}
 
-  if (route.intent === 'future_data') {
+async function handleCentralFinancialIntent(
+  context: VerticalContext,
+  intent: CashFinancialIntent
+): Promise<VerticalResult | null> {
+  console.info(`[CashIntent] company=${context.company.id} ${cashFinancialIntentAudit(intent)}`);
+
+  if (intent.needsClarification === 'period') return periodClarification(intent);
+
+  if (intent.kind === 'future_data') {
     return text('Perfeito. Pode me mandar quem está devendo, os valores e quanto tem no caixa. Vou separar saldo, retiradas e valores a receber sem registrar número solto como despesa.');
   }
 
-  if (route.intent === 'aggregate') {
-    return await handleCashFinancialSummary({ ...context, combinedText: route.canonical });
+  if (intent.kind === 'recent_batch') {
+    const result = await handleCashRecentBatchReference(context);
+    return result ?? text('Não encontrei um envio financeiro confirmado recente para usar como base. Confirme os lançamentos primeiro e depois peça o cálculo do último envio.');
   }
 
-  if (route.intent === 'balance' || route.intent === 'projection') {
-    return await handleCashLedgerDeterministic({ ...context, combinedText: route.canonical });
+  if (intent.kind === 'aggregate') {
+    // O executor recebe uma frase canônica gerada pelo objeto tipado; a frase original
+    // não é reinterpretada por outro parser financeiro.
+    return await handleCashFinancialSummary({ ...context, combinedText: intent.canonical });
   }
+
+  if (intent.kind === 'balance' || intent.kind === 'projection') {
+    return await handleCashLedgerDeterministic({ ...context, combinedText: intent.canonical });
+  }
+
+  if (intent.kind === 'query') {
+    const result = await cashQuery.handle(context.company.id, intent.canonical);
+    if (result) await rememberCashQueryContext(context.company.id, context.message.phone, intent.canonical);
+    return result;
+  }
+
+  if (intent.kind === 'history') {
+    return await cashConversationHandler.handle({ ...context, combinedText: 'histórico' });
+  }
+
+  if (intent.kind === 'transaction' && intent.transaction) {
+    // A transação já foi extraída pelo interpretador central. Nenhum outro parser
+    // decide novamente se é receita/despesa antes da confirmação do usuário.
+    return await stageCashRegistration(context, [intent.transaction], context.combinedText);
+  }
+
+  return null;
+}
+
+export async function handleCashDeterministicLanguage(context: VerticalContext): Promise<VerticalResult | null> {
+  const central = interpretCashFinancialIntent(context.combinedText);
+  if (central) {
+    const result = await handleCentralFinancialIntent(context, central);
+    if (result) return result;
+  }
+
+  const route = classifyCashDeterministicLanguage(context.combinedText);
+  if (!route) return null;
 
   if (route.intent === 'schedule') {
     return await handleCashScheduleDeterministic({ ...context, combinedText: route.canonical });
-  }
-
-  if (route.intent === 'query') {
-    const result = await cashQuery.handle(context.company.id, route.canonical);
-    if (result) await rememberCashQueryContext(context.company.id, context.message.phone, route.canonical);
-    return result;
   }
 
   if (route.intent === 'history' || route.intent === 'undo') {
