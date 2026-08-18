@@ -11,6 +11,11 @@ import {
 } from './financial-intent.js';
 import { handleCashFinancialSummary } from './financial-summary.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
+import {
+  expandCashFinancialIntentFollowup,
+  getCashFinancialIntentContext,
+  rememberCashFinancialIntentContext
+} from './intent-context.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
 import { matchCashNaturalLanguageExpandedExample } from './natural-language-corpus-expanded.js';
@@ -197,34 +202,49 @@ async function handleCentralFinancialIntent(
 }
 
 export async function handleCashDeterministicLanguage(context: VerticalContext): Promise<VerticalResult | null> {
-  const central = interpretCashFinancialIntent(context.combinedText);
-  if (central) {
-    const result = await handleCentralFinancialIntent(context, central);
-    if (result) return result;
+  const previous = await getCashFinancialIntentContext(context.company.id, context.message.phone);
+  const expanded = previous
+    ? expandCashFinancialIntentFollowup(previous, context.combinedText)
+    : null;
+  const effectiveContext = expanded
+    ? { ...context, combinedText: expanded }
+    : context;
+
+  if (expanded) {
+    console.info(`[CashIntent] context-followup company=${context.company.id} expanded=${JSON.stringify(expanded)}`);
   }
 
-  const route = classifyCashDeterministicLanguage(context.combinedText);
+  const central = interpretCashFinancialIntent(effectiveContext.combinedText);
+  if (central) {
+    const result = await handleCentralFinancialIntent(effectiveContext, central);
+    if (result) {
+      await rememberCashFinancialIntentContext(context.company.id, context.message.phone, central);
+      return result;
+    }
+  }
+
+  const route = classifyCashDeterministicLanguage(effectiveContext.combinedText);
   if (!route) return null;
 
   if (route.intent === 'schedule') {
-    return await handleCashScheduleDeterministic({ ...context, combinedText: route.canonical });
+    return await handleCashScheduleDeterministic({ ...effectiveContext, combinedText: route.canonical });
   }
 
   if (route.intent === 'history' || route.intent === 'undo') {
-    return await cashConversationHandler.handle({ ...context, combinedText: route.canonical });
+    return await cashConversationHandler.handle({ ...effectiveContext, combinedText: route.canonical });
   }
 
   if (route.intent === 'help') {
-    const section = cashHelpSection(context.combinedText) ?? 'menu';
+    const section = cashHelpSection(effectiveContext.combinedText) ?? 'menu';
     return text(cashHelpMessage(section));
   }
 
   if (route.intent === 'plans' || route.intent === 'trial' || route.intent === 'categories') {
-    return await cashBroadHandler.handle({ ...context, combinedText: route.canonical });
+    return await cashBroadHandler.handle({ ...effectiveContext, combinedText: route.canonical });
   }
 
   if (route.intent === 'pocket') {
-    return await handleCashPocketCommand({ ...context, combinedText: route.canonical });
+    return await handleCashPocketCommand({ ...effectiveContext, combinedText: route.canonical });
   }
 
   return null;
