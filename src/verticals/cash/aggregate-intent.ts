@@ -29,7 +29,7 @@ function allTimeCue(value: string): boolean {
 }
 
 function aggregateCue(value: string): boolean {
-  return /\b(?:soma|some|somar|somando|calculo|calcula|calcule|calcular|total|totaliza|totalizar|totalizando|valor total|valor acumulado|acumulado|balanco|fechamento|quanto deu|quanto ficou|quanto foi|quanto ja|ao todo|no total|resumo)\b/.test(value);
+  return /\b(?:soma|some|somar|somando|calculo|calcula|calcule|calcular|total|totaliza|totalize|totalizar|totalizando|valor total|valor acumulado|acumulado|balanco|fechamento|quanto deu|quanto ficou|quanto foi|quanto ja|ao todo|no total|resumo)\b/.test(value);
 }
 
 function incomeCue(value: string): boolean {
@@ -45,7 +45,7 @@ function recordCue(value: string): boolean {
 }
 
 function requestCue(value: string): boolean {
-  return /\b(?:quanto|qual|quero saber|me diz|me diga|me fala|mostra|mostre|manda|mande|passa|passe|traz|traga|calculo|calcula|calcule|calcular|soma|some|somar|totaliza|totalizar|resumo|balanco|fechamento)\b/.test(value);
+  return /\b(?:quanto|qual|quero saber|me diz|me diga|me fala|mostra|mostre|manda|mande|passa|passe|traz|traga|calculo|calcula|calcule|calcular|soma|some|somar|totaliza|totalize|totalizar|resumo|balanco|fechamento)\b/.test(value);
 }
 
 function hasMoney(value: string): boolean {
@@ -128,7 +128,8 @@ export function hasCashExplicitAggregatePeriod(input: string): boolean {
  * - limite histórico explícito (“desde o início”, “até agora”) = histórico inteiro;
  * - sinais fortes de totalidade (“total geral”, “de tudo”, “todos os lançamentos”) = histórico inteiro;
  * - soma de “lançamentos/registros/movimentações” sem período = histórico inteiro;
- * - sem período e sem sinal histórico = hoje, mantendo a convenção atual do Cash.
+ * - sem período e sem sinal histórico = hoje, mantendo compatibilidade deste parser;
+ *   o interpretador central converte esse caso em período indefinido e pede esclarecimento;
  * - consultas com loja/categoria/faixa de valor ficam no motor de filtros, não neste resumo.
  */
 export function parseCashAggregateIntent(input: string): CashAggregateIntent | null {
@@ -169,6 +170,7 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
   const historical = historicalBoundaryCue(value)
     || allTimeCue(value)
     || (records && aggregate)
+    || (income && expense && aggregate && /\b(?:tudo|todos|todas|geral|acumulad\w*)\b/.test(value))
     || (income && expense && /\bquanto\b/.test(value) && /\b(?:ja|tudo|geral|acumulad\w*)\b/.test(value));
 
   if (historical) return { flow, scope: 'all_time', periodCanonical: null };
