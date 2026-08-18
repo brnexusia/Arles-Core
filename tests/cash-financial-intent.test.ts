@@ -46,6 +46,21 @@ describe('Arles Cash — interpretador financeiro central', () => {
   });
 
   it.each([
+    'quanto gastei no cofrinho Cartão?',
+    'qual o total do cofrinho Viagem?',
+    'saldo dos cofrinhos',
+    'me mostra o extrato do cofrinho Casa',
+    'resumo do mês',
+    'fechamento semanal',
+    'relatório mensal',
+    'relatório da semana passada',
+    'como foi a semana',
+    'como foi o mês'
+  ])('respeita fronteira de domínios especializados: %s', input => {
+    expect(interpretCashFinancialIntent(input)).toBeNull();
+  });
+
+  it.each([
     ['quanto gastei no último mês?', 'period'],
     ['quanto recebi na última semana?', 'period'],
     ['gastos dos últimos 30 dias', 'period']
