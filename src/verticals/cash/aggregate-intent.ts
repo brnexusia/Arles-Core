@@ -142,9 +142,11 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
   const records = recordCue(value);
   const aggregate = aggregateCue(value);
   const asksHowMuch = /\bquanto\b/.test(value) && (income || expense || records);
+  const genericSummary = /\b(?:balanco|resumo|fechamento)\b/.test(value)
+    || (aggregate && /\btudo\b/.test(value));
 
   if (!aggregate && !asksHowMuch) return null;
-  if (!income && !expense && !records) return null;
+  if (!income && !expense && !records && !genericSummary) return null;
 
   // Filtros específicos devem continuar no mecanismo de consulta detalhada.
   if (hasSpecificFilter(value)) return null;
