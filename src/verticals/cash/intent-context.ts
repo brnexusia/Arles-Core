@@ -75,6 +75,11 @@ export async function getCashFinancialIntentContext(
   }
 }
 
+export async function clearCashFinancialIntentContext(companyId: string, phone: string): Promise<void> {
+  const redis = await redisClient();
+  await redis.del(key(companyId, phone));
+}
+
 function allTimeCanonical(flow: CashFinancialIntent['flow']): string {
   if (flow === 'income') return 'total geral de todas as receitas';
   if (flow === 'expense') return 'total geral de todas as despesas';
@@ -144,11 +149,6 @@ function switchedCanonical(previous: CashFinancialIntentContext, flow: 'income' 
   return `${base} ${period}?`.replace(/\s+/g, ' ').trim();
 }
 
-/**
- * Expande apenas continuações curtas e inequívocas. A expansão trabalha sobre o
- * objeto tipado + a frase CANÔNICA gerada pelo Core, nunca sobre uma interpretação
- * livre da mensagem anterior. Assim filtros como loja/categoria sobrevivem a “e ontem?”.
- */
 export function expandCashFinancialIntentFollowup(
   previous: CashFinancialIntentContext,
   current: string
