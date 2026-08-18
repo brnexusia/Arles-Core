@@ -9,7 +9,7 @@ import {
   interpretCashFinancialIntent,
   type CashFinancialIntent
 } from './financial-intent.js';
-import { handleCashFinancialSummary } from './financial-summary.js';
+import { executeCashFinancialSummary } from './financial-summary.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import {
   clearCashFinancialIntentContext,
@@ -25,7 +25,7 @@ import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-co
 import { matchCashNaturalLanguageDoubledExample } from './natural-language-corpus-doubled.js';
 import { executeCashProjection } from './projection-executor.js';
 import { cashQuery } from './query.js';
-import { handleCashRecentBatchReference } from './recent-batch.js';
+import { executeCashRecentBatchReference } from './recent-batch.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 
 export type CashDeterministicLanguageIntent =
@@ -168,12 +168,13 @@ async function handleCentralFinancialIntent(
   }
 
   if (intent.kind === 'recent_batch') {
-    const result = await handleCashRecentBatchReference(context);
+    const recentIntent = intent.operation === 'sum' ? 'aggregate' : 'summary';
+    const result = await executeCashRecentBatchReference(context, recentIntent);
     return result ?? text('Não encontrei um envio financeiro confirmado recente para usar como base. Confirme os lançamentos primeiro e depois peça o cálculo do último envio.');
   }
 
-  if (intent.kind === 'aggregate') {
-    return await handleCashFinancialSummary({ ...context, combinedText: intent.canonical });
+  if (intent.kind === 'aggregate' && intent.aggregate) {
+    return await executeCashFinancialSummary(context, intent.aggregate);
   }
 
   if (intent.kind === 'balance') {
@@ -185,6 +186,8 @@ async function handleCentralFinancialIntent(
   }
 
   if (intent.kind === 'query') {
+    // A consulta é executada a partir da frase canônica gerada pelo IR tipado,
+    // nunca a partir da frase original potencialmente ambígua.
     const result = await cashQuery.handle(context.company.id, intent.canonical);
     if (result) await rememberCashQueryContext(context.company.id, context.message.phone, intent.canonical);
     return result;
