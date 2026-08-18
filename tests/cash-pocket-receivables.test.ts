@@ -53,7 +53,7 @@ describe('Cash cofre/cofrinho e valores a receber', () => {
     expect(parseCashPocketReceivableIntent('falta cobrar 180 de João no cofrinho Vendas')).toEqual({
       kind: 'create',
       amount: 180,
-      debtor: 'João no cofrinho Vendas'
+      debtor: 'João'
     });
   });
 
