@@ -18,6 +18,11 @@ import {
   rememberCashQueryContext,
   rememberCashRecentRecordReference
 } from './conversation-state.js';
+import {
+  clearCashFinancialIntentContext,
+  rememberCashFinancialIntentContext
+} from './intent-context.js';
+import { interpretCashFinancialIntent } from './financial-intent.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { cashQuery } from './query.js';
 
@@ -160,8 +165,8 @@ function editHelp(pending: PendingCashRegistration, index: number | null): Verti
   ].join('\n'));
 }
 
-// Nenhum lançamento novo é persistido aqui. Este passo apenas guarda o resumo
-// temporariamente no Redis para o usuário revisar antes de qualquer INSERT.
+// Todo novo lançamento inicia um novo estado conversacional. A invalidação aqui é
+// central e cobre parser novo, lote, corpus legado e qualquer rota futura que use stage.
 export async function stageCashRegistration(
   context: VerticalContext,
   transactions: CashTransactionInput[],
@@ -169,6 +174,8 @@ export async function stageCashRegistration(
 ): Promise<VerticalResult> {
   const prepared = await prepareCashPocketTransactions(context.company.id, sourceMessage, transactions);
   if (prepared.error) return text(prepared.error);
+
+  await clearCashFinancialIntentContext(context.company.id, context.message.phone);
 
   const pending: PendingCashRegistration = {
     sourceMessageId: context.message.messageId || `cash:${Date.now()}`,
@@ -190,11 +197,23 @@ export async function stageCashRegistration(
 }
 
 async function deferredResult(context: VerticalContext, query: string): Promise<VerticalResult | null> {
-  const ledger = await handleCashLedgerDeterministic({ ...context, combinedText: query });
-  if (ledger) return ledger;
+  const typedIntent = interpretCashFinancialIntent(query);
+  if (typedIntent?.needsClarification === 'period') {
+    await rememberCashFinancialIntentContext(context.company.id, context.message.phone, typedIntent);
+    return text('Entendi a consulta, mas falta o período. Me diga “hoje”, “este mês”, “mês passado” ou “no total”.');
+  }
 
-  const result = await cashQuery.handle(context.company.id, query);
-  if (result) await rememberCashQueryContext(context.company.id, context.message.phone, query);
+  const ledger = await handleCashLedgerDeterministic({ ...context, combinedText: query });
+  if (ledger) {
+    if (typedIntent) await rememberCashFinancialIntentContext(context.company.id, context.message.phone, typedIntent);
+    return ledger;
+  }
+
+  const result = await cashQuery.handle(context.company.id, typedIntent?.canonical ?? query);
+  if (result) {
+    await rememberCashQueryContext(context.company.id, context.message.phone, typedIntent?.canonical ?? query);
+    if (typedIntent) await rememberCashFinancialIntentContext(context.company.id, context.message.phone, typedIntent);
+  }
   return result;
 }
 
