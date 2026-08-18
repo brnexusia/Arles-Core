@@ -9,7 +9,9 @@ import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { handleCashPocketContextCommand } from './pocket-context.js';
+import { normalizeCashPocketLanguage } from './pocket-language.js';
 import { handleCashPocketOrganization } from './pocket-organization.js';
+import { handleCashPocketReceivable } from './pocket-receivables.js';
 import { handleCashPocketTransfer } from './pocket-transfer.js';
 import { cashReports } from './reports.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
@@ -230,10 +232,19 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
+    // Cofre, caixinha, envelope, potinho e erros comuns de digitação passam a usar a
+    // mesma gramática interna de cofrinho antes de qualquer roteamento financeiro.
+    context.combinedText = normalizeCashPocketLanguage(context.combinedText);
+
     // Nova barreira central: corrige linguagem quebrada, usa contexto curto com segurança,
     // separa lançamento + consulta e bloqueia referências destrutivas ambíguas.
     const conversationSafety = await handleCashConversationSafety(context);
     if (conversationSafety) return conversationSafety;
+
+    // “Falta cobrar / tenho a receber / me deve” é estado financeiro, não receita real.
+    // Mantemos a pendência ligada ao cofrinho até o dinheiro efetivamente entrar.
+    const pocketReceivable = await handleCashPocketReceivable(context);
+    if (pocketReceivable) return pocketReceivable;
 
     // Agenda/previsão vem antes da movimentação imediata de cofrinhos. Isso garante que
     // “todo dia 10 gasto 300 no cofrinho Cartão” continue sendo previsão.
