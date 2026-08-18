@@ -10,6 +10,7 @@ import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { handleCashPocketContextCommand } from './pocket-context.js';
 import { handleCashPocketOrganization } from './pocket-organization.js';
+import { handleCashPocketTransfer } from './pocket-transfer.js';
 import { cashReports } from './reports.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
@@ -234,10 +235,15 @@ export class CashAccessHandler implements VerticalHandler {
     const conversationSafety = await handleCashConversationSafety(context);
     if (conversationSafety) return conversationSafety;
 
-    // Agenda/previsão vem antes de cofrinhos e parser financeiro. Isso garante que
-    // “todo dia 10 gasto 300 no cofrinho Cartão” seja previsão, não gasto imediato.
+    // Agenda/previsão vem antes da movimentação imediata de cofrinhos. Isso garante que
+    // “todo dia 10 gasto 300 no cofrinho Cartão” continue sendo previsão.
     const scheduled = await handleCashScheduleDeterministic(context);
     if (scheduled) return scheduled;
+
+    // Guardar/retirar dinheiro de cofrinho é uma alocação interna: muda o disponível
+    // fora dos cofrinhos, mas não cria receita/despesa falsa nem altera o saldo total.
+    const pocketTransfer = await handleCashPocketTransfer(context);
+    if (pocketTransfer) return pocketTransfer;
 
     // Pedidos naturais de organização como “registre os gastos deste mês no cofrinho X”
     // precisam acontecer antes do parser genérico de cofrinhos e de consultas.
