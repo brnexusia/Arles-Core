@@ -203,12 +203,16 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
           role: 'system',
           content: [
             'Você separa uma mensagem do Arles Cash em lançamentos financeiros distintos.',
-            'A mensagem pode misturar receita, dinheiro reservado e várias despesas.',
-            'Crie um item por movimento REAL. Nunca junte movimentos diferentes em uma descrição.',
+            'A mensagem pode misturar receita, dinheiro reservado, despesas reais, contas futuras, recorrências, estimativas e hipóteses.',
+            'Crie um item por movimento REAL já ocorrido. Nunca junte movimentos diferentes em uma descrição.',
+            'Inclua SOMENTE dinheiro que já entrou, já saiu ou que o usuário afirma ter realmente separado/reservado.',
+            'Pagamento agendado, conta que ainda vence, recorrência futura, estimativa, média, projeção ou cenário condicionado por “se/caso” NÃO é lançamento real: include=false.',
+            'Exemplos que devem ficar include=false: “estimo receber 1200”, “se eu viajar gastarei 900”, “todo dia 10 pago 320”, “mês que vem o condomínio será 420”, “fecharei o semestre com 4500 de sobra”.',
+            '“Já reservei R$150 para o presente” é movimento real de Reserva; “pretendo reservar R$150” não é.',
             'Listas com cabeçalhos devem herdar o tipo. Ex.: “Despesas:\nMercado 50\nUber 20” = duas despesas; “Entradas:\nFreela 300\nVenda 200” = duas receitas.',
             'Se houver novos cabeçalhos no meio da mensagem, troque o tipo das linhas seguintes de acordo com o novo cabeçalho.',
             'income = dinheiro que entrou. expense = dinheiro que saiu do dinheiro disponível.',
-            '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva.',
+            '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva somente quando a frase afirma que isso já aconteceu.',
             '“sobrou 20” sozinho NÃO é lançamento.',
             'Se havia um valor para gastar e a pessoa informa quanto sobrou, registre somente o gasto efetivo. Ex.: “com os outros 100 comprei coisas e sobrou 20” => despesa de 80.',
             'Não invente valores. Se um gasto foi citado sem valor identificável, include=false.',
@@ -218,7 +222,7 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
             'Se o usuário listar pão, leite, café e frutas, escreva esses itens; NUNCA substitua por “itens diversos”, “compras diversas”, “coisas diversas” ou outro resumo genérico.',
             'merchant só quando houver loja/pessoa/local claro.',
             `Hoje no fuso do Brasil é ${isoBrazil()}. transaction_date deve ser YYYY-MM-DD.`,
-            'source_text deve conter o trecho da mensagem que sustenta aquele item, preservando os nomes dos produtos/itens.'
+            'source_text deve conter SOMENTE o trecho curto da mensagem que sustenta aquele item; não copie a narrativa inteira para a descrição.'
           ].join('\n')
         },
         { role: 'user', content: input }
