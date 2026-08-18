@@ -22,6 +22,7 @@ import { matchCashNaturalLanguageExpandedExample } from './natural-language-corp
 import { matchCashNaturalLanguageColloquialExample } from './natural-language-corpus-colloquial.js';
 import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-corpus-quadrupled.js';
 import { matchCashNaturalLanguageDoubledExample } from './natural-language-corpus-doubled.js';
+import { executeCashProjection } from './projection-executor.js';
 import { cashQuery } from './query.js';
 import { handleCashRecentBatchReference } from './recent-batch.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
@@ -75,19 +76,12 @@ function scheduleCanonical(input: string, value: string): string | null {
 }
 
 function mapCentralIntent(intent: CashFinancialIntent): CashDeterministicLanguageRoute {
-  // O classificador público é usado por suítes legadas que distinguem "query" de
-  // "aggregate" apenas pelo escopo. Em runtime, o executor central usa o objeto
-  // tipado diretamente; esta compatibilidade não muda a nova arquitetura.
   if (intent.kind === 'aggregate' && intent.scope !== 'all_time') {
     return { intent: 'query', canonical: intent.canonical };
   }
   return { intent: intent.kind, canonical: intent.canonical };
 }
 
-/**
- * Classificador público mantido por compatibilidade com testes/corpus.
- * A fonte de verdade para semântica financeira agora é financial-intent.ts.
- */
 export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
   const central = interpretCashFinancialIntent(input);
   if (central) return mapCentralIntent(central);
@@ -180,8 +174,12 @@ async function handleCentralFinancialIntent(
     return await handleCashFinancialSummary({ ...context, combinedText: intent.canonical });
   }
 
-  if (intent.kind === 'balance' || intent.kind === 'projection') {
-    return await handleCashLedgerDeterministic({ ...context, combinedText: intent.canonical });
+  if (intent.kind === 'balance') {
+    return await handleCashLedgerDeterministic({ ...context, combinedText: 'saldo' });
+  }
+
+  if (intent.kind === 'projection' && intent.projection) {
+    return await executeCashProjection(context, intent.projection);
   }
 
   if (intent.kind === 'query') {
