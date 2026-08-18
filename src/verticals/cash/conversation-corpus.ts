@@ -58,6 +58,24 @@ function hasMoney(value: string): boolean {
   return /(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/.test(value);
 }
 
+function moneyTokenCount(input: string): number {
+  return (String(input ?? '').match(/(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/gi) ?? []).length;
+}
+
+export function isCashMixedFinancialNarrative(input: string): boolean {
+  const value = normalizeCashCorpusText(input);
+  if (String(input ?? '').trim().length < 220 || moneyTokenCount(input) < 4) return false;
+
+  const factualMovement = /\b(paguei|recebi|gastei|comprei|abasteci|reservei|separei|guardei|saquei|vendi|entrou|depositaram)\b/.test(value);
+  if (!factualMovement) return false;
+
+  const futureOrEstimate = /\b(agend\w*|amanha|depois de amanha|proxim\w*|mes que vem|semana que vem|todo dia|toda semana|todo mes|mensalmente|semanalmente|prevejo|previst\w*|projec\w*|estim\w*|vence\w*|vencimento|a partir do proximo|a partir do próximo)\b/.test(value);
+  const conditional = /\b(se|caso)\b/.test(value)
+    && /\b(decid\w*|opt\w*|consegu\w*|precis\w*|mantiv\w*|fizer\w*|fa[cç]\w*|vend\w*|gast\w*|receb\w*|viaj\w*|cort\w*)\b/.test(value);
+
+  return futureOrEstimate || conditional;
+}
+
 function looksBatch(input: string): boolean {
   const value = normalizeCashCorpusText(input);
   const amounts = input.match(/(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/gi) ?? [];
@@ -89,6 +107,14 @@ export function classifyCashCorpus(input: string): CashCorpusRoute {
   }
   if (/^(ok|okay|certo|beleza|blz|entendi|show|perfeito|valeu|obrigado|obrigada|massa|top|fechou|tranquilo|ta bom|tá bom|show de bola)$/.test(value)) {
     return { intent: 'acknowledgement', confidence: 'high' };
+  }
+
+  // Narrativas longas podem misturar fatos já ocorridos, contas futuras, recorrências,
+  // estimativas e cenários condicionais na mesma mensagem. Elas nunca podem ser
+  // reduzidas a uma única previsão usando um dos valores do texto. O roteamento em
+  // lote dá prioridade ao extrator que separa somente os movimentos reais.
+  if (isCashMixedFinancialNarrative(input)) {
+    return { intent: 'batch_transaction', confidence: 'high', canonical: input };
   }
 
   if (/\b(se|caso|e se|simula|simular|calcula|calcular)\b/.test(value)
