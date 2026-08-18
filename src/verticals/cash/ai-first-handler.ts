@@ -40,7 +40,8 @@ const SemanticSchema = z.object({
     'acknowledgement',
     'unknown'
   ]),
-  rewritten_text: z.string().nullable()
+  rewritten_text: z.string().nullable(),
+  clarification: z.string().nullable()
 });
 
 type SemanticIntent = z.infer<typeof SemanticSchema>;
@@ -117,7 +118,10 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
             'categories: categorias.',
             'schedule: somente agenda dos relatórios automáticos do produto; NÃO use para previsão financeira.',
             'acknowledgement: resposta social curta.',
-            'unknown: fora das funções ou inseguro.',
+            'unknown: somente quando realmente não houver informação suficiente para escolher uma rota com segurança.',
+            'rewritten_text: preencha quando uma rota conhecida puder ser reescrita de forma mais clara para o Core. Não invente valores, datas, nomes ou fatos.',
+            'clarification: use SOMENTE quando intent=unknown. Faça uma única pergunta curta e específica que ajude a descobrir a intenção; nunca devolva um guia genérico.',
+            'Exemplo: se a mensagem for apenas “Vendas” e não houver contexto suficiente, clarification pode ser “Você quer usar o cofrinho Vendas, ver o saldo dele ou criar um com esse nome?”.',
             'CRÍTICO: “tenho saldo de 10, se eu gastar 5,67 quanto fica?” = projection, nunca transaction.',
             'CRÍTICO: “todo dia 10 gasto 300 no cartão” = forecast_schedule, nunca transaction.',
             'CRÍTICO: “quanto vou ter no fim do mês?” = forecast_query.',
@@ -130,7 +134,9 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
       ],
       text: { format: zodTextFormat(SemanticSchema, 'cash_semantic_intent') }
     });
-    return response.output_parsed ?? null;
+    const parsed = response.output_parsed ?? null;
+    if (parsed) console.info(`[CashAI] fallback semântico resolvido intent=${parsed.intent}`);
+    return parsed;
   } catch (error) {
     console.error('[CashAiFirstHandler] falha na camada semântica:', error);
     return null;
@@ -193,7 +199,12 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     // Só depois de todas as rotas determinísticas acima a IA é chamada.
     const understood = await semanticRoute(context);
-    if (!understood || understood.intent === 'unknown') return await cashBroadHandler.handle(context);
+    if (!understood) return await cashBroadHandler.handle(context);
+    if (understood.intent === 'unknown') {
+      const clarification = understood.clarification?.trim();
+      if (clarification) return text(clarification);
+      return await cashBroadHandler.handle(context);
+    }
 
     if (understood.intent === 'transaction') {
       if (isCashProtectedNonTransaction(context.combinedText)) {
@@ -227,14 +238,14 @@ export class CashAiFirstHandler implements VerticalHandler {
       const rewritten = understood.rewritten_text?.trim() || context.combinedText;
       const result = await handleCashPocketCommand({ ...context, combinedText: rewritten });
       if (result) return result;
-      return text('Entendi que você está falando de um cofrinho. Pode dizer, por exemplo, “criar cofrinho Emprego”, “meus cofrinhos” ou “saldo do cofrinho Emprego”.');
+      return text(understood.clarification?.trim() || 'Entendi que você está falando de um cofrinho. Me diga o que quer fazer com ele: criar, ver saldo, listar movimentos ou usar em um registro.');
     }
 
     if (understood.intent === 'forecast_schedule' || understood.intent === 'forecast_query') {
       const rewritten = understood.rewritten_text?.trim() || context.combinedText;
       const result = await handleCashConversationCorpus({ ...context, combinedText: rewritten });
       if (result) return result;
-      return text('Entendi que você está falando de uma previsão financeira. Tente manter valor e data/recorrência, por exemplo: “todo dia 10 pago 300 do cartão” ou “quanto vou ter no fim do mês?”.');
+      return text('Entendi que você está falando de uma previsão financeira. Me diga o valor e a data/recorrência que devo considerar.');
     }
 
     if (understood.intent === 'edit' || understood.intent === 'delete') {
