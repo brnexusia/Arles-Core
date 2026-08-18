@@ -68,24 +68,42 @@ describe('Arles Cash — interpretador financeiro central', () => {
     });
   });
 
-  it('nunca reduz ganhos + gastos para apenas receita', () => {
-    const verbs = ['calcule', 'some', 'totalize', 'me diga o total de', 'faça o balanço de'];
-    const incomes = ['o que ganhei', 'o que recebi', 'as receitas', 'as entradas', 'o que entrou'];
-    const expenses = ['o que gastei', 'o que paguei', 'as despesas', 'as saídas', 'o que saiu'];
+  it('preserva a semântica em mais de 1.500 combinações, não frases cadastradas', () => {
+    const verbs = [
+      'calcule', 'some', 'soma', 'totalize',
+      'calcule o total de', 'me diga o total de', 'me mostra o total de', 'faça o balanço de'
+    ];
+    const incomes = [
+      'o que ganhei', 'o que recebi', 'as receitas', 'as entradas',
+      'o que entrou', 'meus ganhos', 'meus recebimentos', 'minhas vendas'
+    ];
+    const expenses = [
+      'o que gastei', 'o que paguei', 'as despesas', 'as saídas',
+      'o que saiu', 'meus gastos', 'minhas compras', 'meus pagamentos'
+    ];
+    const forms = [
+      (income: string, expense: string) => `tudo ${income} e tudo ${expense}`,
+      (income: string, expense: string) => `tudo ${expense} e tudo ${income}`,
+      (income: string, expense: string) => `todos os lançamentos: ${income} e ${expense}`
+    ];
 
     let checked = 0;
     for (const verb of verbs) {
       for (const income of incomes) {
         for (const expense of expenses) {
-          const intent = interpretCashFinancialIntent(`${verb} tudo ${income} e tudo ${expense}`);
-          expect(intent?.kind, `${verb} ${income} ${expense}`).toBe('aggregate');
-          expect(intent?.flow, `${verb} ${income} ${expense}`).toBe('both');
-          expect(intent?.scope, `${verb} ${income} ${expense}`).toBe('all_time');
-          checked += 1;
+          for (const form of forms) {
+            const input = `${verb} ${form(income, expense)}`;
+            const intent = interpretCashFinancialIntent(input);
+            expect(intent?.kind, input).toBe('aggregate');
+            expect(intent?.flow, input).toBe('both');
+            expect(intent?.scope, input).toBe('all_time');
+            expect(intent?.needsClarification, input).toBeNull();
+            checked += 1;
+          }
         }
       }
     }
-    expect(checked).toBe(125);
+    expect(checked).toBe(1536);
   });
 
   it.each([
