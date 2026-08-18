@@ -127,8 +127,6 @@ function resolveWindow(intent: CashAggregateIntent): SummaryWindow {
   const date = parseBrazilDate(period, now.year);
   if (date) return { from: date, to: date, label: period };
 
-  // A gramática nunca deve ampliar silenciosamente o período. Se surgir uma forma
-  // ainda não resolvida, mantém a convenção segura de hoje.
   const today = isoBrazil();
   return { from: today, to: today, label: 'hoje' };
 }
@@ -191,14 +189,18 @@ function formatSummary(intent: CashAggregateIntent, row: SummaryRow, window: Sum
   ].join('\n');
 }
 
-/**
- * Resumo financeiro 100% determinístico: não chama modelo e não cria lançamento.
- */
-export async function handleCashFinancialSummary(context: VerticalContext): Promise<VerticalResult | null> {
-  const intent = parseCashAggregateIntent(context.combinedText);
-  if (!intent) return null;
-
+/** Executa um intent já tipado, sem reinterpretar a frase original. */
+export async function executeCashFinancialSummary(
+  context: VerticalContext,
+  intent: CashAggregateIntent
+): Promise<VerticalResult> {
   const window = resolveWindow(intent);
   const summary = await readSummary(context.company.id, window);
   return text(formatSummary(intent, summary, window));
+}
+
+/** Compatibilidade para chamadores legados baseados em texto. */
+export async function handleCashFinancialSummary(context: VerticalContext): Promise<VerticalResult | null> {
+  const intent = parseCashAggregateIntent(context.combinedText);
+  return intent ? await executeCashFinancialSummary(context, intent) : null;
 }
