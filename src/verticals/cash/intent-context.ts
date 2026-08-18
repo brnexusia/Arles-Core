@@ -41,9 +41,6 @@ export async function rememberCashFinancialIntentContext(
   phone: string,
   intent: CashFinancialIntent
 ): Promise<void> {
-  // Lançamento ainda aguardando "sim" e aviso de dados futuros não viram contexto.
-  // Já uma consulta aguardando período DEVE ser lembrada: assim uma resposta curta
-  // como "este mês" completa exatamente a intenção que acabou de ser perguntada.
   if (intent.kind === 'transaction' || intent.kind === 'future_data') return;
 
   const snapshot: CashFinancialIntentContext = {
@@ -101,9 +98,56 @@ function followupPeriod(value: string): string | null {
   return null;
 }
 
+function stripKnownPeriod(input: string): string {
+  return String(input ?? '')
+    .replace(/\b(?:hoje|ontem|anteontem)\b/gi, ' ')
+    .replace(/\b(?:esta|essa|nesta|nessa|desta|dessa|ultima|última|passada|atual)\s+semana\b|\bsemana\s+(?:passada|atual)\b/gi, ' ')
+    .replace(/\b(?:este|esse|neste|nesse|deste|desse|ultimo|último|passado|atual)\s+m[eê]s\b|\bm[eê]s\s+(?:passado|atual)\b/gi, ' ')
+    .replace(/\b(?:este|esse|neste|nesse|deste|desse|ultimo|último|passado|atual)\s+ano\b|\bano\s+(?:passado|atual)\b/gi, ' ')
+    .replace(/\bultim(?:os|as)\s+\d{1,3}\s+dias?\b/gi, ' ')
+    .replace(/\b(?:em\s+)?(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+20\d{2})?\b/gi, ' ')
+    .replace(/[?!.]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function canonicalWithPeriod(previous: CashFinancialIntentContext, period: string): string {
+  if (previous.scope === 'all_time') return periodCanonical(previous.flow, period);
+  const base = stripKnownPeriod(previous.canonical);
+  if (!base || /^total geral\b/i.test(base)) return periodCanonical(previous.flow, period);
+  return `${base} ${period}?`.replace(/\s+/g, ' ').trim();
+}
+
+function switchedCanonical(previous: CashFinancialIntentContext, flow: 'income' | 'expense'): string | null {
+  if (previous.scope === 'all_time') return allTimeCanonical(flow);
+  const period = previous.periodCanonical;
+  if (!period) return null;
+
+  if (previous.kind !== 'query') return periodCanonical(flow, period);
+
+  let base = stripKnownPeriod(previous.canonical);
+  const original = base;
+  if (flow === 'income') {
+    base = base
+      .replace(/^quanto gastei\b/i, 'quanto recebi')
+      .replace(/^mostra meus gastos\b/i, 'mostra minhas receitas')
+      .replace(/^mostra meus registros\b/i, 'mostra minhas receitas')
+      .replace(/^quanto entrou e quanto saiu\b/i, 'quanto recebi');
+  } else {
+    base = base
+      .replace(/^quanto recebi\b/i, 'quanto gastei')
+      .replace(/^mostra minhas receitas\b/i, 'mostra meus gastos')
+      .replace(/^mostra meus registros\b/i, 'mostra meus gastos')
+      .replace(/^quanto entrou e quanto saiu\b/i, 'quanto gastei');
+  }
+  if (base === original) return periodCanonical(flow, period);
+  return `${base} ${period}?`.replace(/\s+/g, ' ').trim();
+}
+
 /**
- * Expande apenas continuações curtas e inequívocas. Nada aqui inventa valor, período
- * ou entidade: a informação vem do contexto tipado anterior + do novo modificador.
+ * Expande apenas continuações curtas e inequívocas. A expansão trabalha sobre o
+ * objeto tipado + a frase CANÔNICA gerada pelo Core, nunca sobre uma interpretação
+ * livre da mensagem anterior. Assim filtros como loja/categoria sobrevivem a “e ontem?”.
  */
 export function expandCashFinancialIntentFollowup(
   previous: CashFinancialIntentContext,
@@ -114,7 +158,7 @@ export function expandCashFinancialIntentFollowup(
   if (!['aggregate', 'query'].includes(previous.kind)) return null;
 
   const period = followupPeriod(value);
-  if (period) return periodCanonical(previous.flow, period);
+  if (period) return canonicalWithPeriod(previous, period);
 
   const clean = value.replace(/^e\s+/, '').trim();
   if (/^(?:no total|ao todo|geral|desde o inicio|desde sempre|tudo|tudo isso)$/.test(clean)) {
@@ -122,15 +166,11 @@ export function expandCashFinancialIntentFollowup(
   }
 
   if (/^(?:so|somente|apenas)?\s*(?:entradas?|receitas?|ganhos?|recebimentos?)$/.test(clean)) {
-    if (previous.scope === 'all_time') return allTimeCanonical('income');
-    if (previous.periodCanonical) return periodCanonical('income', previous.periodCanonical);
-    return null;
+    return switchedCanonical(previous, 'income');
   }
 
   if (/^(?:so|somente|apenas)?\s*(?:saidas?|despesas?|gastos?|compras?)$/.test(clean)) {
-    if (previous.scope === 'all_time') return allTimeCanonical('expense');
-    if (previous.periodCanonical) return periodCanonical('expense', previous.periodCanonical);
-    return null;
+    return switchedCanonical(previous, 'expense');
   }
 
   return null;
