@@ -127,6 +127,7 @@ export function hasCashExplicitAggregatePeriod(input: string): boolean {
  * - período citado sempre vence: “total deste mês” = este mês;
  * - limite histórico explícito (“desde o início”, “até agora”) = histórico inteiro;
  * - sinais fortes de totalidade (“total geral”, “de tudo”, “todos os lançamentos”) = histórico inteiro;
+ * - soma de “lançamentos/registros/movimentações” sem período = histórico inteiro;
  * - sem período e sem sinal histórico = hoje, mantendo a convenção atual do Cash.
  * - consultas com loja/categoria/faixa de valor ficam no motor de filtros, não neste resumo.
  */
@@ -170,6 +171,7 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
 
   const historical = historicalBoundaryCue(value)
     || allTimeCue(value)
+    || (records && aggregate)
     || (income && expense && /\bquanto\b/.test(value) && /\b(?:ja|tudo|geral|acumulad\w*)\b/.test(value));
 
   if (historical) return { flow, scope: 'all_time', periodCanonical: null };
