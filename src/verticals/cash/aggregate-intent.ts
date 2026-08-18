@@ -9,6 +9,7 @@ function normalize(value: string): string {
 }
 
 const MONTHS = 'janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro';
+const MONTH_SET = new Set(MONTHS.split('|'));
 
 export type CashAggregateFlow = 'income' | 'expense' | 'both';
 export type CashAggregateScope = 'all_time' | 'period';
@@ -60,6 +61,26 @@ function looksLikeProjection(value: string): boolean {
     && /\b(?:gast\w*|pag\w*|compr\w*|receb\w*|ganh\w*|entr\w*|sai\w*|saldo|sobr\w*|fic\w*)\b/.test(value);
 }
 
+function hasSpecificFilter(value: string): boolean {
+  if (/\b(?:maior|menor|mais caro|mais cara|mais barato|mais barata|acima de|abaixo de|mais de|menos de|entre)\b/.test(value)) return true;
+  if (/\b(?:alimentacao|transporte|saude|moradia|educacao|pessoal|reserva)\b/.test(value)) return true;
+
+  const generic = new Set([
+    'hoje', 'ontem', 'anteontem', 'mes', 'semana', 'ano', 'dia', 'dias',
+    'total', 'geral', 'tudo', 'todos', 'todas', 'que', 'o', 'a', 'valor', 'dinheiro',
+    'gasto', 'gastos', 'despesa', 'despesas', 'receita', 'receitas', 'entrada', 'entradas',
+    'saida', 'saidas', 'lancamento', 'lancamentos', 'registro', 'registros', 'movimentacao', 'movimentacoes'
+  ]);
+
+  const matches = value.matchAll(/\b(?:na|no|em|com|de|da|do|pela|pelo)\s+([a-z0-9][a-z0-9_-]*)/g);
+  for (const match of matches) {
+    const token = match[1];
+    if (!token || generic.has(token) || MONTH_SET.has(token) || /^20\d{2}$/.test(token)) continue;
+    return true;
+  }
+  return false;
+}
+
 function periodCanonical(value: string): string | null {
   if (/\banteontem\b/.test(value)) return 'anteontem';
   if (/\bontem\b/.test(value)) return 'ontem';
@@ -107,6 +128,7 @@ export function hasCashExplicitAggregatePeriod(input: string): boolean {
  * - limite histórico explícito (“desde o início”, “até agora”) = histórico inteiro;
  * - sinais fortes de totalidade (“total geral”, “de tudo”, “todos os lançamentos”) = histórico inteiro;
  * - sem período e sem sinal histórico = hoje, mantendo a convenção atual do Cash.
+ * - consultas com loja/categoria/faixa de valor ficam no motor de filtros, não neste resumo.
  */
 export function parseCashAggregateIntent(input: string): CashAggregateIntent | null {
   const value = normalize(input);
@@ -123,6 +145,9 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
 
   if (!aggregate && !asksHowMuch) return null;
   if (!income && !expense && !records) return null;
+
+  // Filtros específicos devem continuar no mecanismo de consulta detalhada.
+  if (hasSpecificFilter(value)) return null;
 
   // Uma frase factual com valor não deve virar consulta só porque contém “total”.
   // Ex.: “gastei 50 no total” continua sendo lançamento.
