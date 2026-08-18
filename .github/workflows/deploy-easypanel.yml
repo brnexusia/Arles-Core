@@ -11,9 +11,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  validate-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgres://test:test@127.0.0.1:5432/test
+      REDIS_URL: redis://127.0.0.1:6379
+      EVOLUTION_BASE_URL: https://evolution.invalid
+      EVOLUTION_API_KEY: test-key
+      NODE_ENV: test
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Validate Cash deterministic semantics
+        run: >-
+          npm test --
+          tests/cash-financial-intent.test.ts
+          tests/cash-intent-context.test.ts
+          tests/cash-all-time-aggregate-grammar.test.ts
+          tests/cash-recent-batch-reference.test.ts
+          tests/cash-screenshot-regressions.test.ts
+
       - name: Trigger Easypanel deployment
         env:
           EASYPANEL_DEPLOY_URL: ${{ secrets.EASYPANEL_DEPLOY_URL }}
