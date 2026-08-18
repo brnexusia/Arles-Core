@@ -27,10 +27,7 @@ function cleanPhone(value: string): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
 
-/**
- * Compatibilidade pública para testes e módulos antigos. A classificação não possui
- * mais gramática própria: financial-intent.ts é a única fonte de verdade semântica.
- */
+/** Compatibilidade pública. A fonte de verdade semântica é financial-intent.ts. */
 export function classifyCashRecentBatchReference(input: string): CashRecentBatchReferenceIntent {
   const intent = interpretCashFinancialIntent(input);
   if (intent?.kind !== 'recent_batch') return null;
@@ -97,10 +94,11 @@ function rowLabel(row: RecentBatchRow, index: number): string {
   return `${index + 1}. ${icon} ${brl(Number(row.amount))} — ${description}`;
 }
 
-export async function handleCashRecentBatchReference(context: VerticalContext): Promise<VerticalResult | null> {
-  const intent = classifyCashRecentBatchReference(context.combinedText);
-  if (!intent) return null;
-
+/** Executa referência de lote já classificada, sem reclassificar a mensagem. */
+export async function executeCashRecentBatchReference(
+  context: VerticalContext,
+  intent: Exclude<CashRecentBatchReferenceIntent, null>
+): Promise<VerticalResult | null> {
   const rows = await latestConfirmedBatch(context.company.id, context.message.phone);
   if (!rows.length) return null;
 
@@ -120,4 +118,10 @@ export async function handleCashRecentBatchReference(context: VerticalContext): 
 
   lines.push('', 'Esse cálculo usa somente os lançamentos do seu envio confirmado mais recente, sem misturar com outros registros.');
   return text(lines.join('\n'));
+}
+
+/** Compatibilidade para chamadores legados baseados em texto. */
+export async function handleCashRecentBatchReference(context: VerticalContext): Promise<VerticalResult | null> {
+  const intent = classifyCashRecentBatchReference(context.combinedText);
+  return intent ? await executeCashRecentBatchReference(context, intent) : null;
 }
