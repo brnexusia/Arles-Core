@@ -1,5 +1,5 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
-import { parseCashAggregateIntent } from './aggregate-intent.js';
+import { parseCashAggregateIntent, type CashAggregateIntent } from './aggregate-intent.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
 import { cashConversationHandler } from './conversation.js';
@@ -79,6 +79,13 @@ function queryPeriod(value: string): string {
   return 'hoje';
 }
 
+function aggregatePeriodCanonical(intent: CashAggregateIntent): string {
+  const period = intent.periodCanonical || 'hoje';
+  if (intent.flow === 'income') return `quanto recebi ${period}?`;
+  if (intent.flow === 'expense') return `quanto gastei ${period}?`;
+  return `quanto entrou e quanto saiu ${period}?`;
+}
+
 function firstMoney(value: string): string | null {
   const match = value.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/);
   return match?.[1] ?? null;
@@ -153,8 +160,10 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'pocket', canonical: input };
   }
 
-  if (parseCashAggregateIntent(input)) {
-    return { intent: 'aggregate', canonical: input };
+  const aggregate = parseCashAggregateIntent(input);
+  if (aggregate) {
+    if (aggregate.scope === 'all_time') return { intent: 'aggregate', canonical: input };
+    return { intent: 'query', canonical: aggregatePeriodCanonical(aggregate) };
   }
 
   if (directBalance(value)) return { intent: 'balance', canonical: 'saldo' };
