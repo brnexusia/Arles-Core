@@ -41,6 +41,7 @@ jobs:
           npm test --
           tests/cash-financial-intent.test.ts
           tests/cash-intent-context.test.ts
+          tests/cash-intent-execution-contract.test.ts
           tests/cash-projection-intent.test.ts
           tests/cash-all-time-aggregate-grammar.test.ts
           tests/cash-recent-batch-reference.test.ts
