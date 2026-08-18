@@ -49,6 +49,7 @@ jobs:
           tests/cash-mixed-financial-narrative.test.ts
           tests/cash-pocket-transfer.test.ts
           tests/cash-pocket-receivables.test.ts
+          tests/cash-pocket-closing.test.ts
 
       - name: Trigger Easypanel deployment
         env:
