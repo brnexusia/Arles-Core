@@ -1,5 +1,6 @@
 import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
+import { interpretCashFinancialIntent } from './financial-intent.js';
 
 export type CashRecentBatchReferenceIntent = 'summary' | 'aggregate' | null;
 
@@ -18,16 +19,6 @@ function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
 }
 
-function normalize(value: string): string {
-  return String(value ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/[!?.,;:]+/g, ' ')
-    .replace(/\s+/g, ' ');
-}
-
 function brl(value: number): string {
   return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -36,35 +27,14 @@ function cleanPhone(value: string): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
 
-function hasRecentBatchReference(value: string): boolean {
-  if (/\b(?:ultimo|ultima|ultimos|ultimas)\s+(?:mes|semana|ano|dia|dias)\b/.test(value)) return false;
-
-  return /\b(?:ultimo|ultima|mais recente)\s+(?:envio|mensagem|lote|dados?|informacoes?|lancamento|registro)\b/.test(value)
-    || /\b(?:nesse|neste|desse|deste)\s+ultimo\s+(?:envio|lote|lancamento|registro)\b/.test(value)
-    || /\bmais recente\s+que\s+(?:eu\s+)?(?:mandei|enviei|passei|informei)\b/.test(value)
-    || /\b(?:o que|isso que|dados que|informacoes que)\s+(?:eu\s+)?acabei\s+de\s+(?:mandar|enviar|passar|informar)\b/.test(value)
-    || /\b(?:ultimo|ultima)\s+coisa\s+que\s+(?:eu\s+)?(?:mandei|enviei|passei)\b/.test(value);
-}
-
+/**
+ * Compatibilidade pública para testes e módulos antigos. A classificação não possui
+ * mais gramática própria: financial-intent.ts é a única fonte de verdade semântica.
+ */
 export function classifyCashRecentBatchReference(input: string): CashRecentBatchReferenceIntent {
-  const value = normalize(input);
-  if (!value || !hasRecentBatchReference(value)) return null;
-
-  if (/\b(?:apaga|apagar|exclui|excluir|remove|remover|deleta|deletar|edita|editar|corrige|corrigir|altera|alterar|muda|mudar)\b/.test(value)) {
-    return null;
-  }
-
-  const income = /\b(?:ganhei|ganho|ganhos|recebi|receitas?|entradas?|entrou|vendi|vendas?|faturei|faturamento)\b/.test(value);
-  const expense = /\b(?:gastei|gasto|gastos|despesas?|saidas?|saiu|paguei|pagamentos?|comprei|compras?)\b/.test(value);
-  const calculation = /\b(?:calculo|calcula|calcule|calcular|soma|some|somar|total|totaliza|quanto|balanco|resumo|resultado)\b/.test(value);
-
-  if (calculation || income || expense) return 'aggregate';
-
-  if (/\b(?:com base|baseado|considera|considere|usa|use|quero|mostra|mostre|manda|mande|traz|traga)\b/.test(value)) {
-    return 'summary';
-  }
-
-  return null;
+  const intent = interpretCashFinancialIntent(input);
+  if (intent?.kind !== 'recent_batch') return null;
+  return intent.operation === 'sum' ? 'aggregate' : 'summary';
 }
 
 export function summarizeCashRecentBatch(rows: Array<Pick<RecentBatchRow, 'type' | 'amount'>>): {
