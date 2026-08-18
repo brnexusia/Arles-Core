@@ -36,6 +36,11 @@ export async function getCashQueryContext(companyId: string, phone: string): Pro
   return await redis.get(queryKey(companyId, phone));
 }
 
+export async function clearCashQueryContext(companyId: string, phone: string): Promise<void> {
+  const redis = await redisClient();
+  await redis.del(queryKey(companyId, phone));
+}
+
 export async function rememberCashRecentRecordReference(companyId: string, phone: string): Promise<void> {
   const redis = await redisClient();
   await redis.set(recentRecordKey(companyId, phone), '1', 'EX', RECENT_RECORD_TTL_SECONDS);
