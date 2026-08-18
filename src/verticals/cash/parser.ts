@@ -30,7 +30,7 @@ const ParsedTransactionSchema = z.object({
 
 const EXPENSE = /\b(gastei|gasto|paguei|comprei|despesa|saiu|debitei|custou|pague|guardei|reservei|separei|retirei|retirou|retiraram|saquei|sacou)\b/i;
 const INCOME = /\b(recebi|recebimento|ganhei|entrou|vendi|receita|renda|faturei|depositaram|pix recebido|sal[aá]rio|freela|freelance)\b/i;
-const MOVEMENT = /\b(gastei|gasto|paguei|comprei|guardei|reservei|separei|retirei|retirou|retiraram|saquei|sacou|recebi|ganhei|entrou|vendi|faturei|depositaram)\b/gi;
+const SHORTHAND_EXPENSE = /\b(cart[aã]o|boleto|conta|mensalidade|parcela|prestacao|prestação|taxa|pedagio|pedágio)\b/i;
 
 const WEEKDAY_INDEX: Record<string, number> = {
   domingo: 0,
@@ -72,8 +72,11 @@ function transactionType(text: string, amount: number | null): CashTransactionTy
   if (EXPENSE.test(text)) return 'expense';
   if (!amount) return null;
 
-  const usefulText = text.replace(/[\d.,R$\s]/gi, '');
-  return usefulText.length >= 2 ? 'expense' : null;
+  // Forma curta sem verbo só vira gasto quando existe um sinal financeiro conhecido.
+  // Isso mantém “mercado 50”, “farmácia 45” e “cartão 120” determinísticos sem
+  // transformar frases como “tenho 50 reais” em despesa acidental.
+  if (categoryFrom(text, 'expense') !== 'Outros' || SHORTHAND_EXPENSE.test(text)) return 'expense';
+  return null;
 }
 
 function weekdayDateFrom(text: string): string | null {
@@ -197,15 +200,21 @@ export function isStrongDeterministicCashTransaction(
 ): boolean {
   if (!parsed || isCashProtectedNonTransaction(text)) return false;
   const clean = text.trim();
-  if (!clean || clean.length > 140 || /\n/.test(clean)) return false;
+  if (!clean || clean.length > 320 || /\n/.test(clean)) return false;
 
   if (amountMatches(clean).length !== 1) return false;
-  const movements = clean.match(MOVEMENT) ?? [];
-  if (movements.length > 1) return false;
 
-  const explicitMovement = EXPENSE.test(clean) || INCOME.test(clean);
-  const compactKnownCategory = clean.split(/\s+/).length <= 8 && parsed.category !== 'Outros';
-  return explicitMovement && parsed.category !== 'Outros' || compactKnownCategory;
+  const hasExpense = EXPENSE.test(clean);
+  const hasIncome = INCOME.test(clean);
+  if (hasExpense && hasIncome) return false;
+
+  // Um verbo factual explícito + um único valor já é suficiente, mesmo que a loja
+  // caia em “Outros”. A categoria não deve ser motivo para gastar IA.
+  if (hasExpense || hasIncome) return true;
+
+  // Formas telegráficas sem verbo só passam quando o contexto financeiro é conhecido.
+  return clean.split(/\s+/).length <= 8
+    && (parsed.category !== 'Outros' || SHORTHAND_EXPENSE.test(clean));
 }
 
 export class CashParser {
