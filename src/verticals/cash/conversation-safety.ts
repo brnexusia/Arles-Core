@@ -6,6 +6,11 @@ import {
   rememberCashDeferredQuery,
   rememberCashQueryContext
 } from './conversation-state.js';
+import {
+  clearCashFinancialIntentContext,
+  expandCashFinancialIntentFollowup,
+  getCashFinancialIntentContext
+} from './intent-context.js';
 import { deterministicCashParse } from './parser.js';
 import { deterministicCashQuery } from './query.js';
 
@@ -137,6 +142,15 @@ function acknowledgement(input: string): boolean {
   return /^(certo|ok|okay|blz|beleza|entendi|show|perfeito|ta bom|tranquilo|valeu|obrigado|obrigada|massa|top)$/.test(value);
 }
 
+function startsSpecializedContext(input: string): boolean {
+  const value = normalize(input);
+  return /\b(?:cofrinh|caixinh|envelope|potinh|pote)\w*/.test(value)
+    || /\b(?:relatorio|resumo|fechamento)\w*\b.*\b(?:semana|semanal|mes|mensal)\w*/.test(value)
+    || /\b(?:agend|program|previs)\w*|\b(?:todo dia|toda semana|todo mes|mensalmente|semanalmente|diariamente)\b/.test(value)
+    || /\b(?:ajuda|menu|planos?|trial|categorias?)\b/.test(value)
+    || /\b(?:em caixa|falta cobrar|a receber)\b/.test(value);
+}
+
 function appendSafetyNote(result: VerticalResult, note: string): VerticalResult {
   return { ...result, actions: [...result.actions, { type: 'text', text: note }] };
 }
@@ -171,10 +185,33 @@ export async function handleCashConversationSafety(context: VerticalContext): Pr
     }
   }
 
-  const previousQuery = await getCashQueryContext(companyId, phone);
-  if (previousQuery) {
-    const expanded = expandCashQueryContext(previousQuery, context.combinedText);
-    if (expanded) context.combinedText = expanded;
+  // O contexto tipado é a fonte primária. Domínios especializados iniciam um novo
+  // assunto e invalidam o contexto financeiro anterior para impedir "e ontem?" de
+  // ressuscitar uma consulta velha depois de um cofrinho/relatório/agendamento.
+  const boundary = startsSpecializedContext(context.combinedText);
+  if (boundary) await clearCashFinancialIntentContext(companyId, phone);
+
+  let expandedByTypedContext = false;
+  if (!boundary) {
+    const previousIntent = await getCashFinancialIntentContext(companyId, phone);
+    const typedExpanded = previousIntent
+      ? expandCashFinancialIntentFollowup(previousIntent, context.combinedText)
+      : null;
+    if (typedExpanded) {
+      context.combinedText = typedExpanded;
+      expandedByTypedContext = true;
+      console.info(`[CashIntent] safety-context-followup company=${companyId} expanded=${JSON.stringify(typedExpanded)}`);
+    }
+  }
+
+  // Compatibilidade temporária: filtros livres antigos ainda podem usar a string da
+  // última query, mas somente quando o contexto tipado não resolveu a continuação.
+  if (!expandedByTypedContext) {
+    const previousQuery = await getCashQueryContext(companyId, phone);
+    if (previousQuery) {
+      const expanded = expandCashQueryContext(previousQuery, context.combinedText);
+      if (expanded) context.combinedText = expanded;
+    }
   }
   if (deterministicCashQuery(context.combinedText)) await rememberCashQueryContext(companyId, phone, context.combinedText);
 
