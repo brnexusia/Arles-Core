@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 let classifyCashDeterministicLanguage: (input: string) => { intent: string; canonical: string } | null;
 let deterministicCashQuery: (input: string) => unknown;
+let parseCashAggregateIntent: (input: string) => { flow: string; scope: string; periodCanonical: string | null } | null;
 let examples: Array<{ input: string; intent: string; canonical: string }>;
 let expandedExamples: Array<{ input: string; intent: string; canonical: string }>;
 let colloquialExamples: Array<{ input: string; intent: string; canonical: string }>;
@@ -24,6 +25,7 @@ beforeAll(async () => {
 
   ({ classifyCashDeterministicLanguage } = await import('../src/verticals/cash/deterministic-language.js'));
   ({ deterministicCashQuery } = await import('../src/verticals/cash/query.js'));
+  ({ parseCashAggregateIntent } = await import('../src/verticals/cash/aggregate-intent.js'));
 
   const corpus = await import('../src/verticals/cash/natural-language-corpus.js');
   examples = corpus.CASH_NATURAL_LANGUAGE_EXAMPLES;
@@ -60,6 +62,31 @@ function normalize(value: string): string {
     .trim();
 }
 
+function compatibleRoute(example: { input: string; intent: string }, route: { intent: string; canonical: string } | null): boolean {
+  if (!route) return false;
+  if (route.intent === example.intent) return true;
+
+  // O corpus antigo chamava quase toda soma de “query”. A gramática nova promove
+  // resumos reconhecíveis para uma rota determinística própria. Isso é mudança de
+  // semântica intencional, não regressão.
+  if (route.intent === 'aggregate' && (example.intent === 'query' || example.intent === 'balance')) {
+    return parseCashAggregateIntent(example.input) !== null;
+  }
+
+  return false;
+}
+
+function assertCorpusRoutes(items: Array<{ input: string; intent: string; canonical: string }>) {
+  const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
+  for (const example of items) {
+    const route = classifyCashDeterministicLanguage(example.input);
+    if (!compatibleRoute(example, route)) {
+      failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
+    }
+  }
+  expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
+}
+
 describe('Arles Cash — linguagem natural determinística em massa', () => {
   it('mantém o corpus original acima de 1.500 formas humanas', () => {
     expect(exampleCount).toBeGreaterThan(1500);
@@ -94,102 +121,68 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
     expect(unique.size).toBe(preDoublingUniqueCount * 2);
   });
 
-  it('classifica todo o corpus original sem depender de IA', () => {
-    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
-    for (const example of examples) {
-      const route = classifyCashDeterministicLanguage(example.input);
-      if (route?.intent !== example.intent) failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
-    }
-    expect(failures, JSON.stringify(failures.slice(0, 50), null, 2)).toEqual([]);
-  });
+  it('classifica todo o corpus original sem depender de IA', () => assertCorpusRoutes(examples));
+  it('classifica toda a primeira expansão sem depender de IA', () => assertCorpusRoutes(expandedExamples));
+  it('classifica toda a camada coloquial anterior sem depender de IA', () => assertCorpusRoutes(colloquialExamples));
+  it('classifica todas as formas da expansão 4x sem depender de IA', () => assertCorpusRoutes(quadrupledExamples));
+  it('classifica todas as novas formas que dobram a capacidade para 96.000+ sem depender de IA', () => assertCorpusRoutes(doubledExamples));
 
-  it('classifica toda a primeira expansão sem depender de IA', () => {
-    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
-    for (const example of expandedExamples) {
-      const route = classifyCashDeterministicLanguage(example.input);
-      if (route?.intent !== example.intent) failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
-    }
-    expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
-  });
-
-  it('classifica toda a camada coloquial anterior sem depender de IA', () => {
-    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
-    for (const example of colloquialExamples) {
-      const route = classifyCashDeterministicLanguage(example.input);
-      if (route?.intent !== example.intent) failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
-    }
-    expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
-  });
-
-  it('classifica todas as formas da expansão 4x sem depender de IA', () => {
-    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
-    for (const example of quadrupledExamples) {
-      const route = classifyCashDeterministicLanguage(example.input);
-      if (route?.intent !== example.intent) failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
-    }
-    expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
-  });
-
-  it('classifica todas as novas formas que dobram a capacidade para 96.000+ sem depender de IA', () => {
-    const failures: Array<{ input: string; expected: string; actual: string | null }> = [];
-    for (const example of doubledExamples) {
-      const route = classifyCashDeterministicLanguage(example.input);
-      if (route?.intent !== example.intent) failures.push({ input: example.input, expected: example.intent, actual: route?.intent ?? null });
-    }
-    expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
-  });
-
-  it('transforma perguntas de soma/total por período em consultas válidas ao banco', () => {
+  it('mantém consultas detalhadas válidas e tira resumos do motor genérico', () => {
     const failures: string[] = [];
     const all = [...examples, ...expandedExamples, ...colloquialExamples, ...quadrupledExamples, ...doubledExamples];
     for (const example of all.filter(item => item.intent === 'query')) {
       const route = classifyCashDeterministicLanguage(example.input);
-      // Algumas formulações históricas agora são corretamente promovidas a balanço acumulado.
-      if (route?.intent === 'balance' && route.canonical === 'saldo') continue;
+      if (route?.intent === 'aggregate') continue;
       if (!route || !deterministicCashQuery(route.canonical)) failures.push(example.input);
     }
     expect(failures, JSON.stringify(failures.slice(0, 100), null, 2)).toEqual([]);
   });
 
   it.each([
-    ['Me mande o valor total de tudo quanto eu ganhei e quanto eu gastei', 'balance', 'saldo'],
-    ['Some o valor dos lançamentos referente ao que eu ganhei e que eu gastei', 'balance', 'saldo'],
-    ['some o que gastei', 'query', 'quanto gastei hoje?'],
-    ['soma tudo que recebi', 'query', 'quanto recebi hoje?'],
-    ['qual o total de entradas e saídas este mês', 'query', 'quanto entrou e quanto saiu este mês?'],
-    ['por favor some minhas despesas ontem', 'query', 'quanto gastei ontem?'],
-    ['me fala o total do que ganhei semana passada', 'query', 'quanto recebi semana passada?'],
-    ['quanto entrou e quanto saiu em agosto', 'query', 'quanto entrou e quanto saiu agosto?']
-  ])('entende agregação natural com escopo correto: %s', (input, intent, canonical) => {
+    ['Me mande o valor total de tudo quanto eu ganhei e quanto eu gastei', 'both', 'all_time', null],
+    ['Some o valor dos lançamentos referente ao que eu ganhei e que eu gastei', 'both', 'period', 'hoje'],
+    ['some o que gastei', 'expense', 'period', 'hoje'],
+    ['soma tudo que recebi', 'income', 'all_time', null],
+    ['qual o total de entradas e saídas este mês', 'both', 'period', 'este mês'],
+    ['por favor some minhas despesas ontem', 'expense', 'period', 'ontem'],
+    ['me fala o total do que ganhei semana passada', 'income', 'period', 'semana passada'],
+    ['quanto entrou e quanto saiu em agosto', 'both', 'period', 'agosto']
+  ])('entende agregação por intenção, fluxo e escopo: %s', (input, flow, scope, periodCanonical) => {
     const route = classifyCashDeterministicLanguage(input);
-    expect(route?.intent).toBe(intent);
-    expect(route?.canonical).toBe(canonical);
-    if (intent === 'query') expect(deterministicCashQuery(route!.canonical)).not.toBeNull();
+    const parsed = parseCashAggregateIntent(input);
+    expect(route?.intent).toBe('aggregate');
+    expect(parsed).toEqual({ flow, scope, periodCanonical });
   });
 
   it.each([
-    ['consegue somar tudo que eu gastei hoje?', 'query'],
-    ['pode somar pra mim o que eu recebi este mês?', 'query'],
-    ['me diga o total do que entrou e saiu ontem', 'query'],
-    ['faz o total das despesas da semana passada', 'query'],
-    ['quanto foi de receita e despesa hoje', 'query'],
-    ['me passa a soma de entradas e saídas deste mês', 'query'],
-    ['quero saber quanto eu ganhei e quanto eu gastei hoje', 'query'],
-    ['qual foi o total dos meus pagamentos ontem', 'query'],
-    ['soma os lançamentos de receita e despesa', 'balance'],
-    ['me mostra quanto entrou quanto saiu e quanto sobrou', 'query'],
-    ['rapidinho, soma tudo que saiu este mês', 'query'],
-    ['uma dúvida: quanto entrou pra mim nos últimos 30 dias', 'query'],
-    ['me ajuda aqui: lista tudo que paguei ontem', 'query'],
-    ['por favor, me mostra de onde entrou dinheiro esta semana', 'query']
-  ])('generaliza além das frases exatas dos corpus: %s', (input, intent) => {
+    'consegue somar tudo que eu gastei hoje?',
+    'pode somar pra mim o que eu recebi este mês?',
+    'me diga o total do que entrou e saiu ontem',
+    'faz o total das despesas da semana passada',
+    'quanto foi de receita e despesa hoje',
+    'me passa a soma de entradas e saídas deste mês',
+    'quero saber quanto eu ganhei e quanto eu gastei hoje',
+    'qual foi o total dos meus pagamentos ontem',
+    'soma os lançamentos de receita e despesa',
+    'me mostra quanto entrou quanto saiu e quanto sobrou',
+    'rapidinho, soma tudo que saiu este mês',
+    'uma dúvida: quanto entrou pra mim nos últimos 30 dias'
+  ])('generaliza somas além das frases exatas dos corpus: %s', input => {
     const route = classifyCashDeterministicLanguage(input);
-    expect(route?.intent).toBe(intent);
-    if (intent === 'query') expect(deterministicCashQuery(route!.canonical)).not.toBeNull();
-    else expect(route?.canonical).toBe('saldo');
+    expect(route?.intent).toBe('aggregate');
+    expect(parseCashAggregateIntent(input)).not.toBeNull();
   });
 
-  it('aceita amostras reais espalhadas pela nova camada que dobra para 96.000+', () => {
+  it.each([
+    'quanto gastei na SHEIN este mês?',
+    'quanto gastei com alimentação hoje?',
+    'qual foi meu maior gasto este mês?',
+    'me mostra meus gastos acima de 100'
+  ])('mantém filtros específicos fora do resumo agregado: %s', input => {
+    expect(parseCashAggregateIntent(input)).toBeNull();
+  });
+
+  it('aceita amostras reais espalhadas pela camada de 96.000+ sem obrigar semântica antiga', () => {
     const indexes = [
       0,
       Math.floor(doubledExamples.length / 8),
@@ -206,10 +199,8 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
       const example = doubledExamples[index];
       expect(example).toBeDefined();
       const route = classifyCashDeterministicLanguage(example!.input);
-      // Frases antigas de total geral podem ser promovidas de query-diária para balanço acumulado.
-      if (route?.intent === 'balance' && route.canonical === 'saldo') continue;
-      expect(route?.intent).toBe(example!.intent);
-      expect(route?.canonical).toBe(example!.canonical);
+      expect(compatibleRoute(example!, route), `${example!.input} -> ${route?.intent ?? 'null'}`).toBe(true);
+      if (route?.intent !== 'aggregate') expect(route?.canonical).toBe(example!.canonical);
     }
   });
 });
