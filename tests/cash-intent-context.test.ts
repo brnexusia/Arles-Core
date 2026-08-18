@@ -29,6 +29,21 @@ describe('Arles Cash — contexto financeiro tipado', () => {
     expect(expandCashFinancialIntentFollowup(previous(), input)).toBe(expected);
   });
 
+  it('completa uma consulta que estava aguardando período', () => {
+    const awaitingPeriod = previous({
+      kind: 'query',
+      operation: 'read',
+      flow: 'expense',
+      scope: 'unspecified',
+      periodCanonical: null,
+      canonical: 'quanto gastei hoje?'
+    });
+
+    expect(expandCashFinancialIntentFollowup(awaitingPeriod, 'este mês')).toBe('quanto gastei este mês?');
+    expect(expandCashFinancialIntentFollowup(awaitingPeriod, 'mês passado')).toBe('quanto gastei mês passado?');
+    expect(expandCashFinancialIntentFollowup(awaitingPeriod, 'no total')).toBe('total geral de todas as despesas');
+  });
+
   it('preserva o fluxo ao pedir total histórico depois de uma consulta', () => {
     const income = previous({ kind: 'query', flow: 'income', canonical: 'quanto recebi este mês?' });
     expect(expandCashFinancialIntentFollowup(income, 'e no total?')).toBe('total geral de todas as receitas');
