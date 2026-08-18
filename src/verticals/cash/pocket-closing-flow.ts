@@ -24,6 +24,12 @@ function normalize(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function wantsRegister(input: string): boolean {
+  const value = normalize(normalizeCashPocketLanguage(input));
+  return /\b(registr\w*|salv\w*|anot\w*|guarde\w*)\b/.test(value)
+    && /\b(informac\w*|dados?|fechamento|valores?|isso|essas)\b/.test(value);
+}
+
 function phoneKey(phone: string): string {
   return String(phone ?? '').replace(/\D/g, '');
 }
@@ -159,6 +165,7 @@ async function replayClosing(
  */
 export async function handleCashPocketClosingFlow(context: VerticalContext): Promise<VerticalResult | null> {
   if (!isCashPocketClosingMessage(context.combinedText)) return null;
+  if (!wantsRegister(context.combinedText)) return await handleCashPocketClosing(context);
 
   const requestedName = extractRequestedClosingPocketName(context.combinedText);
   if (requestedName) {
