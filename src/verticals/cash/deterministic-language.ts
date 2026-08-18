@@ -75,6 +75,12 @@ function scheduleCanonical(input: string, value: string): string | null {
 }
 
 function mapCentralIntent(intent: CashFinancialIntent): CashDeterministicLanguageRoute {
+  // O classificador público é usado por suítes legadas que distinguem "query" de
+  // "aggregate" apenas pelo escopo. Em runtime, o executor central usa o objeto
+  // tipado diretamente; esta compatibilidade não muda a nova arquitetura.
+  if (intent.kind === 'aggregate' && intent.scope !== 'all_time') {
+    return { intent: 'query', canonical: intent.canonical };
+  }
   return { intent: intent.kind, canonical: intent.canonical };
 }
 
@@ -117,8 +123,6 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'help', canonical: input };
   }
 
-  // Os corpus antigos permanecem apenas como compatibilidade para formas que ainda
-  // não fazem parte da gramática financeira central. Eles nunca vencem o interpretador.
   const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
   if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
 
@@ -173,8 +177,6 @@ async function handleCentralFinancialIntent(
   }
 
   if (intent.kind === 'aggregate') {
-    // O executor recebe uma frase canônica gerada pelo objeto tipado; a frase original
-    // não é reinterpretada por outro parser financeiro.
     return await handleCashFinancialSummary({ ...context, combinedText: intent.canonical });
   }
 
@@ -193,8 +195,6 @@ async function handleCentralFinancialIntent(
   }
 
   if (intent.kind === 'transaction' && intent.transaction) {
-    // A transação já foi extraída pelo interpretador central. Nenhum outro parser
-    // decide novamente se é receita/despesa antes da confirmação do usuário.
     return await stageCashRegistration(context, [intent.transaction], context.combinedText);
   }
 
