@@ -37,7 +37,6 @@ function cleanPhone(value: string): string {
 }
 
 function hasRecentBatchReference(value: string): boolean {
-  // Períodos como “último mês” continuam pertencendo ao motor temporal normal.
   if (/\b(?:ultimo|ultima|ultimos|ultimas)\s+(?:mes|semana|ano|dia|dias)\b/.test(value)) return false;
 
   return /\b(?:ultimo|ultima|mais recente)\s+(?:envio|mensagem|lote|dados?|informacoes?|lancamento|registro)\b/.test(value)
@@ -51,8 +50,6 @@ export function classifyCashRecentBatchReference(input: string): CashRecentBatch
   const value = normalize(input);
   if (!value || !hasRecentBatchReference(value)) return null;
 
-  // Nunca sequestra comandos destrutivos. “apaga/edita o último lançamento” segue
-  // para o fluxo seguro de gestão de registros.
   if (/\b(?:apaga|apagar|exclui|excluir|remove|remover|deleta|deletar|edita|editar|corrige|corrigir|altera|alterar|muda|mudar)\b/.test(value)) {
     return null;
   }
@@ -135,9 +132,7 @@ export async function handleCashRecentBatchReference(context: VerticalContext): 
   if (!intent) return null;
 
   const rows = await latestConfirmedBatch(context.company.id, context.message.phone);
-  if (!rows.length) {
-    return text('Não encontrei um envio financeiro confirmado recente para usar como base. Envie ou confirme os lançamentos e depois peça “calcule o último envio”.');
-  }
+  if (!rows.length) return null;
 
   const summary = summarizeCashRecentBatch(rows);
   const lines = [
