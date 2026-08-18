@@ -26,6 +26,10 @@ function key(companyId: string, phone: string): string {
   return `arles:cash:intent-context:${companyId}:${phoneKey(phone)}`;
 }
 
+function legacyQueryKey(companyId: string, phone: string): string {
+  return `arles:cash:query:${companyId}:${phoneKey(phone)}`;
+}
+
 function normalize(value: string): string {
   return String(value ?? '')
     .normalize('NFD')
@@ -77,7 +81,7 @@ export async function getCashFinancialIntentContext(
 
 export async function clearCashFinancialIntentContext(companyId: string, phone: string): Promise<void> {
   const redis = await redisClient();
-  await redis.del(key(companyId, phone));
+  await redis.del(key(companyId, phone), legacyQueryKey(companyId, phone));
 }
 
 function allTimeCanonical(flow: CashFinancialIntent['flow']): string {
