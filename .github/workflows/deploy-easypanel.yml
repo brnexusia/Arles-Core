@@ -47,6 +47,7 @@ jobs:
           tests/cash-recent-batch-reference.test.ts
           tests/cash-screenshot-regressions.test.ts
           tests/cash-mixed-financial-narrative.test.ts
+          tests/cash-pocket-transfer.test.ts
 
       - name: Trigger Easypanel deployment
         env:
