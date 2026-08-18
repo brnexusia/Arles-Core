@@ -1,6 +1,6 @@
 import type { CashAggregateIntent } from './aggregate-intent.js';
 import { parseCashAggregateIntent } from './aggregate-intent.js';
-import { deterministicCashParse } from './parser.js';
+import { deterministicCashParse, isStrongDeterministicCashTransaction } from './parser.js';
 import { deterministicCashQuery, type CashQueryFilters } from './query.js';
 import type { CashTransactionInput } from './types.js';
 
@@ -134,8 +134,6 @@ export function interpretCashFinancialIntent(input: string): CashFinancialIntent
   const value = normalize(original);
   if (!value) return null;
 
-  // Gestão destrutiva tem um fluxo próprio com confirmação/segurança. O interpretador
-  // financeiro nunca sequestra "apaga/edita o último lançamento" como leitura.
   if (destructive(value)) return null;
 
   if (futureData(value)) {
@@ -197,7 +195,7 @@ export function interpretCashFinancialIntent(input: string): CashFinancialIntent
   }
 
   const transaction = deterministicCashParse(original);
-  if (transaction) {
+  if (transaction && isStrongDeterministicCashTransaction(original, transaction)) {
     return {
       kind: 'transaction', operation: 'register', flow: transaction.type, scope: 'none', periodCanonical: transaction.transactionDate,
       reference: null, mutation: true, confidence: 'high', needsClarification: null, canonical: original, transaction
