@@ -12,6 +12,7 @@ import {
 import { handleCashFinancialSummary } from './financial-summary.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import {
+  clearCashFinancialIntentContext,
   expandCashFinancialIntentFollowup,
   getCashFinancialIntentContext,
   rememberCashFinancialIntentContext
@@ -162,6 +163,7 @@ async function handleCentralFinancialIntent(
   if (intent.needsClarification === 'period') return periodClarification(intent);
 
   if (intent.kind === 'future_data') {
+    await clearCashFinancialIntentContext(context.company.id, context.message.phone);
     return text('Perfeito. Pode me mandar quem está devendo, os valores e quanto tem no caixa. Vou separar saldo, retiradas e valores a receber sem registrar número solto como despesa.');
   }
 
@@ -193,6 +195,7 @@ async function handleCentralFinancialIntent(
   }
 
   if (intent.kind === 'transaction' && intent.transaction) {
+    await clearCashFinancialIntentContext(context.company.id, context.message.phone);
     return await stageCashRegistration(context, [intent.transaction], context.combinedText);
   }
 
