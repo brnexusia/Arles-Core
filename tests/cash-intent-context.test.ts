@@ -29,6 +29,33 @@ describe('Arles Cash — contexto financeiro tipado', () => {
     expect(expandCashFinancialIntentFollowup(previous(), input)).toBe(expected);
   });
 
+  it('preserva filtros canônicos ao trocar apenas o período', () => {
+    const filtered = previous({
+      kind: 'query',
+      operation: 'read',
+      flow: 'expense',
+      scope: 'period',
+      periodCanonical: 'este mês',
+      canonical: 'quanto gastei com shein este mês?'
+    });
+
+    expect(expandCashFinancialIntentFollowup(filtered, 'e ontem?')).toBe('quanto gastei com shein ontem?');
+    expect(expandCashFinancialIntentFollowup(filtered, 'esta semana')).toBe('quanto gastei com shein esta semana?');
+  });
+
+  it('preserva filtros ao trocar o lado financeiro', () => {
+    const filtered = previous({
+      kind: 'query',
+      operation: 'read',
+      flow: 'expense',
+      scope: 'period',
+      periodCanonical: 'este mês',
+      canonical: 'quanto gastei com cliente-x este mês?'
+    });
+
+    expect(expandCashFinancialIntentFollowup(filtered, 'só entradas')).toBe('quanto recebi com cliente-x este mês?');
+  });
+
   it('completa uma consulta que estava aguardando período', () => {
     const awaitingPeriod = previous({
       kind: 'query',
