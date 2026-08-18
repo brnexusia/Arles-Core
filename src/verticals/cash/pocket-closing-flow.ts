@@ -75,10 +75,11 @@ export function extractRequestedClosingPocketName(input: string): string | null 
   )];
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const raw = String(matches[index]?.[1] ?? '')
-      .replace(/\b(?:registre|registrar|salve|salvar|anote|anotar)\b.*$/i, '')
+      .replace(/\s+(?:para|pra)\s+(?:registrar|salvar|guardar|fechar)\b.*$/i, '')
+      .replace(/\s+e\s+(?:registre|registra|salve|salva|anote|anota)\b.*$/i, '')
       .trim();
-    const normalized = normalizeCashPocketName(raw);
-    if (!normalized) continue;
+    const normalizedName = normalizeCashPocketName(raw);
+    if (!normalizedName) continue;
     return raw.replace(/\s+/g, ' ').trim();
   }
   return null;
@@ -93,6 +94,13 @@ function replyPocketName(input: string): string | null {
     .trim();
   if (!raw || raw.split(/\s+/).length > 6 || /\d/.test(raw)) return null;
   if (/^(sim|s|nao|não|n|cancela|cancelar|ok|certo|beleza)$/i.test(raw)) return null;
+
+  // Um fechamento pendente não pode sequestrar um novo comando financeiro e tratar
+  // “saldo”, “gastei 50” ou “meus cofrinhos” como se fossem nomes de cofrinho.
+  const value = normalize(raw);
+  if (/\b(saldo|extrato|historico|relatorio|resumo|ajuda|menu|planos?|trial|categorias?|gastei|paguei|comprei|recebi|ganhei|entrou|faturei|quanto|quais|meus cofrinhos)\b/.test(value)) {
+    return null;
+  }
   return raw.slice(0, 80);
 }
 
