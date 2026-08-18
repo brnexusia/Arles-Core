@@ -9,6 +9,7 @@ describe('Arles Cash — gramática determinística de totais financeiros', () =
   it.each([
     'Me mande o valor total de tudo quanto eu ganhei e quanto eu gastei',
     'Some o valor dos lançamentos referente ao que eu ganhei e que eu gastei',
+    'Faça o cálculo com tudo o que ganhei e tudo o que gastei',
     'me mostra o total geral do que entrou e do que saiu',
     'quanto já entrou e quanto já saiu?',
     'qual o acumulado de receitas e despesas?',
