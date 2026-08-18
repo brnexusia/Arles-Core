@@ -6,6 +6,7 @@ export interface CashPocket {
   company_id: string;
   name: string;
   normalized_name: string;
+  allocation_balance: number;
   active: boolean;
   created_at?: Date | string;
 }
@@ -56,7 +57,7 @@ function cleanPocketDisplayName(value: string): string {
 function validPocketName(value: string): boolean {
   const clean = normalizeCashPocketName(value);
   if (clean.length < 2 || clean.length > 80) return false;
-  return !/^(cofrinho|meu cofrinho|novo cofrinho|saldo|extrato|lista|listar|criar|crie)$/.test(clean);
+  return !/^(cofrinho|meu cofrinho|novo cofrinho|saldo|extrato|lista|listar|criar|crie|guardar|guarda|quero guardar|quero colocar|colocar|coloca|botar|bota|separar|separa|reservar|reserva|tirar|retirar|resgatar|transferir|mover|quero tirar|quero retirar|quero resgatar|ele|ela|esse|essa|isso|aqui|ali)$/.test(clean);
 }
 
 function normalized(value: string): string {
@@ -161,7 +162,10 @@ export function parseCashPocketCreateNames(input: string): string[] {
 function extractNameAfterCofrinho(original: string): string | null {
   const match = original.match(/\bcofrinh(?:o|os)\s+(?:chamad[oa]\s+|d[oa]\s+|de\s+)?([^\n,;.!?]+)$/i);
   let name = cleanPocketDisplayName(match?.[1] ?? '');
-  name = name.replace(/\s+(?:hoje|ontem|esse mês|este mês|no mês|na semana|agora)$/i, '').trim();
+  name = name
+    .replace(/\s+(?:hoje|ontem|esse mês|este mês|no mês|na semana|agora)$/i, '')
+    .replace(/\s+(?:quero|vou|pretendo|porque|pois|quanto|como|sem incluir|sem mexer|para guardar|pra guardar)\b.*$/i, '')
+    .trim();
   return validPocketName(name) ? name : null;
 }
 
@@ -217,16 +221,16 @@ export function parseCashPocketCommand(input: string): CashPocketCommand {
 export class CashPocketService {
   async list(companyId: string): Promise<CashPocketBalance[]> {
     const result = await db.query(
-      `select p.id::text,p.company_id::text,p.name,p.normalized_name,p.active,p.created_at,
+      `select p.id::text,p.company_id::text,p.name,p.normalized_name,p.allocation_balance::float8,p.active,p.created_at,
               coalesce(sum(t.amount) filter(where t.type='income'),0)::float8 as income,
               coalesce(sum(t.amount) filter(where t.type='expense'),0)::float8 as expense,
-              (coalesce(sum(t.amount) filter(where t.type='income'),0)-
+              (p.allocation_balance + coalesce(sum(t.amount) filter(where t.type='income'),0)-
                coalesce(sum(t.amount) filter(where t.type='expense'),0))::float8 as balance,
               count(t.id)::int as count
        from cash_pockets p
        left join cash_transactions t on t.pocket_id=p.id and t.company_id=p.company_id
        where p.company_id=$1 and p.active=true
-       group by p.id,p.company_id,p.name,p.normalized_name,p.active,p.created_at
+       group by p.id,p.company_id,p.name,p.normalized_name,p.allocation_balance,p.active,p.created_at
        order by p.created_at asc,p.name asc`,
       [companyId]
     );
@@ -239,7 +243,7 @@ export class CashPocketService {
     if (!validPocketName(display)) throw new Error('CASH_POCKET_NAME_INVALID');
 
     const existing = await db.query(
-      `select id::text,company_id::text,name,normalized_name,active,created_at
+      `select id::text,company_id::text,name,normalized_name,allocation_balance::float8,active,created_at
        from cash_pockets where company_id=$1 and normalized_name=$2 limit 1`,
       [companyId, normalizedName]
     );
@@ -248,7 +252,7 @@ export class CashPocketService {
         const restored = await db.query(
           `update cash_pockets set active=true,name=$3,updated_at=now()
            where company_id=$1 and normalized_name=$2
-           returning id::text,company_id::text,name,normalized_name,active,created_at`,
+           returning id::text,company_id::text,name,normalized_name,allocation_balance::float8,active,created_at`,
           [companyId, normalizedName, display]
         );
         return { pocket: restored.rows[0] as CashPocket, created: true };
@@ -259,7 +263,7 @@ export class CashPocketService {
     const result = await db.query(
       `insert into cash_pockets(company_id,name,normalized_name)
        values($1,$2,$3)
-       returning id::text,company_id::text,name,normalized_name,active,created_at`,
+       returning id::text,company_id::text,name,normalized_name,allocation_balance::float8,active,created_at`,
       [companyId, display, normalizedName]
     );
     return { pocket: result.rows[0] as CashPocket, created: true };
@@ -269,7 +273,7 @@ export class CashPocketService {
     const normalizedName = normalizeCashPocketName(name);
     if (!normalizedName) return null;
     const result = await db.query(
-      `select id::text,company_id::text,name,normalized_name,active,created_at
+      `select id::text,company_id::text,name,normalized_name,allocation_balance::float8,active,created_at
        from cash_pockets
        where company_id=$1 and normalized_name=$2 and active=true
        limit 1`,
@@ -300,24 +304,41 @@ export class CashPocketService {
     return { explicit: true, pocket: null, requestedName: free };
   }
 
-  async balance(companyId: string, pocketId: string): Promise<{ income: number; expense: number; balance: number; count: number }> {
+  async balance(companyId: string, pocketId: string): Promise<{ income: number; expense: number; balance: number; allocation: number; count: number }> {
     const result = await db.query(
-      `select
-         coalesce(sum(amount) filter(where type='income'),0)::float8 as income,
-         coalesce(sum(amount) filter(where type='expense'),0)::float8 as expense,
-         (coalesce(sum(amount) filter(where type='income'),0)-
-          coalesce(sum(amount) filter(where type='expense'),0))::float8 as balance,
-         count(*)::int as count
-       from cash_transactions
-       where company_id=$1 and pocket_id=$2`,
+      `select p.allocation_balance::float8 as allocation,
+              coalesce(sum(t.amount) filter(where t.type='income'),0)::float8 as income,
+              coalesce(sum(t.amount) filter(where t.type='expense'),0)::float8 as expense,
+              (p.allocation_balance + coalesce(sum(t.amount) filter(where t.type='income'),0)-
+               coalesce(sum(t.amount) filter(where t.type='expense'),0))::float8 as balance,
+              count(t.id)::int as count
+       from cash_pockets p
+       left join cash_transactions t on t.pocket_id=p.id and t.company_id=p.company_id
+       where p.company_id=$1 and p.id=$2 and p.active=true
+       group by p.id,p.allocation_balance`,
       [companyId, pocketId]
     );
     return {
+      allocation: Number(result.rows[0]?.allocation ?? 0),
       income: Number(result.rows[0]?.income ?? 0),
       expense: Number(result.rows[0]?.expense ?? 0),
       balance: Number(result.rows[0]?.balance ?? 0),
       count: Number(result.rows[0]?.count ?? 0)
     };
+  }
+
+  async adjustAllocation(companyId: string, pocketId: string, delta: number): Promise<number> {
+    const amount = Math.round(Number(delta) * 100) / 100;
+    if (!Number.isFinite(amount) || amount === 0) throw new Error('CASH_POCKET_ALLOCATION_INVALID');
+    const result = await db.query(
+      `update cash_pockets
+       set allocation_balance=allocation_balance+$3,updated_at=now()
+       where company_id=$1 and id=$2 and active=true
+       returning allocation_balance::float8`,
+      [companyId, pocketId, amount]
+    );
+    if (!result.rows[0]) throw new Error('CASH_POCKET_NOT_FOUND');
+    return Number(result.rows[0].allocation_balance ?? 0);
   }
 
   async flowTotal(companyId: string, pocketId: string, type: 'income' | 'expense'): Promise<{ amount: number; count: number }> {
@@ -363,7 +384,7 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
     if (createNames.length === 1) {
       const name = created[0] ?? existing[0]!;
       return created.length
-        ? text([`🐷 Cofrinho *${name}* criado.`, '', `Para usar: “recebi 500 no cofrinho ${name}” ou “gastei 30 do cofrinho ${name}”.`].join('\n'))
+        ? text([`🐷 Cofrinho *${name}* criado.`, '', `Para usar: “guarde 500 no cofrinho ${name}”, “recebi 500 no cofrinho ${name}” ou “gastei 30 do cofrinho ${name}”.`].join('\n'))
         : text(`🐷 O cofrinho *${name}* já existe. O saldo e os lançamentos dele continuam separados.`);
     }
 
@@ -377,7 +398,7 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
       lines.push(`↩️ Já existiam (${existing.length}):`);
       lines.push(...existing.map(name => `• ${name}`));
     }
-    lines.push('', 'Agora você pode registrar entradas e saídas dizendo o nome do cofrinho.');
+    lines.push('', 'Agora você pode guardar dinheiro, registrar entradas/saídas e consultar o disponível dizendo o nome do cofrinho.');
     return text(lines.join('\n'));
   }
 
@@ -387,7 +408,7 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
   if (command.kind === 'create') {
     const result = await cashPocketService.create(context.company.id, command.name);
     return result.created
-      ? text([`🐷 Cofrinho *${result.pocket.name}* criado.`, '', `Para usar: “recebi 500 no cofrinho ${result.pocket.name}” ou “gastei 30 do cofrinho ${result.pocket.name}”.`].join('\n'))
+      ? text([`🐷 Cofrinho *${result.pocket.name}* criado.`, '', `Para usar: “guarde 500 no cofrinho ${result.pocket.name}”, “recebi 500 no cofrinho ${result.pocket.name}” ou “gastei 30 do cofrinho ${result.pocket.name}”.`].join('\n'))
       : text(`🐷 O cofrinho *${result.pocket.name}* já existe. O saldo e os lançamentos dele continuam separados.`);
   }
 
@@ -406,11 +427,12 @@ export async function handleCashPocketCommand(context: VerticalContext): Promise
     const balance = await cashPocketService.balance(context.company.id, pocket.id);
     return text([
       `🐷 *${pocket.name}*`,
-      `Disponível: *${brl(balance.balance)}*`,
-      `Entradas: ${brl(balance.income)}`,
-      `Saídas: ${brl(balance.expense)}`,
+      `Guardado/disponível no cofrinho: *${brl(balance.balance)}*`,
+      balance.allocation ? `Separado do saldo livre: ${brl(balance.allocation)}` : '',
+      `Entradas registradas: ${brl(balance.income)}`,
+      `Saídas registradas: ${brl(balance.expense)}`,
       `${balance.count} lançamento${balance.count === 1 ? '' : 's'} nesse cofrinho.`
-    ].join('\n'));
+    ].filter(Boolean).join('\n'));
   }
 
   if (command.kind === 'flow') {
