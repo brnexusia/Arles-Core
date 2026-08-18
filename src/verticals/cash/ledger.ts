@@ -27,6 +27,10 @@ function brl(value: number): string {
   return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function normalize(value: string): string {
   return String(value ?? '')
     .normalize('NFD')
@@ -199,6 +203,19 @@ export class CashLedgerService {
       count: Number(result.rows[0]?.count ?? 0)
     };
   }
+
+  async availability(companyId: string): Promise<{ total: number; pockets: number; available: number }> {
+    const [snapshot, pocketRows] = await Promise.all([
+      this.snapshot(companyId),
+      cashPocketService.list(companyId)
+    ]);
+    const pockets = round(pocketRows.reduce((sum, pocket) => sum + Number(pocket.balance), 0));
+    return {
+      total: round(snapshot.balance),
+      pockets,
+      available: round(snapshot.balance - pockets)
+    };
+  }
 }
 
 export const cashLedgerService = new CashLedgerService();
@@ -213,22 +230,33 @@ export async function handleCashLedgerDeterministic(context: VerticalContext): P
   const projection = parseCashProjection(context.combinedText);
   if (projection) {
     const pocketRef = await cashPocketService.findMentioned(context.company.id, context.combinedText);
-    if (pocketRef.explicit && !pocketRef.pocket) {
-      const name = pocketRef.requestedName || 'informado';
-      return text(`Não encontrei o cofrinho *${name}*. Mande “meus cofrinhos” para conferir os nomes.`);
+    if (pocketRef.explicit && !pocketRef.pocket && pocketRef.requestedName) {
+      return text(`Não encontrei o cofrinho *${pocketRef.requestedName}*. Mande “meus cofrinhos” para conferir os nomes.`);
     }
 
-    const snapshot = projection.explicitBase == null
-      ? await cashLedgerService.snapshot(context.company.id, pocketRef.pocket?.id ?? null)
-      : null;
-    const base = projection.explicitBase ?? snapshot?.balance ?? 0;
+    let base: number;
+    let baseLabel = 'Saldo usado';
+    if (projection.explicitBase != null) {
+      base = projection.explicitBase;
+    } else if (pocketRef.pocket) {
+      const pocketBalance = await cashPocketService.balance(context.company.id, pocketRef.pocket.id);
+      base = pocketBalance.balance;
+      baseLabel = `Saldo do cofrinho ${pocketRef.pocket.name}`;
+    } else if (/\b(disponivel|saldo livre|livre para gastar|fora dos cofrinhos|sem mexer nos cofrinhos)\b/.test(normalize(context.combinedText))) {
+      const availability = await cashLedgerService.availability(context.company.id);
+      base = availability.available;
+      baseLabel = 'Disponível fora dos cofrinhos';
+    } else {
+      base = (await cashLedgerService.snapshot(context.company.id)).balance;
+    }
+
     const result = projectionResult(base, projection);
     const operations = projection.operations.map(operation =>
       `${operation.type === 'income' ? '➕' : '➖'} ${brl(operation.amount)}`
     );
     return text([
       `🧮 *Simulação de saldo${pocketRef.pocket ? ` — ${pocketRef.pocket.name}` : ''}*`,
-      `Saldo usado: ${brl(base)}`,
+      `${baseLabel}: ${brl(base)}`,
       ...operations,
       `Saldo projetado: *${brl(result)}*`,
       '',
@@ -237,15 +265,20 @@ export async function handleCashLedgerDeterministic(context: VerticalContext): P
   }
 
   if (isCashDirectBalanceRequest(context.combinedText)) {
-    const snapshot = await cashLedgerService.snapshot(context.company.id);
+    const [snapshot, availability] = await Promise.all([
+      cashLedgerService.snapshot(context.company.id),
+      cashLedgerService.availability(context.company.id)
+    ]);
     return text([
-      '💰 *Seu saldo disponível*',
-      `Saldo: *${brl(snapshot.balance)}*`,
+      '💰 *Seu dinheiro agora*',
+      `Disponível fora dos cofrinhos: *${brl(availability.available)}*`,
+      availability.pockets !== 0 ? `Guardado nos cofrinhos: ${brl(availability.pockets)}` : '',
+      `Saldo total: ${brl(availability.total)}`,
       `Entradas acumuladas: ${brl(snapshot.income)}`,
       `Saídas acumuladas: ${brl(snapshot.expense)}`,
       '',
-      'Esse saldo considera todos os seus lançamentos, não só o mês atual.'
-    ].join('\n'));
+      'O saldo total considera todos os lançamentos. O disponível desconta o que está separado nos cofrinhos.'
+    ].filter(Boolean).join('\n'));
   }
 
   return null;
