@@ -8,6 +8,7 @@ import { handleCashDeterministicLanguage } from './deterministic-language.js';
 import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
+import { handleCashMixedNarrativeGate } from './mixed-narrative-gate.js';
 import { handleCashPocketContextCommand } from './pocket-context.js';
 import { normalizeCashPocketLanguage } from './pocket-language.js';
 import { handleCashPocketOrganization } from './pocket-organization.js';
@@ -235,6 +236,11 @@ export class CashAccessHandler implements VerticalHandler {
     // Cofre, caixinha, envelope, potinho e erros comuns de digitação passam a usar a
     // mesma gramática interna de cofrinho antes de qualquer roteamento financeiro.
     context.combinedText = normalizeCashPocketLanguage(context.combinedText);
+
+    // Narrativas financeiras longas e mistas precisam ser decompostas antes de QUALQUER
+    // scheduler/projeção. Isso impede “todo dia 10” ou “estimo” de capturar o texto inteiro.
+    const mixedNarrative = await handleCashMixedNarrativeGate(context);
+    if (mixedNarrative) return mixedNarrative;
 
     // Nova barreira central: corrige linguagem quebrada, usa contexto curto com segurança,
     // separa lançamento + consulta e bloqueia referências destrutivas ambíguas.
