@@ -24,7 +24,7 @@ import { matchCashNaturalLanguageColloquialExample } from './natural-language-co
 import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-corpus-quadrupled.js';
 import { matchCashNaturalLanguageDoubledExample } from './natural-language-corpus-doubled.js';
 import { executeCashProjection } from './projection-executor.js';
-import { cashQuery } from './query.js';
+import { executeCashQueryFilters } from './query-filter-executor.js';
 import { executeCashRecentBatchReference } from './recent-batch.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 
@@ -185,11 +185,9 @@ async function handleCentralFinancialIntent(
     return await executeCashProjection(context, intent.projection);
   }
 
-  if (intent.kind === 'query') {
-    // A consulta é executada a partir da frase canônica gerada pelo IR tipado,
-    // nunca a partir da frase original potencialmente ambígua.
-    const result = await cashQuery.handle(context.company.id, intent.canonical);
-    if (result) await rememberCashQueryContext(context.company.id, context.message.phone, intent.canonical);
+  if (intent.kind === 'query' && intent.query) {
+    const result = await executeCashQueryFilters(context.company.id, intent.query);
+    await rememberCashQueryContext(context.company.id, context.message.phone, intent.canonical);
     return result;
   }
 
