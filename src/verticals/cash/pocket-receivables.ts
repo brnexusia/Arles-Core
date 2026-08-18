@@ -46,8 +46,23 @@ function money(raw: string): number | null {
   return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
 }
 
+function stripDates(input: string): string {
+  return String(input ?? '')
+    .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ')
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ');
+}
+
 function amountFrom(input: string): number | null {
-  const matches = [...String(input ?? '').matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
+  const source = stripDates(input);
+  const contextual = source.match(
+    /\b(?:falta\s+cobrar|faltam\s+cobrar|tenho\s+que\s+cobrar|preciso\s+cobrar|a\s+receber|por\s+receber|valor\s+pendente|recebimento\s+pendente)\b[^\d]{0,30}(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i
+  );
+  if (contextual?.[1]) {
+    const amount = money(contextual[1]);
+    if (amount != null) return amount;
+  }
+
+  const matches = [...source.matchAll(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi)];
   for (const match of matches) {
     const amount = money(match[1] ?? '');
     if (amount != null) return amount;
@@ -212,6 +227,12 @@ function receivableListMessage(rows: PendingReceivable[], pocket?: CashPocket | 
 }
 
 export async function handleCashPocketReceivable(context: VerticalContext): Promise<VerticalResult | null> {
+  // Fechamentos de caixa/cofrinho são mais ricos que uma cobrança isolada e precisam
+  // ser tratados antes. Isso também impede que uma data como 31/07/2026 vire R$31.
+  const { handleCashPocketClosing } = await import('./pocket-closing.js');
+  const closing = await handleCashPocketClosing(context);
+  if (closing) return closing;
+
   const intent = parseCashPocketReceivableIntent(context.combinedText);
   if (!intent) return null;
 
