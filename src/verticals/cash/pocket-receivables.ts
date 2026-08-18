@@ -74,7 +74,7 @@ function cancelLanguage(value: string): boolean {
 function debtorFrom(input: string): string | null {
   const source = String(input ?? '');
   const patterns = [
-    /\b(?:cobrar|a receber|por receber)\s+(?:r\$\s*)?\d+(?:[.,]\d{1,2})?\s+de\s+([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ' -]{1,60})(?=$|[,.;!?])/i,
+    /\b(?:cobrar|a receber|por receber)\s+(?:r\$\s*)?\d+(?:[.,]\d{1,2})?\s+de\s+([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ' -]{0,60}?)(?=\s+(?:no|na)\s+cofrinho\b|\s+para\s+fechar\b|$|[,.;!?])/i,
     /\b([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ' -]{1,60})\s+(?:me deve|ficou devendo)\b/i
   ];
   for (const pattern of patterns) {
