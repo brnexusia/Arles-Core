@@ -1,5 +1,6 @@
 import type { CashAggregateIntent } from './aggregate-intent.js';
 import { parseCashAggregateIntent } from './aggregate-intent.js';
+import { parseCashProjection, type CashProjection } from './ledger.js';
 import { deterministicCashParse, isStrongDeterministicCashTransaction } from './parser.js';
 import { deterministicCashQuery, type CashQueryFilters } from './query.js';
 import type { CashTransactionInput } from './types.js';
@@ -31,6 +32,7 @@ export interface CashFinancialIntent {
   aggregate?: CashAggregateIntent;
   query?: CashQueryFilters;
   transaction?: CashTransactionInput;
+  projection?: CashProjection;
 }
 
 function normalize(value: string): string {
@@ -65,15 +67,9 @@ function destructive(value: string): boolean {
 }
 
 function belongsToSpecializedDomain(value: string): boolean {
-  // Cofrinhos possuem entidade, saldo e extrato próprios; nunca devem passar pelo
-  // agregador/query genérico, mesmo quando a frase contém "quanto" ou "total".
   if (/\b(?:cofrinh|caixinh|envelope|potinh|pote)\w*/.test(value)) return true;
-
-  // Relatórios têm formatação/comparativos próprios. O interpretador financeiro
-  // central não substitui "resumo/fechamento semanal ou mensal" por uma soma simples.
   if (/\b(?:relatorio|resumo|fechamento)\w*\b.*\b(?:semana|semanal|mes|mensal)\w*\b/.test(value)) return true;
   if (/^como foi (?:a )?semana$|^como foi (?:o )?mes$/.test(value)) return true;
-
   return false;
 }
 
@@ -101,11 +97,6 @@ function directHistory(value: string): boolean {
   return /^(?:(?:me )?(?:fala|mostra|mostre|lista|liste|traz|traga)\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value)
     || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value)
     || /^(?:historico|ultimos registros|ultimos lancamentos)$/.test(value);
-}
-
-function projection(value: string): boolean {
-  return /\b(?:se eu|e se|simula|simular|simulacao|so calcula|apenas calcula|sem registrar|nao registra)\b/.test(value)
-    && /\b(?:gast\w*|pag\w*|compr\w*|receb\w*|ganh\w*|entr\w*|sai\w*|saldo|sobr\w*|fic\w*)\b/.test(value);
 }
 
 function futureData(value: string): boolean {
@@ -147,7 +138,7 @@ export function interpretCashFinancialIntent(input: string): CashFinancialIntent
   const value = normalize(original);
   if (!value) return null;
 
-  if (destructive(value) || belongsToSpecializedDomain(value)) return null;
+  if (destructive(value)) return null;
 
   if (futureData(value)) {
     return {
@@ -162,6 +153,19 @@ export function interpretCashFinancialIntent(input: string): CashFinancialIntent
       reference: 'recent_batch', mutation: false, confidence: 'high', needsClarification: null, canonical: original
     };
   }
+
+  // Simulação é interpretada antes da fronteira de cofrinhos porque o ledger suporta
+  // simular dentro de um cofrinho. As operações já ficam tipadas neste objeto.
+  const parsedProjection = parseCashProjection(original);
+  if (parsedProjection) {
+    return {
+      kind: 'projection', operation: 'simulate', flow: null, scope: 'none', periodCanonical: null,
+      reference: null, mutation: false, confidence: 'high', needsClarification: null,
+      canonical: original, projection: parsedProjection
+    };
+  }
+
+  if (belongsToSpecializedDomain(value)) return null;
 
   const aggregate = parseCashAggregateIntent(original);
   if (aggregate) {
@@ -179,13 +183,6 @@ export function interpretCashFinancialIntent(input: string): CashFinancialIntent
     return {
       kind: 'balance', operation: 'read', flow: 'both', scope: 'all_time', periodCanonical: null,
       reference: null, mutation: false, confidence: 'high', needsClarification: null, canonical: 'saldo'
-    };
-  }
-
-  if (projection(value)) {
-    return {
-      kind: 'projection', operation: 'simulate', flow: null, scope: 'none', periodCanonical: null,
-      reference: null, mutation: false, confidence: 'high', needsClarification: null, canonical: original
     };
   }
 
