@@ -9,6 +9,7 @@ import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion
 import { fastCashFaq } from './fast-faq.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { handleCashMixedNarrativeGate } from './mixed-narrative-gate.js';
+import { handleCashPocketClosingFlow } from './pocket-closing-flow.js';
 import { handleCashPocketContextCommand } from './pocket-context.js';
 import { normalizeCashPocketLanguage } from './pocket-language.js';
 import { handleCashPocketOrganization } from './pocket-organization.js';
@@ -246,6 +247,11 @@ export class CashAccessHandler implements VerticalHandler {
     // separa lançamento + consulta e bloqueia referências destrutivas ambíguas.
     const conversationSafety = await handleCashConversationSafety(context);
     if (conversationSafety) return conversationSafety;
+
+    // Fechamento de caixa/cofrinho precisa resolver o destino antes do parser simples de
+    // “a receber”. Se o cofrinho não existir, a conversa fica pendente para criar/escolher.
+    const pocketClosing = await handleCashPocketClosingFlow(context);
+    if (pocketClosing) return pocketClosing;
 
     // “Falta cobrar / tenho a receber / me deve” é estado financeiro, não receita real.
     // Mantemos a pendência ligada ao cofrinho até o dinheiro efetivamente entrar.
