@@ -161,6 +161,8 @@ export function cashBatchSectionCue(input: string): BatchSection {
   const value = normalize(input);
   if (INCOME_CUE.test(value)) return 'income';
   if (EXPENSE_CUE.test(value)) return 'expense';
+  if (/^(?:meus?|minhas?|as|os)?\s*(?:entradas?|receitas?|ganhos?|recebimentos?|vendas?)\b/.test(value)) return 'income';
+  if (/^(?:meus?|minhas?|as|os)?\s*(?:despesas?|gastos?|saidas?|compras?|pagamentos?)\b/.test(value)) return 'expense';
 
   if (!cashFinancialAmountTokens(input).length) {
     if (/\b(entradas?|receitas?|ganhos?|recebimentos?|vendas?)\b/.test(value)) return 'income';
@@ -227,9 +229,31 @@ function temporalCue(input: string): string | null {
 
 function normalizeMovementTypos(input: string): string {
   return String(input)
+    .replace(/^\s*(?:e\s+)?(?:tamb[eé]m\s+)?/i, '')
     .replace(/\bgaste\b/gi, 'gastei')
-    .replace(/\bpague\s*:/gi, 'paguei:')
+    .replace(/\bpague\b/gi, 'paguei')
+    .replace(/\b(ganhei|recebi|entrou|faturei|vendi|gastei|paguei|comprei)\s*:\s*/gi, '$1 ')
     .trim();
+}
+
+/**
+ * Contexto herdado só serve para fatos. Linhas futuras, condicionais, estimadas ou
+ * contas a receber continuam fora do saldo real mesmo que estejam abaixo de "Entradas"
+ * ou "Gastos".
+ */
+export function isCashNonRealBatchSegment(input: string): boolean {
+  const value = normalize(input);
+  if (!value) return false;
+
+  if (/\b(falta cobrar|a receber|por receber|ficou devendo|esta devendo|está devendo|tenho que cobrar|preciso cobrar)\b/.test(value)) return true;
+  if (/\b(estimo|estimativa|prevejo|previsao|previsão|projecao|projeção|imagino|talvez|hipoteticamente|se eu|caso eu|se conseguir|se decidir|se optar)\b/.test(value)) return true;
+  if (/\b(?:vou|irei|pretendo|planejo)\s+(?:gastar|pagar|comprar|receber|ganhar|faturar|vender|separar|guardar)\b/.test(value)) return true;
+
+  const factual = MOVEMENT_CUE.test(value);
+  if (!factual && /\b(agendad[oa]|programad[oa]|vence|vencera|vencerá|todo dia|todos os dias|toda semana|todo mes|todo mês|mensalmente|semanalmente|anualmente|recorrente)\b/.test(value)) return true;
+  if (!factual && /\b(amanha|depois de amanha|semana que vem|mes que vem|mês que vem|ano que vem|proxima semana|próxima semana|proximo mes|próximo mês|daqui a\s+\d+)\b/.test(value) && cashFinancialAmountTokens(input).length > 0) return true;
+
+  return false;
 }
 
 export function adjustCashRemainder(segment: string, transaction: CashTransactionInput): CashTransactionInput {
@@ -269,6 +293,7 @@ export async function fallbackBatch(input: string): Promise<CashTransactionInput
 
     // "ontem eu ganhei", "minhas despesas foram" etc. podem ser cabeçalhos narrativos.
     if (explicitSection && !hasMoney) continue;
+    if (isCashNonRealBatchSegment(segment)) continue;
 
     if (/\b(sobrou|restou)\b/i.test(segment) && !/\b(comprei|gastei|gaste|paguei)\b/i.test(segment)) continue;
 
@@ -312,6 +337,7 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
             `Extraia no máximo ${MAX_BATCH_ITEMS} movimentos reais. Crie um item por movimento; nunca junte movimentos distintos numa descrição.`,
             'Inclua SOMENTE dinheiro que já entrou, já saiu ou que o usuário afirma ter realmente separado/reservado.',
             'Pagamento agendado, conta que ainda vence, recorrência futura, estimativa, média, projeção ou cenário condicionado por “se/caso” NÃO é lançamento real: include=false.',
+            'Valores a receber, “falta cobrar”, dívidas de terceiros e dinheiro apenas esperado também NÃO são receita real até o recebimento acontecer.',
             'Datas, horários, percentuais, quantidade de parcelas, meses, dias e anos NÃO são valores financeiros.',
             'Exemplos que devem ficar include=false: “estimo receber 1200”, “se eu viajar gastarei 900”, “todo dia 10 pago 320”, “mês que vem o condomínio será 420”, “fecharei o semestre com 4500 de sobra”.',
             '“Já reservei R$150 para o presente” é movimento real de Reserva; “pretendo reservar R$150” não é.',
