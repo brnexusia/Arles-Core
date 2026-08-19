@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 let cashBatchSectionCue: (input: string) => 'income' | 'expense' | null;
@@ -9,6 +11,7 @@ let fallbackBatch: (input: string) => Promise<Array<{
   description: string;
   transactionDate: string;
 }>>;
+let isCashNonRealBatchSegment: (input: string) => boolean;
 let looksLikeCashBatch: (input: string) => boolean;
 let selectCashBatchTransactions: (
   ai: Array<any>,
@@ -25,6 +28,7 @@ beforeAll(async () => {
     cashBatchSectionCue,
     cashFinancialAmountTokens,
     fallbackBatch,
+    isCashNonRealBatchSegment,
     looksLikeCashBatch,
     selectCashBatchTransactions
   } = await import('../src/verticals/cash/smart-input.js'));
@@ -50,6 +54,22 @@ describe('Cash resilient batch interpretation', () => {
     expect(cashBatchSectionCue(input)).toBe(expected);
   });
 
+  it.each([
+    'amanhã 200 de venda',
+    'mês que vem 500 de aluguel',
+    'estimo receber 1200 do freela',
+    'se eu viajar gasto 900',
+    'falta cobrar 110 da Brenda',
+    '80 a receber do cliente',
+    'todo mês 320 do notebook'
+  ])('keeps non-real money outside the factual ledger: %s', input => {
+    expect(isCashNonRealBatchSegment(input)).toBe(true);
+  });
+
+  it('does not discard a factual payment just because its description mentions a future due date', () => {
+    expect(isCashNonRealBatchSegment('paguei hoje 100 da conta que vence amanhã')).toBe(false);
+  });
+
   it('extracts all movements when a verb is stated once and values continue below it', async () => {
     const input = `Bom, eu ganhei hoje
 46,00 de um ajuste
@@ -65,6 +85,8 @@ E também gaste: 25,00 em lanches`;
     expect(rows.map(item => item.type)).toEqual([
       'income', 'income', 'income', 'income', 'expense', 'expense'
     ]);
+    expect(rows[4]!.description.toLowerCase()).not.toContain('gastei');
+    expect(rows[5]!.description.toLowerCase()).not.toContain('gaste');
   });
 
   it('supports bullets, formal headers and multiple movements on the same line', async () => {
@@ -93,6 +115,21 @@ Hoje gastei
     expect(rows[2]!.transactionDate).not.toBe(rows[0]!.transactionDate);
   });
 
+  it('filters future, conditional and receivable lines even under an inherited section', async () => {
+    const input = `Entradas:
+100 freela recebido
+amanhã 200 de outra venda
+80 a receber da Brenda
+Gastos:
+50 mercado
+se eu viajar 300 hotel
+mês que vem 400 combustível`;
+
+    const rows = await fallbackBatch(input);
+    expect(rows.map(item => item.amount)).toEqual([100, 50]);
+    expect(rows.map(item => item.type)).toEqual(['income', 'expense']);
+  });
+
   it('preserves legitimate repeated values instead of deduplicating by amount', async () => {
     const input = `Ganhos:
 50 ajuste A
@@ -112,6 +149,14 @@ Gastos:
     expect(rows).toHaveLength(15);
     expect(rows[0]!.amount).toBe(1);
     expect(rows[14]!.amount).toBe(15);
+  });
+
+  it('keeps the confirmation layer aligned with the expanded batch limit and chunks long WhatsApp previews', () => {
+    const source = readFileSync(join(process.cwd(), 'src/verticals/cash/confirmation.ts'), 'utf8');
+    expect(source).toContain('const MAX_PENDING_TRANSACTIONS = 25');
+    expect(source).toContain('prepared.transactions.slice(0, MAX_PENDING_TRANSACTIONS)');
+    expect(source).toContain('const MAX_TEXT_CHUNK = 3200');
+    expect(source).toContain('chunkedText');
   });
 
   it('prefers a complete deterministic batch over a partial AI extraction', () => {
