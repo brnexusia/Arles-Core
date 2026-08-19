@@ -3,7 +3,7 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
-import { cashParser, descriptionFrom } from './parser.js';
+import { cashParser, descriptionFrom, deterministicCashParse } from './parser.js';
 import { stageCashRegistration } from './confirmation.js';
 import type { CashTransactionInput } from './types.js';
 import { formatBrazilDate, isoBrazil } from './time.js';
@@ -20,6 +20,12 @@ const CATEGORIES = [
   'Outros'
 ] as const;
 
+const MAX_BATCH_ITEMS = 25;
+const MONEY_RE = /(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi;
+const INCOME_CUE = /\b(ganhei|recebi|entrou|entraram|caiu|depositaram|faturei|vendi|lucrei)\b/i;
+const EXPENSE_CUE = /\b(gastei|gaste|gastamos|paguei|pagamos|comprei|compramos|custou|saiu|debitaram|guardei|reservei|separei)\b/i;
+const MOVEMENT_CUE = /\b(ganhei|recebi|entrou|entraram|caiu|depositaram|faturei|vendi|lucrei|gastei|gaste|gastamos|paguei|pagamos|comprei|compramos|custou|saiu|debitaram|guardei|reservei|separei)\b/i;
+
 const BatchItemSchema = z.object({
   include: z.boolean(),
   type: z.enum(['income', 'expense']),
@@ -33,7 +39,7 @@ const BatchItemSchema = z.object({
 
 const BatchSchema = z.object({
   is_batch: z.boolean(),
-  items: z.array(BatchItemSchema).max(12),
+  items: z.array(BatchItemSchema).max(MAX_BATCH_ITEMS),
   clarification: z.string().nullable()
 });
 
@@ -92,67 +98,138 @@ function asksToUseQuotedMessage(input: string): boolean {
   return /\b(registra|registre|lanca|lança|anota|salva|salve)\b.*\b(isso|essa mensagem|o que mandei|o que falei)\b/.test(value);
 }
 
+function overlaps(index: number, length: number, ranges: Array<[number, number]>): boolean {
+  const end = index + length;
+  return ranges.some(([start, finish]) => index < finish && end > start);
+}
+
+function rangesFor(input: string, pattern: RegExp): Array<[number, number]> {
+  return [...input.matchAll(pattern)].map(match => [match.index ?? 0, (match.index ?? 0) + match[0].length]);
+}
+
+/**
+ * Retorna apenas números que realmente parecem valores monetários. Isso evita que
+ * 31/07/2026, 15:30, 5%, "18 meses" ou "dia 10" façam uma mensagem parecer um lote.
+ */
+export function cashFinancialAmountTokens(input: string): string[] {
+  const source = String(input ?? '');
+  const dateRanges = rangesFor(source, /\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g);
+  const timeRanges = rangesFor(source, /\b\d{1,2}:\d{2}(?::\d{2})?\b/g);
+  const tokens: string[] = [];
+
+  for (const match of source.matchAll(MONEY_RE)) {
+    const index = match.index ?? 0;
+    if (overlaps(index, match[0].length, dateRanges) || overlaps(index, match[0].length, timeRanges)) continue;
+
+    const before = source.slice(Math.max(0, index - 14), index);
+    const after = source.slice(index + match[0].length, index + match[0].length + 18);
+    const explicitCurrency = /r\$/i.test(match[0]);
+    const raw = String(match[1] ?? '');
+    const integer = /^\d+$/.test(raw) ? Number(raw) : null;
+
+    if (/^\s*%/.test(after)) continue;
+    if (!explicitCurrency && /\bdia\s*$/i.test(before)) continue;
+    if (!explicitCurrency && /^\s*(?:dias?|meses?|anos?|semanas?|horas?|minutos?|parcelas?|vezes)\b/i.test(after)) continue;
+    if (!explicitCurrency && integer != null && integer >= 1900 && integer <= 2200) continue;
+
+    tokens.push(match[0]);
+  }
+  return tokens;
+}
+
 function hasSeveralMoneyValues(input: string): boolean {
-  const matches = String(input ?? '').match(/(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/gi) ?? [];
-  return matches.length >= 2;
+  return cashFinancialAmountTokens(input).length >= 2;
 }
 
 function hasMovementLanguage(input: string): boolean {
-  return /\b(ganhei|recebi|entrou|faturei|vendi|salario|salário|gastei|gaste|paguei|comprei|custou|guardei|reservei|separei|pague|despesas?|gastos?|sa[ií]das?|entradas?|receitas?|ganhos?)\b/i.test(input);
+  return MOVEMENT_CUE.test(input)
+    || /\b(salario|salário|despesas?|gastos?|sa[ií]das?|entradas?|receitas?|ganhos?|recebimentos?)\b/i.test(input);
 }
 
 export function cashBatchSectionHeader(input: string): BatchSection {
   const value = normalize(input).replace(/[:\-–—]+$/g, '').trim();
-  if (/^(despesas?|gastos?|saidas?|compras?)$/.test(value)) return 'expense';
-  if (/^(entradas?|receitas?|ganhos?|recebimentos?)$/.test(value)) return 'income';
+  if (/^(despesas?|gastos?|saidas?|compras?|pagamentos?)$/.test(value)) return 'expense';
+  if (/^(entradas?|receitas?|ganhos?|recebimentos?|vendas?)$/.test(value)) return 'income';
   return null;
 }
 
 /**
- * Detecta mudança de seção mesmo quando o usuário não escreve um cabeçalho formal.
- * Ex.: "Bom, eu ganhei hoje" abre uma seção de receitas e as linhas seguintes
- * herdam esse tipo até surgir um verbo explícito de despesa, como "gastei".
+ * Detecta mudança de seção mesmo em linguagem natural. Um verbo ou cabeçalho vale
+ * para as linhas seguintes até aparecer um novo contexto financeiro explícito.
  */
 export function cashBatchSectionCue(input: string): BatchSection {
   const value = normalize(input);
-  if (/\b(ganhei|recebi|entrou|faturei|vendi)\b/.test(value)) return 'income';
-  if (/\b(gastei|gaste|paguei|comprei|custou)\b/.test(value)) return 'expense';
+  if (INCOME_CUE.test(value)) return 'income';
+  if (EXPENSE_CUE.test(value)) return 'expense';
+
+  if (!cashFinancialAmountTokens(input).length) {
+    if (/\b(entradas?|receitas?|ganhos?|recebimentos?|vendas?)\b/.test(value)) return 'income';
+    if (/\b(despesas?|gastos?|saidas?|compras?|pagamentos?)\b/.test(value)) return 'expense';
+  }
   return cashBatchSectionHeader(input);
 }
 
 function hasBatchListHeader(input: string): boolean {
-  return /(?:^|\n)\s*(despesas?|gastos?|sa[ií]das?|compras?|entradas?|receitas?|ganhos?|recebimentos?)\s*[:\-–—]?\s*(?:$|\n)/im.test(input)
-    || /\b(despesas?|gastos?|sa[ií]das?|entradas?|receitas?)\s*:\s*[^\n]+/i.test(input);
+  return /(?:^|\n)\s*(despesas?|gastos?|sa[ií]das?|compras?|pagamentos?|entradas?|receitas?|ganhos?|recebimentos?|vendas?)\s*[:\-–—]?\s*(?:$|\n)/im.test(input)
+    || /\b(despesas?|gastos?|sa[ií]das?|entradas?|receitas?|ganhos?)\s*:\s*[^\n]+/i.test(input);
 }
 
 export function looksLikeCashBatch(input: string): boolean {
   if (!hasSeveralMoneyValues(input) || !hasMovementLanguage(input)) return false;
-  const verbs = input.match(/\b(ganhei|recebi|entrou|faturei|vendi|gastei|gaste|paguei|comprei|guardei|reservei|separei)\b/gi) ?? [];
+  const verbs = input.match(/\b(ganhei|recebi|entrou|entraram|caiu|depositaram|faturei|vendi|lucrei|gastei|gaste|gastamos|paguei|pagamos|comprei|compramos|guardei|reservei|separei)\b/gi) ?? [];
   return verbs.length >= 2 || input.includes('\n') || input.includes(';') || hasBatchListHeader(input);
 }
 
 function missingAmountExpense(input: string): boolean {
   const value = normalize(input);
-  return /\b(paguei|gastei|gaste|comprei|custou)\b/.test(value) && !/\d/.test(value);
+  return /\b(paguei|gastei|gaste|comprei|custou)\b/.test(value) && cashFinancialAmountTokens(input).length === 0;
 }
 
 function normalizeDate(value: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : isoBrazil();
 }
 
+function stripListMarker(value: string): string {
+  return value
+    .replace(/^\s*(?:[-–—•▪◦*]|\d{1,2}[.)])\s+/, '')
+    .trim();
+}
+
+function splitInlineClauses(value: string): string[] {
+  const first = value
+    .split(/\s*;\s*/)
+    .flatMap(part => part.split(/,\s+(?=(?:r\$\s*)?\d)/i))
+    .flatMap(part => part.split(/\s+e\s+(?=(?:r\$\s*)?\d)/i))
+    .flatMap(part => part.split(/\s+(?=(?:e\s+)?(?:tamb[eé]m\s+)?(?:eu\s+)?(?:ganhei|recebi|entrou|faturei|vendi|gastei|gaste|paguei|comprei)\b)/i));
+  return first.map(stripListMarker).filter(Boolean);
+}
+
 function simpleSegments(input: string): string[] {
   return input
-    .split(/\n+|;+/)
-    .map(value => value.trim())
+    .split(/\n+/)
+    .flatMap(splitInlineClauses)
+    .map(stripListMarker)
     .filter(Boolean)
-    .slice(0, 24);
+    .slice(0, 60);
 }
 
 function sectionPrefix(segment: string): { section: BatchSection; remainder: string } {
-  const match = segment.match(/^\s*(despesas?|gastos?|sa[ií]das?|compras?|entradas?|receitas?|ganhos?|recebimentos?)\s*[:\-–—]\s*(.*)$/i);
+  const match = segment.match(/^\s*(despesas?|gastos?|sa[ií]das?|compras?|pagamentos?|entradas?|receitas?|ganhos?|recebimentos?|vendas?)\s*[:\-–—]\s*(.*)$/i);
   if (!match) return { section: null, remainder: segment };
   const section = cashBatchSectionHeader(match[1] ?? '');
   return { section, remainder: String(match[2] ?? '').trim() };
+}
+
+function temporalCue(input: string): string | null {
+  const match = String(input).match(/\b(hoje|ontem|anteontem|domingo|segunda(?:-feira)?|terça(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|sabado|\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)\b/i);
+  return match?.[1] ?? null;
+}
+
+function normalizeMovementTypos(input: string): string {
+  return String(input)
+    .replace(/\bgaste\b/gi, 'gastei')
+    .replace(/\bpague\s*:/gi, 'paguei:')
+    .trim();
 }
 
 export function adjustCashRemainder(segment: string, transaction: CashTransactionInput): CashTransactionInput {
@@ -169,9 +246,13 @@ export function adjustCashRemainder(segment: string, transaction: CashTransactio
 export async function fallbackBatch(input: string): Promise<CashTransactionInput[]> {
   const rows: CashTransactionInput[] = [];
   let section: BatchSection = null;
+  let inheritedDate: string | null = null;
 
   for (const rawSegment of simpleSegments(input)) {
     const directHeader = cashBatchSectionHeader(rawSegment);
+    const rawDate = temporalCue(rawSegment);
+    if (rawDate) inheritedDate = rawDate;
+
     if (directHeader) {
       section = directHeader;
       continue;
@@ -183,20 +264,24 @@ export async function fallbackBatch(input: string): Promise<CashTransactionInput
     if (!segment) continue;
 
     const explicitSection = cashBatchSectionCue(segment);
-    const hasMoney = /(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/i.test(segment);
+    const hasMoney = cashFinancialAmountTokens(segment).length > 0;
     if (explicitSection) section = explicitSection;
 
-    // Frases como "Bom, eu ganhei hoje" funcionam como cabeçalho narrativo.
+    // "ontem eu ganhei", "minhas despesas foram" etc. podem ser cabeçalhos narrativos.
     if (explicitSection && !hasMoney) continue;
 
     if (/\b(sobrou|restou)\b/i.test(segment) && !/\b(comprei|gastei|gaste|paguei)\b/i.test(segment)) continue;
 
-    const hasExplicitMovement = /\b(ganhei|recebi|entrou|faturei|vendi|gastei|gaste|paguei|comprei|guardei|reservei|separei)\b/i.test(segment);
-    const candidate = section && !hasExplicitMovement
-      ? `${section === 'income' ? 'recebi' : 'gastei'} ${segment}`
-      : segment.replace(/\bgaste\b/i, 'gastei');
+    const normalizedSegment = normalizeMovementTypos(segment);
+    const hasExplicitMovement = MOVEMENT_CUE.test(normalizedSegment);
+    const hasOwnDate = Boolean(temporalCue(normalizedSegment));
+    const inheritedDateText = inheritedDate && !hasOwnDate ? ` ${inheritedDate}` : '';
 
-    const parsed = await cashParser.parse(candidate);
+    const candidate = section && !hasExplicitMovement
+      ? `${section === 'income' ? 'recebi' : 'gastei'}${inheritedDateText} ${normalizedSegment}`
+      : `${normalizedSegment}${inheritedDateText}`;
+
+    const parsed = deterministicCashParse(candidate);
     if (!parsed) continue;
 
     const typed = section
@@ -208,7 +293,7 @@ export async function fallbackBatch(input: string): Promise<CashTransactionInput
       : parsed;
 
     rows.push(adjustCashRemainder(segment, typed));
-    if (rows.length >= 12) break;
+    if (rows.length >= MAX_BATCH_ITEMS) break;
   }
   return rows;
 }
@@ -223,27 +308,30 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
           role: 'system',
           content: [
             'Você separa uma mensagem do Arles Cash em lançamentos financeiros distintos.',
-            'A mensagem pode misturar receita, dinheiro reservado, despesas reais, contas futuras, recorrências, estimativas e hipóteses.',
-            'Crie um item por movimento REAL já ocorrido. Nunca junte movimentos diferentes em uma descrição.',
+            'A mensagem pode misturar receitas, reservas, despesas reais, contas futuras, recorrências, estimativas e hipóteses.',
+            `Extraia no máximo ${MAX_BATCH_ITEMS} movimentos reais. Crie um item por movimento; nunca junte movimentos distintos numa descrição.`,
             'Inclua SOMENTE dinheiro que já entrou, já saiu ou que o usuário afirma ter realmente separado/reservado.',
             'Pagamento agendado, conta que ainda vence, recorrência futura, estimativa, média, projeção ou cenário condicionado por “se/caso” NÃO é lançamento real: include=false.',
+            'Datas, horários, percentuais, quantidade de parcelas, meses, dias e anos NÃO são valores financeiros.',
             'Exemplos que devem ficar include=false: “estimo receber 1200”, “se eu viajar gastarei 900”, “todo dia 10 pago 320”, “mês que vem o condomínio será 420”, “fecharei o semestre com 4500 de sobra”.',
             '“Já reservei R$150 para o presente” é movimento real de Reserva; “pretendo reservar R$150” não é.',
             'Listas com cabeçalhos devem herdar o tipo. Ex.: “Despesas:\nMercado 50\nUber 20” = duas despesas; “Entradas:\nFreela 300\nVenda 200” = duas receitas.',
-            'Cabeçalhos narrativos também devem ser herdados. Ex.: “eu ganhei hoje\n46 de ajuste\n28 de reforma” = duas receitas; o verbo “ganhei” vale para as linhas seguintes até surgir um novo verbo de movimento.',
-            'Se houver novos cabeçalhos ou verbos de movimento no meio da mensagem, troque o tipo das linhas seguintes de acordo com o novo contexto.',
+            'Cabeçalhos narrativos também devem ser herdados. Ex.: “eu ganhei hoje\n46 de ajuste\n28 de reforma” = duas receitas; “ganhei” vale para as linhas seguintes até surgir novo contexto.',
+            'O mesmo vale para sinônimos e pequenas variações: entradas/receitas/ganhos/recebimentos e despesas/gastos/saídas/compras/pagamentos.',
+            'Se houver novo cabeçalho ou verbo de movimento no meio da mensagem, troque o tipo das linhas seguintes.',
+            'Se uma linha contiver vários movimentos separados por “e”, vírgula, ponto ou ponto e vírgula, crie itens separados quando cada valor tiver descrição própria.',
             'income = dinheiro que entrou. expense = dinheiro que saiu do dinheiro disponível.',
             '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva somente quando a frase afirma que isso já aconteceu.',
             '“sobrou 20” sozinho NÃO é lançamento.',
             'Se havia um valor para gastar e a pessoa informa quanto sobrou, registre somente o gasto efetivo. Ex.: “com os outros 100 comprei coisas e sobrou 20” => despesa de 80.',
-            'Não invente valores. Se um gasto foi citado sem valor identificável, include=false.',
+            'Não invente valores. Se um movimento foi citado sem valor identificável, include=false.',
             'Use somente: Alimentação, Transporte, Saúde, Moradia, Educação, Pessoal, Reserva, Receita, Outros.',
             'Toda receita usa Receita. Dinheiro guardado usa Reserva.',
-            'description deve ser curta, específica e preservar os itens citados pelo usuário.',
-            'Se o usuário listar pão, leite, café e frutas, escreva esses itens; NUNCA substitua por “itens diversos”, “compras diversas”, “coisas diversas” ou outro resumo genérico.',
+            'description deve ser curta, específica e preservar o item citado pelo usuário.',
+            'Se o usuário listar pão, leite, café e frutas, preserve esses itens; nunca substitua por resumo genérico.',
             'merchant só quando houver loja/pessoa/local claro.',
             `Hoje no fuso do Brasil é ${isoBrazil()}. transaction_date deve ser YYYY-MM-DD.`,
-            'source_text deve conter SOMENTE o trecho curto da mensagem que sustenta aquele item; não copie a narrativa inteira para a descrição.'
+            'source_text deve conter SOMENTE o trecho curto da mensagem que sustenta aquele item; não copie a narrativa inteira.'
           ].join('\n')
         },
         { role: 'user', content: input }
@@ -287,6 +375,46 @@ function canonicalBatchItem(item: BatchItem): CashTransactionInput | null {
   };
 }
 
+function coverageKey(item: CashTransactionInput): string {
+  return `${item.type}|${Math.round(item.amount * 100)}|${item.transactionDate}`;
+}
+
+function containsTransactionMultiset(container: CashTransactionInput[], subset: CashTransactionInput[]): boolean {
+  const counts = new Map<string, number>();
+  for (const item of container) counts.set(coverageKey(item), (counts.get(coverageKey(item)) ?? 0) + 1);
+  for (const item of subset) {
+    const key = coverageKey(item);
+    const left = counts.get(key) ?? 0;
+    if (left <= 0) return false;
+    counts.set(key, left - 1);
+  }
+  return true;
+}
+
+/**
+ * A IA pode ser semanticamente melhor, mas nunca deve vencer só por ter retornado
+ * "alguns" itens. Preferimos a lista que cobre integralmente a outra; em conflito,
+ * a lista maior vence e, em empate, o parser determinístico é a opção conservadora.
+ */
+export function selectCashBatchTransactions(
+  aiTransactions: CashTransactionInput[],
+  deterministic: CashTransactionInput[]
+): CashTransactionInput[] {
+  if (!aiTransactions.length) return deterministic;
+  if (!deterministic.length) return aiTransactions;
+
+  if (deterministic.length >= aiTransactions.length && containsTransactionMultiset(deterministic, aiTransactions)) {
+    return deterministic;
+  }
+  if (aiTransactions.length >= deterministic.length && containsTransactionMultiset(aiTransactions, deterministic)) {
+    return aiTransactions;
+  }
+  if (deterministic.length !== aiTransactions.length) {
+    return deterministic.length > aiTransactions.length ? deterministic : aiTransactions;
+  }
+  return deterministic;
+}
+
 async function prepareBatch(context: VerticalContext, source: string): Promise<VerticalResult | null> {
   const [aiItems, deterministic] = await Promise.all([
     aiBatch(source),
@@ -296,12 +424,7 @@ async function prepareBatch(context: VerticalContext, source: string): Promise<V
     .map(canonicalBatchItem)
     .filter((item): item is CashTransactionInput => Boolean(item));
 
-  // A IA continua ajudando em descrições/categorias, mas uma resposta parcial não pode
-  // vencer um lote determinístico que encontrou mais movimentos reais na mesma mensagem.
-  const transactions = deterministic.length > aiTransactions.length
-    ? deterministic
-    : aiTransactions;
-
+  const transactions = selectCashBatchTransactions(aiTransactions, deterministic);
   if (transactions.length < 2) return null;
   return await stageCashRegistration(context, transactions, source);
 }
