@@ -27,6 +27,8 @@ import { handleCashLedgerDeterministic } from './ledger.js';
 import { cashQuery } from './query.js';
 
 const TTL_SECONDS = 15 * 60;
+const MAX_PENDING_TRANSACTIONS = 25;
+const MAX_TEXT_CHUNK = 3200;
 
 type PendingCashRegistration = {
   sourceMessageId: string;
@@ -75,6 +77,51 @@ function summary(transactions: CashTransactionInput[]): string {
 
 function options(): string {
   return 'Responda *sim* para registrar, *não* para cancelar ou *editar* para corrigir.';
+}
+
+/**
+ * WhatsApp pode rejeitar mensagens gigantes. Mantemos todos os itens pendentes e,
+ * quando a confirmação passa do limite confortável, dividimos em várias ações de texto
+ * sem cortar lançamentos silenciosamente.
+ */
+function chunkedText(parts: string[]): VerticalResult {
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const raw of parts.filter(Boolean)) {
+    const part = raw.trim();
+    if (!part) continue;
+    const candidate = current ? `${current}\n\n${part}` : part;
+    if (candidate.length <= MAX_TEXT_CHUNK) {
+      current = candidate;
+      continue;
+    }
+    if (current) chunks.push(current);
+
+    if (part.length <= MAX_TEXT_CHUNK) {
+      current = part;
+      continue;
+    }
+
+    for (let offset = 0; offset < part.length; offset += MAX_TEXT_CHUNK) {
+      chunks.push(part.slice(offset, offset + MAX_TEXT_CHUNK));
+    }
+    current = '';
+  }
+
+  if (current) chunks.push(current);
+  return { actions: chunks.map(chunk => ({ type: 'text' as const, text: chunk })) };
+}
+
+function confirmationResult(transactions: CashTransactionInput[], intro: string): VerticalResult {
+  const itemBlocks = transactions.length === 1
+    ? [line(transactions[0]!)]
+    : transactions.map((item, index) => line(item, index + 1));
+  return chunkedText([
+    intro,
+    ...itemBlocks,
+    ['Está certo?', options()].join('\n')
+  ]);
 }
 
 export function cashRegistrationSavedMessage(count: number): string {
@@ -179,21 +226,17 @@ export async function stageCashRegistration(
 
   const pending: PendingCashRegistration = {
     sourceMessageId: context.message.messageId || `cash:${Date.now()}`,
-    sourceMessage: sourceMessage.slice(0, 1000),
-    transactions: prepared.transactions.slice(0, 12)
+    sourceMessage: sourceMessage.slice(0, 5000),
+    transactions: prepared.transactions.slice(0, MAX_PENDING_TRANSACTIONS)
   };
   await savePending(context.company.id, context.message.phone, pending);
 
-  return text([
+  return confirmationResult(
+    pending.transactions,
     pending.transactions.length === 1
       ? '🧾 Antes de registrar, confirma se entendi certo:'
-      : `🧾 Antes de registrar, confirma estes ${pending.transactions.length} lançamentos:`,
-    '',
-    summary(pending.transactions),
-    '',
-    'Está certo?',
-    options()
-  ].join('\n'));
+      : `🧾 Antes de registrar, confirma estes ${pending.transactions.length} lançamentos:`
+  );
 }
 
 async function deferredResult(context: VerticalContext, query: string): Promise<VerticalResult | null> {
@@ -272,21 +315,8 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
 
     pending.transactions[index] = applyPatch(pending.transactions[index]!, patch);
     await savePending(context.company.id, context.message.phone, pending);
-    return text([
-      `✏️ Ajustei o item ${index + 1}:`,
-      '',
-      summary(pending.transactions),
-      '',
-      'Agora está certo?',
-      options()
-    ].join('\n'));
+    return confirmationResult(pending.transactions, `✏️ Ajustei o item ${index + 1}:`);
   }
 
-  return text([
-    'Tenho um lançamento aguardando sua confirmação.',
-    '',
-    summary(pending.transactions),
-    '',
-    options()
-  ].join('\n'));
+  return confirmationResult(pending.transactions, 'Tenho um lançamento aguardando sua confirmação.');
 }
