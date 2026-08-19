@@ -98,7 +98,7 @@ function hasSeveralMoneyValues(input: string): boolean {
 }
 
 function hasMovementLanguage(input: string): boolean {
-  return /\b(ganhei|recebi|entrou|salario|salário|gastei|paguei|comprei|custou|guardei|reservei|separei|pague|despesas?|gastos?|sa[ií]das?|entradas?|receitas?|ganhos?)\b/i.test(input);
+  return /\b(ganhei|recebi|entrou|faturei|vendi|salario|salário|gastei|gaste|paguei|comprei|custou|guardei|reservei|separei|pague|despesas?|gastos?|sa[ií]das?|entradas?|receitas?|ganhos?)\b/i.test(input);
 }
 
 export function cashBatchSectionHeader(input: string): BatchSection {
@@ -108,6 +108,18 @@ export function cashBatchSectionHeader(input: string): BatchSection {
   return null;
 }
 
+/**
+ * Detecta mudança de seção mesmo quando o usuário não escreve um cabeçalho formal.
+ * Ex.: "Bom, eu ganhei hoje" abre uma seção de receitas e as linhas seguintes
+ * herdam esse tipo até surgir um verbo explícito de despesa, como "gastei".
+ */
+export function cashBatchSectionCue(input: string): BatchSection {
+  const value = normalize(input);
+  if (/\b(ganhei|recebi|entrou|faturei|vendi)\b/.test(value)) return 'income';
+  if (/\b(gastei|gaste|paguei|comprei|custou)\b/.test(value)) return 'expense';
+  return cashBatchSectionHeader(input);
+}
+
 function hasBatchListHeader(input: string): boolean {
   return /(?:^|\n)\s*(despesas?|gastos?|sa[ií]das?|compras?|entradas?|receitas?|ganhos?|recebimentos?)\s*[:\-–—]?\s*(?:$|\n)/im.test(input)
     || /\b(despesas?|gastos?|sa[ií]das?|entradas?|receitas?)\s*:\s*[^\n]+/i.test(input);
@@ -115,13 +127,13 @@ function hasBatchListHeader(input: string): boolean {
 
 export function looksLikeCashBatch(input: string): boolean {
   if (!hasSeveralMoneyValues(input) || !hasMovementLanguage(input)) return false;
-  const verbs = input.match(/\b(ganhei|recebi|entrou|gastei|paguei|comprei|guardei|reservei|separei)\b/gi) ?? [];
+  const verbs = input.match(/\b(ganhei|recebi|entrou|faturei|vendi|gastei|gaste|paguei|comprei|guardei|reservei|separei)\b/gi) ?? [];
   return verbs.length >= 2 || input.includes('\n') || input.includes(';') || hasBatchListHeader(input);
 }
 
 function missingAmountExpense(input: string): boolean {
   const value = normalize(input);
-  return /\b(paguei|gastei|comprei|custou)\b/.test(value) && !/\d/.test(value);
+  return /\b(paguei|gastei|gaste|comprei|custou)\b/.test(value) && !/\d/.test(value);
 }
 
 function normalizeDate(value: string): string {
@@ -154,7 +166,7 @@ export function adjustCashRemainder(segment: string, transaction: CashTransactio
   return { ...transaction, amount: Math.round((total - rest) * 100) / 100 };
 }
 
-async function fallbackBatch(input: string): Promise<CashTransactionInput[]> {
+export async function fallbackBatch(input: string): Promise<CashTransactionInput[]> {
   const rows: CashTransactionInput[] = [];
   let section: BatchSection = null;
 
@@ -170,11 +182,19 @@ async function fallbackBatch(input: string): Promise<CashTransactionInput[]> {
     const segment = prefixed.remainder;
     if (!segment) continue;
 
-    if (/\b(sobrou|restou)\b/i.test(segment) && !/\b(comprei|gastei|paguei)\b/i.test(segment)) continue;
+    const explicitSection = cashBatchSectionCue(segment);
+    const hasMoney = /(?:r\$\s*)?\d+(?:\.\d{3})*(?:[.,]\d{1,2})?/i.test(segment);
+    if (explicitSection) section = explicitSection;
 
-    const candidate = section && !/\b(ganhei|recebi|entrou|gastei|paguei|comprei|guardei|reservei|separei)\b/i.test(segment)
+    // Frases como "Bom, eu ganhei hoje" funcionam como cabeçalho narrativo.
+    if (explicitSection && !hasMoney) continue;
+
+    if (/\b(sobrou|restou)\b/i.test(segment) && !/\b(comprei|gastei|gaste|paguei)\b/i.test(segment)) continue;
+
+    const hasExplicitMovement = /\b(ganhei|recebi|entrou|faturei|vendi|gastei|gaste|paguei|comprei|guardei|reservei|separei)\b/i.test(segment);
+    const candidate = section && !hasExplicitMovement
       ? `${section === 'income' ? 'recebi' : 'gastei'} ${segment}`
-      : segment;
+      : segment.replace(/\bgaste\b/i, 'gastei');
 
     const parsed = await cashParser.parse(candidate);
     if (!parsed) continue;
@@ -210,7 +230,8 @@ async function aiBatch(input: string): Promise<BatchItem[] | null> {
             'Exemplos que devem ficar include=false: “estimo receber 1200”, “se eu viajar gastarei 900”, “todo dia 10 pago 320”, “mês que vem o condomínio será 420”, “fecharei o semestre com 4500 de sobra”.',
             '“Já reservei R$150 para o presente” é movimento real de Reserva; “pretendo reservar R$150” não é.',
             'Listas com cabeçalhos devem herdar o tipo. Ex.: “Despesas:\nMercado 50\nUber 20” = duas despesas; “Entradas:\nFreela 300\nVenda 200” = duas receitas.',
-            'Se houver novos cabeçalhos no meio da mensagem, troque o tipo das linhas seguintes de acordo com o novo cabeçalho.',
+            'Cabeçalhos narrativos também devem ser herdados. Ex.: “eu ganhei hoje\n46 de ajuste\n28 de reforma” = duas receitas; o verbo “ganhei” vale para as linhas seguintes até surgir um novo verbo de movimento.',
+            'Se houver novos cabeçalhos ou verbos de movimento no meio da mensagem, troque o tipo das linhas seguintes de acordo com o novo contexto.',
             'income = dinheiro que entrou. expense = dinheiro que saiu do dinheiro disponível.',
             '“guardei”, “reservei” ou “separei dinheiro” é expense com categoria Reserva somente quando a frase afirma que isso já aconteceu.',
             '“sobrou 20” sozinho NÃO é lançamento.',
@@ -267,11 +288,20 @@ function canonicalBatchItem(item: BatchItem): CashTransactionInput | null {
 }
 
 async function prepareBatch(context: VerticalContext, source: string): Promise<VerticalResult | null> {
-  const aiItems = await aiBatch(source);
-  let transactions = (aiItems ?? [])
+  const [aiItems, deterministic] = await Promise.all([
+    aiBatch(source),
+    fallbackBatch(source)
+  ]);
+  const aiTransactions = (aiItems ?? [])
     .map(canonicalBatchItem)
     .filter((item): item is CashTransactionInput => Boolean(item));
-  if (transactions.length < 2) transactions = await fallbackBatch(source);
+
+  // A IA continua ajudando em descrições/categorias, mas uma resposta parcial não pode
+  // vencer um lote determinístico que encontrou mais movimentos reais na mesma mensagem.
+  const transactions = deterministic.length > aiTransactions.length
+    ? deterministic
+    : aiTransactions;
+
   if (transactions.length < 2) return null;
   return await stageCashRegistration(context, transactions, source);
 }
