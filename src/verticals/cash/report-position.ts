@@ -51,13 +51,16 @@ export async function loadCashClosingPositions(companyId: string): Promise<CashC
          s.receivable_total::float8 as receivable_total,
          s.withdrawals_total::float8 as withdrawals_total,
          s.withdrawals_count::int as withdrawals_count,
-         s.created_at
+         s.created_at,
+         coalesce(s.reference_date,timezone('America/Sao_Paulo',s.created_at)::date) as effective_date
        from cash_pocket_snapshots s
        join cash_pockets p on p.id=s.pocket_id and p.company_id=s.company_id
        where s.company_id=$1 and p.active=true
-       order by s.pocket_id,s.reference_date desc nulls last,s.created_at desc
+       order by s.pocket_id,
+                coalesce(s.reference_date,timezone('America/Sao_Paulo',s.created_at)::date) desc,
+                s.created_at desc
      ) latest
-     order by latest.reference_date desc nulls last,latest.created_at desc,latest.pocket_name asc
+     order by latest.effective_date desc,latest.created_at desc,latest.pocket_name asc
      limit 12`,
     [companyId]
   );
