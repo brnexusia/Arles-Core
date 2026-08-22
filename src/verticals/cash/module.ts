@@ -11,7 +11,7 @@ import { registerCashRoutes } from './routes.js';
 export const cashModule: VerticalModule = {
   id: 'cash',
   name: 'Arles Cash',
-  version: '2.6.0',
+  version: '2.6.1',
   capabilities: [
     'cash.transactions',
     'cash.summaries',
