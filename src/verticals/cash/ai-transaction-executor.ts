@@ -77,16 +77,22 @@ function estimatedNanoCostUsd(response: unknown): number {
   return (input * 0.05 + output * 0.40) / 1_000_000;
 }
 
-function logUsage(context: VerticalContext, response: unknown): void {
+function logUsage(
+  context: VerticalContext,
+  response: unknown,
+  firstStageEstimatedUsd: number
+): void {
   const usage = (response as any)?.usage;
   if (!usage) return;
-  const cost = estimatedNanoCostUsd(response);
+  const secondStageCost = estimatedNanoCostUsd(response);
+  const total = Math.max(0, firstStageEstimatedUsd) + secondStageCost;
   console.info(
     `[CashAI] stage=transaction_extract model=${env.cashOpenaiSecondModel}` +
     ` message=${context.message.messageId || 'unknown'}` +
     ` input_tokens=${usage.input_tokens ?? 0}` +
     ` output_tokens=${usage.output_tokens ?? 0}` +
-    ` estimated_usd=${cost.toFixed(8)}`
+    ` estimated_usd=${secondStageCost.toFixed(8)}` +
+    ` estimated_total_usd=${total.toFixed(8)}`
   );
 }
 
@@ -99,7 +105,8 @@ function logUsage(context: VerticalContext, response: unknown): void {
  */
 export async function executeCashAiTransaction(
   context: VerticalContext,
-  firstPassRewrite?: string | null
+  firstPassRewrite?: string | null,
+  firstStageEstimatedUsd = 0
 ): Promise<VerticalResult | null> {
   if (!client) return null;
 
@@ -143,7 +150,7 @@ export async function executeCashAiTransaction(
       text: { format: zodTextFormat(TransactionBatchSchema, 'cash_transaction_batch') }
     });
 
-    logUsage(context, response);
+    logUsage(context, response, firstStageEstimatedUsd);
     const parsed = response.output_parsed;
     if (!parsed?.is_transaction || !parsed.items.length) {
       const clarification = parsed?.clarification?.trim();
