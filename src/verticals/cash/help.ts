@@ -63,7 +63,7 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• “guardei 300”',
       '',
       'Pode mandar vários lançamentos na mesma mensagem que eu separo para você.',
-      'Antes de salvar, eu mostro o que entendi e peço sua confirmação.',
+      'Quando os dados estiverem completos, eu registro automaticamente e te aviso na hora.',
       '',
       'Importante: previsão e simulação não entram aqui como gasto/receita real.',
       '',
@@ -184,7 +184,7 @@ export function cashHelpMessage(section: CashHelpSection): string {
       '• “planos” → mostro as opções e os links de pagamento',
       '• “meu plano” → mostro seu acesso atual',
       '',
-      'O pagamento é liberado automaticamente após a confirmação da Cakto.',
+      'A liberação é automática após a confirmação da Cakto.',
       '',
       'Digite *ajuda* para voltar ao menu.'
     ].join('\n');
