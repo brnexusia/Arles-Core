@@ -234,62 +234,47 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
-    // Cofre, caixinha, envelope, potinho e erros comuns de digitação passam a usar a
-    // mesma gramática interna de cofrinho antes de qualquer roteamento financeiro.
+    // A partir daqui, toda linguagem natural passa primeiro pela OpenAI. Para um
+    // lançamento, o próprio handler chama uma segunda OpenAI antes do backend gravar.
+    // Cálculos identificados pela IA são executados por script/SQL dentro do handler.
+    const aiFirst = await cashAiFirstHandler.handle(context);
+    if (aiFirst) return await personalizePaymentMenu(company.id, aiFirst);
+
+    // Daqui para baixo ficam somente motores determinísticos/legados de execução e
+    // fallback. Eles não precedem mais a camada semântica principal.
     context.combinedText = normalizeCashPocketLanguage(context.combinedText);
 
-    // Narrativas financeiras longas e mistas precisam ser decompostas antes de QUALQUER
-    // scheduler/projeção. Isso impede “todo dia 10” ou “estimo” de capturar o texto inteiro.
     const mixedNarrative = await handleCashMixedNarrativeGate(context);
     if (mixedNarrative) return mixedNarrative;
 
-    // Nova barreira central: corrige linguagem quebrada, usa contexto curto com segurança,
-    // separa lançamento + consulta e bloqueia referências destrutivas ambíguas.
     const conversationSafety = await handleCashConversationSafety(context);
     if (conversationSafety) return conversationSafety;
 
-    // Fechamento de caixa/cofrinho precisa resolver o destino antes do parser simples de
-    // “a receber”. Se o cofrinho não existir, a conversa fica pendente para criar/escolher.
     const pocketClosing = await handleCashPocketClosingFlow(context);
     if (pocketClosing) return pocketClosing;
 
-    // “Falta cobrar / tenho a receber / me deve” é estado financeiro, não receita real.
-    // Mantemos a pendência ligada ao cofrinho até o dinheiro efetivamente entrar.
     const pocketReceivable = await handleCashPocketReceivable(context);
     if (pocketReceivable) return pocketReceivable;
 
-    // Agenda/previsão vem antes da movimentação imediata de cofrinhos. Isso garante que
-    // “todo dia 10 gasto 300 no cofrinho Cartão” continue sendo previsão.
     const scheduled = await handleCashScheduleDeterministic(context);
     if (scheduled) return scheduled;
 
-    // Guardar/retirar dinheiro de cofrinho é uma alocação interna: muda o disponível
-    // fora dos cofrinhos, mas não cria receita/despesa falsa nem altera o saldo total.
     const pocketTransfer = await handleCashPocketTransfer(context);
     if (pocketTransfer) return pocketTransfer;
 
-    // Pedidos naturais de organização como “registre os gastos deste mês no cofrinho X”
-    // precisam acontecer antes do parser genérico de cofrinhos e de consultas.
     const pocketOrganization = await handleCashPocketOrganization(context);
     if (pocketOrganization) return pocketOrganization;
 
-    // Mensagens que misturam total vendido, caixa, retiradas e valores a receber não
-    // podem virar um lote de despesas por semelhança textual.
     const snapshotSafety = await handleCashSnapshotSafety(context);
     if (snapshotSafety) return snapshotSafety;
 
-    // Administração e contexto de cofrinhos vêm antes da exclusão de registros. Assim,
-    // depois de “quais cofrinhos eu tenho?”, “apaga ele” não pode apagar uma transação.
     const pocketCommand = await handleCashPocketContextCommand(context);
     if (pocketCommand) return pocketCommand;
 
-    // Formas naturais muito comuns são reescritas/delegadas para motores seguros antes
-    // do GPT. Essa camada não calcula nem grava sozinha; só evita fallback de IA desnecessário.
     const deterministicLanguage = await handleCashDeterministicLanguage(context);
     if (deterministicLanguage) return deterministicLanguage;
 
-    // Saldo e simulações são operações de leitura/cálculo. Nunca criam lançamento e
-    // são resolvidas 100% por script + banco antes de qualquer chamada de IA.
+    // Mesmo no fallback, toda matemática continua 100% determinística.
     const ledger = await handleCashLedgerDeterministic(context);
     if (ledger) return ledger;
 
@@ -302,9 +287,8 @@ export class CashAccessHandler implements VerticalHandler {
     const fastFaq = await fastCashFaq(context);
     if (fastFaq) return fastFaq;
 
-    // O GPT só entra depois de agenda, organização/cofrinhos, linguagem determinística,
-    // saldo, simulação, exclusões, FAQ e do corpus interno do AiFirstHandler.
-    return await personalizePaymentMenu(company.id, await cashAiFirstHandler.handle(context));
+    // Último fallback local caso a OpenAI esteja indisponível ou retorne unknown.
+    return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
   }
 }
 
