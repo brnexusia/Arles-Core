@@ -2,6 +2,7 @@ import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertic
 import { cashParser } from './parser.js';
 import { cashQuery } from './query.js';
 import { cashReports, formatCashReport, formatCashSummary } from './reports.js';
+import { enrichCashFinancialReport, loadCashClosingPositions } from './report-position.js';
 import { cashService } from './service.js';
 import { stageCashRegistration } from './confirmation.js';
 import {
@@ -284,42 +285,52 @@ export class CashHandler implements VerticalHandler {
 
     if (/^(relatorio semanal|relatório semanal|semana|como foi a semana|resumo da semana)[!.? ]*$/.test(normalized)) {
       const period = currentWeekWindow();
-      const summary = await cashService.summary(company.id, period.from, period.to);
-      return text(formatCashReport({
+      const [summary, positions] = await Promise.all([
+        cashService.summary(company.id, period.from, period.to),
+        loadCashClosingPositions(company.id)
+      ]);
+      return text(enrichCashFinancialReport(formatCashReport({
         title: 'Relatório Semanal',
         from: period.from,
         to: period.to,
         summary,
         name: settings.owner_name
-      }));
+      }), positions));
     }
 
     if (/^(relatorio mensal|relatório mensal|mes|mês|como foi o mes|como foi o mês|resumo do mes|resumo do mês)[!.? ]*$/.test(normalized)) {
       const period = currentMonthWindow();
       const previousPeriod = monthBeforeWindow(period.from);
-      const [summary, previous] = await Promise.all([
+      const [summary, previous, positions] = await Promise.all([
         cashService.summary(company.id, period.from, period.to),
-        cashService.summary(company.id, previousPeriod.from, previousPeriod.to)
+        cashService.summary(company.id, previousPeriod.from, previousPeriod.to),
+        loadCashClosingPositions(company.id)
       ]);
-      return text(formatCashReport({
+      return text(enrichCashFinancialReport(formatCashReport({
         title: 'Relatório Mensal',
         from: period.from,
         to: period.to,
         summary,
         previous,
         name: settings.owner_name
-      }));
+      }), positions));
     }
 
     if (/^(saldo|quanto tenho|como to|como tô|resumo|meu saldo|saldo atual)[!.? ]*$/.test(normalized)) {
       const period = currentMonthWindow();
-      const summary = await cashService.summary(company.id, period.from, period.to);
+      const [summary, positions] = await Promise.all([
+        cashService.summary(company.id, period.from, period.to),
+        loadCashClosingPositions(company.id)
+      ]);
       const monthName = new Intl.DateTimeFormat('pt-BR', {
         month: 'long',
         year: 'numeric',
         timeZone: 'America/Sao_Paulo'
       }).format(new Date());
-      return text(formatCashSummary(`Seu saldo atual — ${monthName}`, summary));
+      return text(enrichCashFinancialReport(
+        formatCashSummary(`Seu resumo — ${monthName}`, summary),
+        positions
+      ));
     }
 
     const parsed = await cashParser.parse(combinedText);
@@ -334,8 +345,9 @@ export class CashHandler implements VerticalHandler {
       ].join('\n'));
     }
 
-    // Última barreira: até o handler legado apenas PREPARA o lançamento.
-    // O PostgreSQL só recebe a transação depois da confirmação explícita do usuário.
+    // Fallback legado: prepara/valida e salva imediatamente. Não existe mais etapa de
+    // confirmação do lançamento; a confirmação só permanece em fluxos próprios, como
+    // criar um cofrinho que ainda não existe.
     return await stageCashRegistration(context, [parsed], combinedText);
   }
 }
