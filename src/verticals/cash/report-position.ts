@@ -138,6 +138,12 @@ export async function enrichCashBalanceResult(
   result: VerticalResult | null
 ): Promise<VerticalResult | null> {
   if (!result) return result;
+
+  const alreadyEnriched = result.actions.some(action =>
+    action.type === 'text' && action.text.includes('📦 *Posição dos cofrinhos*')
+  );
+  if (alreadyEnriched) return result;
+
   const hasTarget = result.actions.some(action =>
     action.type === 'text' && (
       action.text.trimStart().startsWith('💰 *Seu dinheiro agora*') ||
