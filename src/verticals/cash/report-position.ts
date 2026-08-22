@@ -1,4 +1,5 @@
 import { db } from '../../infrastructure/db.js';
+import type { VerticalResult } from '../vertical.js';
 import { formatBrazilDate } from './time.js';
 
 export interface CashClosingPosition {
@@ -39,18 +40,24 @@ export async function loadCashClosingPositions(companyId: string): Promise<CashC
     withdrawals_total: number | null;
     withdrawals_count: number | null;
   }>(
-    `select distinct on (s.pocket_id)
-       p.name as pocket_name,
-       s.reference_date::text,
-       s.total_sold::float8,
-       s.cash_balance::float8,
-       s.receivable_total::float8,
-       s.withdrawals_total::float8,
-       s.withdrawals_count::int
-     from cash_pocket_snapshots s
-     join cash_pockets p on p.id=s.pocket_id and p.company_id=s.company_id
-     where s.company_id=$1 and p.active=true
-     order by s.pocket_id,s.reference_date desc nulls last,s.created_at desc
+    `select latest.pocket_name,latest.reference_date,latest.total_sold,latest.cash_balance,
+            latest.receivable_total,latest.withdrawals_total,latest.withdrawals_count
+     from (
+       select distinct on (s.pocket_id)
+         p.name as pocket_name,
+         s.reference_date::text as reference_date,
+         s.total_sold::float8 as total_sold,
+         s.cash_balance::float8 as cash_balance,
+         s.receivable_total::float8 as receivable_total,
+         s.withdrawals_total::float8 as withdrawals_total,
+         s.withdrawals_count::int as withdrawals_count,
+         s.created_at
+       from cash_pocket_snapshots s
+       join cash_pockets p on p.id=s.pocket_id and p.company_id=s.company_id
+       where s.company_id=$1 and p.active=true
+       order by s.pocket_id,s.reference_date desc nulls last,s.created_at desc
+     ) latest
+     order by latest.reference_date desc nulls last,latest.created_at desc,latest.pocket_name asc
      limit 12`,
     [companyId]
   );
@@ -106,7 +113,7 @@ export function enrichCashFinancialReport(
   baseText: string,
   positions: CashClosingPosition[]
 ): string {
-  if (!positions.length) return baseText;
+  if (!positions.length || baseText.includes('📦 *Posição dos cofrinhos*')) return baseText;
 
   const clarified = clarifyMovementLabels(baseText);
   const block = closingBlock(positions);
@@ -116,4 +123,33 @@ export function enrichCashFinancialReport(
     return `${clarified.slice(0, farewellIndex)}\n\n${block}${clarified.slice(farewellIndex)}`;
   }
   return `${clarified}\n\n${block}`;
+}
+
+/**
+ * Saldo direto também precisa deixar claro que snapshots de caixa existem, mas sem
+ * incorporá-los aritmeticamente ao ledger de lançamentos. Só enriquece respostas de
+ * saldo/resumo; confirmações e demais mensagens não são alteradas.
+ */
+export async function enrichCashBalanceResult(
+  companyId: string,
+  result: VerticalResult | null
+): Promise<VerticalResult | null> {
+  if (!result) return result;
+  const hasTarget = result.actions.some(action =>
+    action.type === 'text' && (
+      action.text.trimStart().startsWith('💰 *Seu dinheiro agora*') ||
+      action.text.trimStart().startsWith('📊 ')
+    )
+  );
+  if (!hasTarget) return result;
+
+  const positions = await loadCashClosingPositions(companyId);
+  if (!positions.length) return result;
+
+  return {
+    ...result,
+    actions: result.actions.map(action => action.type === 'text'
+      ? { ...action, text: enrichCashFinancialReport(action.text, positions) }
+      : action)
+  };
 }
