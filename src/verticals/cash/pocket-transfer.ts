@@ -85,8 +85,6 @@ export function parseCashPocketTransferIntent(input: string): CashPocketTransfer
   const simulation = /\b(se eu|se colocar|se guardar|se separar|se reservar|quanto (?:vou|vai|iria|ficaria)|quanto sobra|quanto fica|como fica|ficaria|vou ter|terei|saldo livre|disponivel|disponível|sem incluir|sem contar|sem mexer)\b/.test(value)
     || /\?$/.test(String(input).trim());
 
-  // Recorrências e datas futuras pertencem ao motor de previsões, nunca viram uma
-  // reserva imediata por engano. Simulações explícitas continuam permitidas.
   if (hasFutureScheduleLanguage(value) && !simulation) return null;
 
   const out = /\b(tirar|tira|retirar|retira|resgatar|resgata|sacar|saca|devolver|devolve|liberar|libera|desreservar|desreserva)\b/.test(value)
@@ -327,12 +325,10 @@ export async function handleCashPendingPocketTransfer(context: VerticalContext):
   }
 
   if (!confirmation(context.combinedText)) {
-    const result = await preview(context, pending, true);
-    return text([
-      'Tenho uma movimentação de cofrinho aguardando confirmação.',
-      '',
-      result.message
-    ].join('\n'));
+    // Qualquer nova mensagem que não seja uma continuação explícita abandona a
+    // confirmação antiga e segue para a OpenAI como uma intenção nova.
+    await clearPending(context);
+    return undefined;
   }
 
   const before = await preview(context, pending, true);
