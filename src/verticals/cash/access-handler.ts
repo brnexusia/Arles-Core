@@ -15,6 +15,7 @@ import { normalizeCashPocketLanguage } from './pocket-language.js';
 import { handleCashPocketOrganization } from './pocket-organization.js';
 import { handleCashPocketReceivable } from './pocket-receivables.js';
 import { handleCashPocketTransfer } from './pocket-transfer.js';
+import { enrichCashBalanceResult } from './report-position.js';
 import { cashReports } from './reports.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
@@ -238,7 +239,10 @@ export class CashAccessHandler implements VerticalHandler {
     // lançamento, o próprio handler chama uma segunda OpenAI antes do backend gravar.
     // Cálculos identificados pela IA são executados por script/SQL dentro do handler.
     const aiFirst = await cashAiFirstHandler.handle(context);
-    if (aiFirst) return await personalizePaymentMenu(company.id, aiFirst);
+    if (aiFirst) {
+      const positioned = await enrichCashBalanceResult(company.id, aiFirst);
+      return await personalizePaymentMenu(company.id, positioned);
+    }
 
     // Daqui para baixo ficam somente motores determinísticos/legados de execução e
     // fallback. Eles não precedem mais a camada semântica principal.
@@ -276,7 +280,7 @@ export class CashAccessHandler implements VerticalHandler {
 
     // Mesmo no fallback, toda matemática continua 100% determinística.
     const ledger = await handleCashLedgerDeterministic(context);
-    if (ledger) return ledger;
+    if (ledger) return await enrichCashBalanceResult(company.id, ledger);
 
     if (isCashDeletionCommand(context.combinedText)) {
       const bulk = await handleCashBulkDeletionCommand(context);
