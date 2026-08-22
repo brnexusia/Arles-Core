@@ -102,7 +102,8 @@ function replyPocketName(input: string): string | null {
   if (/^(sim|s|nao|não|n|cancela|cancelar|ok|certo|beleza)$/i.test(raw)) return null;
 
   const value = normalize(raw);
-  if (/\b(saldo|extrato|historico|relatorio|resumo|ajuda|menu|planos?|trial|categorias?|gastei|paguei|comprei|recebi|ganhei|entrou|faturei|quanto|quais|meus cofrinhos|apag|exclu|remov|delet|edit|alter)\b/.test(value)) {
+  if (/\b(saldo|extrato|historico|relatorio|resumo|ajuda|menu|planos?|trial|categorias?|gastei|paguei|comprei|recebi|ganhei|entrou|faturei|quanto|quais|meus cofrinhos)\b/.test(value)
+    || /\b(?:apag|exclu|remov|delet|edit|alter|corrig|transfer|guard|retir|cancel)\w*/.test(value)) {
     return null;
   }
   return raw.slice(0, 80);
