@@ -80,9 +80,8 @@ function options(): string {
 }
 
 /**
- * WhatsApp pode rejeitar mensagens gigantes. Mantemos todos os itens pendentes e,
- * quando a confirmação passa do limite confortável, dividimos em várias ações de texto
- * sem cortar lançamentos silenciosamente.
+ * Compatibilidade com estados antigos de confirmação. Novos lançamentos não usam
+ * mais esta tela, mas mantemos o código por uma janela de migração segura.
  */
 function chunkedText(parts: string[]): VerticalResult {
   const chunks: string[] = [];
@@ -126,8 +125,8 @@ function confirmationResult(transactions: CashTransactionInput[], intro: string)
 
 export function cashRegistrationSavedMessage(count: number): string {
   return count === 1
-    ? '✅ Confirmado! Lançamento registrado.'
-    : `✅ Confirmado! ${count} lançamentos registrados.`;
+    ? '✅ Lançamento registrado.'
+    : `✅ ${count} lançamentos registrados.`;
 }
 
 export function isCashRegistrationConfirmation(input: string): boolean {
@@ -206,14 +205,15 @@ function editHelp(pending: PendingCashRegistration, index: number | null): Verti
     pending.transactions.length > 1 ? '• “editar 2 valor 80”' : '• “o valor foi 80”',
     pending.transactions.length > 1 ? '• “item 1 categoria Pessoal”' : '• “categoria Pessoal”',
     '• “descrição: pão, leite e café”',
-    '• “foi ontem”',
-    '',
-    'Nada será registrado até você confirmar.'
+    '• “foi ontem”'
   ].join('\n'));
 }
 
-// Todo novo lançamento inicia um novo estado conversacional. A invalidação aqui é
-// central e cobre parser novo, lote, corpus legado e qualquer rota futura que use stage.
+/**
+ * Compatibilidade central para qualquer parser legado que ainda chegue aqui.
+ * A partir da v2.6 não existe mais staging/“responda sim”: o backend prepara, valida
+ * e persiste imediatamente. A confirmação deixou de fazer parte do fluxo do usuário.
+ */
 export async function stageCashRegistration(
   context: VerticalContext,
   transactions: CashTransactionInput[],
@@ -223,20 +223,32 @@ export async function stageCashRegistration(
   if (prepared.error) return text(prepared.error);
 
   await clearCashFinancialIntentContext(context.company.id, context.message.phone);
+  await clearPending(context.company.id, context.message.phone);
 
-  const pending: PendingCashRegistration = {
-    sourceMessageId: context.message.messageId || `cash:${Date.now()}`,
-    sourceMessage: sourceMessage.slice(0, 5000),
-    transactions: prepared.transactions.slice(0, MAX_PENDING_TRANSACTIONS)
-  };
-  await savePending(context.company.id, context.message.phone, pending);
+  const sourceMessageId = context.message.messageId || `cash:${Date.now()}`;
+  const source = sourceMessage.slice(0, 5000);
+  const saved = prepared.transactions.slice(0, MAX_PENDING_TRANSACTIONS);
 
-  return confirmationResult(
-    pending.transactions,
-    pending.transactions.length === 1
-      ? '🧾 Antes de registrar, confirma se entendi certo:'
-      : `🧾 Antes de registrar, confirma estes ${pending.transactions.length} lançamentos:`
-  );
+  for (let index = 0; index < saved.length; index += 1) {
+    const transaction = saved[index]!;
+    const created = await cashService.createTransaction({
+      companyId: context.company.id,
+      phone: context.message.phone,
+      sourceMessageId: saved.length === 1
+        ? sourceMessageId
+        : `${sourceMessageId}:item:${index + 1}`,
+      sourceMessage: source,
+      transaction
+    });
+    await assignCashTransactionPocket(context.company.id, String(created.id), transaction.pocketId);
+  }
+
+  await rememberCashRecentRecordReference(context.company.id, context.message.phone);
+
+  if (saved.length === 1) {
+    return text(`${cashRegistrationSavedMessage(1)} ${summary(saved)}`);
+  }
+  return text(cashRegistrationSavedMessage(saved.length));
 }
 
 async function deferredResult(context: VerticalContext, query: string): Promise<VerticalResult | null> {
@@ -260,6 +272,10 @@ async function deferredResult(context: VerticalContext, query: string): Promise<
   return result;
 }
 
+/**
+ * Mantido apenas para consumir eventualmente um estado de Redis criado por versões
+ * antigas durante um deploy gradual. O módulo v2.6 não chama mais esta função.
+ */
 export async function handleCashPendingConfirmation(context: VerticalContext): Promise<VerticalResult | undefined> {
   const pending = await getPending(context.company.id, context.message.phone);
   if (!pending) return undefined;
@@ -318,5 +334,5 @@ export async function handleCashPendingConfirmation(context: VerticalContext): P
     return confirmationResult(pending.transactions, `✏️ Ajustei o item ${index + 1}:`);
   }
 
-  return confirmationResult(pending.transactions, 'Tenho um lançamento aguardando sua confirmação.');
+  return confirmationResult(pending.transactions, 'Tenho um lançamento antigo aguardando confirmação.');
 }
