@@ -7,9 +7,10 @@ export interface CashSilenceWindowInput {
 
 /**
  * Regra conversacional do Cash:
- * - qualquer mensagem/presença reinicia a janela inteira;
- * - enquanto o usuário estiver digitando/gravando, os 5s ficam "congelados";
- * - somente depois que ele para começa uma nova contagem completa de silêncio.
+ * - qualquer mensagem/presença reinicia a janela curta;
+ * - enquanto o usuário estiver digitando/gravando, a janela fica congelada;
+ * - assim que ele para, usamos a janela configurada (250ms por padrão, teto 500ms)
+ *   para agrupar o último fragmento sem adicionar segundos artificiais à resposta.
  */
 export function cashSilenceRemainingMs(input: CashSilenceWindowInput): number {
   const silenceMs = Math.max(0, Number(input.silenceMs) || 0);
