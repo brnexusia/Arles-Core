@@ -293,27 +293,26 @@ export async function executeCashAiDeletion(
   if (plan.target === 'records' || plan.target === 'records_and_pockets') {
     if (plan.record_scope === 'one') {
       const index = plan.record_index ?? 1;
-      const lastContext = await getCashQueryContext(context.company.id, context.message.phone);
       const rows = await cashService.listRecent(context.company.id, context.message.phone, Math.max(5, index));
       const row = rows[index - 1];
       if (!row) return text(`Não encontrei o registro ${index}. Mande *histórico* para ver a numeração atual.`);
 
-      // Exclusão unitária continua direta; confirmação fica só para ações em lote.
-      await cashService.deleteTransaction(context.company.id, String((row as any).id));
       if (plan.target === 'records') {
+        // Exclusão unitária isolada continua direta; confirmação fica só para lote.
+        await cashService.deleteTransaction(context.company.id, String((row as any).id));
         return text(`🗑️ Registro ${index} apagado.`);
       }
-      // Se a mesma mensagem também apaga cofrinhos, o registro já foi removido e os
-      // cofrinhos seguem para a confirmação em lote abaixo.
-      void lastContext;
+
+      // Em comando combinado, nada é executado antes da confirmação do conjunto.
+      recordMode = 'ids';
+      recordIds = [String((row as any).id)];
+      recordCount = 1;
     } else if (plan.record_scope === 'all') {
       recordMode = 'all';
       recordCount = await countRecords(context.company.id);
     } else if (plan.record_scope === 'shown') {
       const lastQuery = await getCashQueryContext(context.company.id, context.message.phone);
       if (lastQuery && lastQuery !== HISTORY_CONTEXT && plan.target === 'records') {
-        // Reaproveita o mecanismo seguro existente que resolve exatamente a última
-        // consulta exibida e pede confirmação antes de apagar.
         return await handleCashBulkDeletionCommand({
           ...context,
           combinedText: 'apague todos esses registros'
@@ -346,7 +345,6 @@ export async function executeCashAiDeletion(
     }
   }
 
-  // Um único cofrinho, sem outra exclusão em lote, mantém o comportamento simples.
   if (plan.target === 'pockets' && pocketIds.length === 1) {
     const done = await executePending(context, {
       recordMode: null,
@@ -396,8 +394,6 @@ export async function handleCashPendingAiDeletion(context: VerticalContext): Pro
   }
 
   if (!isConfirmation(context.combinedText)) {
-    // Uma nova intenção explícita sempre vence uma confirmação antiga. O estado é
-    // descartado para não sequestrar a próxima mensagem nem um “sim” futuro.
     await clearPending(context);
     return undefined;
   }
