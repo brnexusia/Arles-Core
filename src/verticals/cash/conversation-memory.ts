@@ -37,26 +37,32 @@ async function append(
   const normalizedPhone = phoneDigits(phone);
   if (!clean || !normalizedPhone) return;
 
-  await db.query(
-    `insert into cash_conversation_messages(company_id,phone,role,message_id,body)
-     values($1,$2,$3,$4,$5)
-     on conflict (company_id,phone,role,message_id) do nothing`,
-    [companyId, normalizedPhone, role, messageId, clean]
-  );
+  try {
+    await db.query(
+      `insert into cash_conversation_messages(company_id,phone,role,message_id,body)
+       values($1,$2,$3,$4,$5)
+       on conflict (company_id,phone,role,message_id) do nothing`,
+      [companyId, normalizedPhone, role, messageId, clean]
+    );
 
-  // A memória operacional é deliberadamente curta: apenas as 30 mensagens mais
-  // recentes daquele usuário naquela empresa. O restante não entra no prompt.
-  await db.query(
-    `delete from cash_conversation_messages
-     where id in (
-       select id
-       from cash_conversation_messages
-       where company_id=$1 and phone=$2
-       order by id desc
-       offset $3
-     )`,
-    [companyId, normalizedPhone, MAX_MESSAGES]
-  );
+    // A memória operacional é deliberadamente curta: apenas as 30 mensagens mais
+    // recentes daquele usuário naquela empresa. O restante não entra no prompt.
+    await db.query(
+      `delete from cash_conversation_messages
+       where id in (
+         select id
+         from cash_conversation_messages
+         where company_id=$1 and phone=$2
+         order by id desc
+         offset $3
+       )`,
+      [companyId, normalizedPhone, MAX_MESSAGES]
+    );
+  } catch (error) {
+    // Memória melhora o entendimento, mas jamais pode derrubar o Cash. Durante um
+    // deploy/migration ou indisponibilidade transitória, seguimos sem contexto antigo.
+    console.warn('[CashMemory] falha ao persistir contexto; seguindo sem bloquear a conversa:', error);
+  }
 }
 
 export async function rememberCashUserMessage(context: VerticalContext): Promise<void> {
@@ -99,34 +105,43 @@ export async function loadCashConversationMemory(
   const normalizedPhone = phoneDigits(phone);
   if (!normalizedPhone) return [];
 
-  const result = await db.query<MemoryRow>(
-    `select role,body,message_id,created_at::text
-     from (
-       select id,role,body,message_id,created_at
-       from cash_conversation_messages
-       where company_id=$1 and phone=$2
-       order by id desc
-       limit $3
-     ) recent
-     order by id asc`,
-    [companyId, normalizedPhone, bounded]
-  );
+  try {
+    const result = await db.query<MemoryRow>(
+      `select role,body,message_id,created_at::text
+       from (
+         select id,role,body,message_id,created_at
+         from cash_conversation_messages
+         where company_id=$1 and phone=$2
+         order by id desc
+         limit $3
+       ) recent
+       order by id asc`,
+      [companyId, normalizedPhone, bounded]
+    );
 
-  return result.rows.map(row => ({
-    role: row.role,
-    text: cleanText(row.body),
-    messageId: row.message_id ? String(row.message_id) : null,
-    at: String(row.created_at)
-  }));
+    return result.rows.map(row => ({
+      role: row.role,
+      text: cleanText(row.body),
+      messageId: row.message_id ? String(row.message_id) : null,
+      at: String(row.created_at)
+    }));
+  } catch (error) {
+    console.warn('[CashMemory] falha ao carregar contexto; usando conversa sem memória anterior:', error);
+    return [];
+  }
 }
 
 export async function clearCashConversationMemory(companyId: string, phone: string): Promise<void> {
   const normalizedPhone = phoneDigits(phone);
   if (!normalizedPhone) return;
-  await db.query(
-    'delete from cash_conversation_messages where company_id=$1 and phone=$2',
-    [companyId, normalizedPhone]
-  );
+  try {
+    await db.query(
+      'delete from cash_conversation_messages where company_id=$1 and phone=$2',
+      [companyId, normalizedPhone]
+    );
+  } catch (error) {
+    console.warn('[CashMemory] falha ao limpar contexto:', error);
+  }
 }
 
 export const cashConversationMemorySize = MAX_MESSAGES;
