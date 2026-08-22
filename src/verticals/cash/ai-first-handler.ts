@@ -116,7 +116,7 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             'transaction: dinheiro REAL que já entrou/saiu e deve virar lançamento. Frases curtas como “farmácia 45”, “35 no almoço” ou “entrou 1200 do cliente” podem ser lançamento quando o sentido for factual.',
             'mixed: a mesma mensagem mistura dois ou mais objetivos diferentes, por exemplo lançar gastos E perguntar saldo/total, ou lançamentos reais E previsões.',
             'query: consultar registros reais, filtros, valores, lojas, categorias ou períodos.',
-            'balance: consultar saldo atual/acumulado.',
+            'balance: consultar saldo atual/acumulado ou pedir um resumo/visão geral da situação financeira.',
             'projection: fazer conta/simulação pontual, por exemplo “se eu gastar 50, quanto sobra?”. A conta será feita por script.',
             'pocket: criar/listar/consultar/usar cofrinho, caixinha ou envelope.',
             'forecast_schedule: criar previsão/agendamento futuro ou recorrente. Nunca é lançamento real imediato.',
@@ -224,9 +224,13 @@ export class CashAiFirstHandler implements VerticalHandler {
       return text(cashHelpMessage(section));
     }
 
-    // Cálculos e leituras: a IA só identificou a intenção. O resultado real vem de
-    // script/SQL, nunca de matemática feita pelo modelo.
+    // “Resumo/visão geral” usa a composição completa (lançamentos + última posição
+    // conhecida dos cofrinhos). “Saldo” puro continua sendo cálculo determinístico.
     if (understood.intent === 'balance') {
+      const original = normalize(context.combinedText);
+      if (/\b(resumo|visao geral|visao|situacao financeira|como estao minhas financas)\b/.test(original)) {
+        return await cashBroadHandler.handle({ ...context, combinedText: 'resumo' });
+      }
       return await handleCashLedgerDeterministic({ ...context, combinedText: 'saldo' });
     }
 
