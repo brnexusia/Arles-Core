@@ -3,6 +3,7 @@ import { env } from '../../config/env.js';
 import { platformJobService } from '../../platform/jobs/job.service.js';
 import type { ModuleJobContext } from '../../platform/modules/contract.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
+import { enrichCashFinancialReport, loadCashClosingPositions } from './report-position.js';
 import { cashService } from './service.js';
 import type { CashSummary } from './types.js';
 import {
@@ -152,14 +153,18 @@ export class CashReports {
       settings.owner_phone
     ) {
       const window = previousWeekWindow();
-      const summary = await cashService.summary(context.companyId, window.from, window.to);
-      await this.send(settings.owner_phone, formatCashReport({
+      const [summary, positions] = await Promise.all([
+        cashService.summary(context.companyId, window.from, window.to),
+        loadCashClosingPositions(context.companyId)
+      ]);
+      const report = enrichCashFinancialReport(formatCashReport({
         title: 'Relatório Semanal',
         from: window.from,
         to: window.to,
         summary,
         name: settings.owner_name
-      }));
+      }), positions);
+      await this.send(settings.owner_phone, report);
     }
     await this.ensureScheduled(context.companyId);
   }
@@ -174,18 +179,20 @@ export class CashReports {
     ) {
       const window = previousMonthWindow();
       const previousWindow = monthBeforeWindow(window.from);
-      const [summary, previous] = await Promise.all([
+      const [summary, previous, positions] = await Promise.all([
         cashService.summary(context.companyId, window.from, window.to),
-        cashService.summary(context.companyId, previousWindow.from, previousWindow.to)
+        cashService.summary(context.companyId, previousWindow.from, previousWindow.to),
+        loadCashClosingPositions(context.companyId)
       ]);
-      await this.send(settings.owner_phone, formatCashReport({
+      const report = enrichCashFinancialReport(formatCashReport({
         title: 'Relatório Mensal',
         from: window.from,
         to: window.to,
         summary,
         previous,
         name: settings.owner_name
-      }));
+      }), positions);
+      await this.send(settings.owner_phone, report);
     }
     await this.ensureScheduled(context.companyId);
   }
@@ -200,9 +207,7 @@ export class CashReports {
       'Seu trial acaba em 2 dias.',
       'Para continuar usando o Arles Cash, escolha um plano:',
       '',
-      paymentMenu,
-      '',
-      'O pagamento é confirmado pela Cakto e o acesso é liberado automaticamente.'
+      paymentMenu
     ].join('\n'));
   }
 
@@ -213,14 +218,17 @@ export class CashReports {
       from: settings.trial_started_at ? isoBrazil(settings.trial_started_at) : isoBrazil(addBrazilDays(new Date(), -6)),
       to: isoBrazil()
     };
-    const summary = await cashService.summary(context.companyId, window.from, window.to);
-    const report = formatCashReport({
+    const [summary, positions] = await Promise.all([
+      cashService.summary(context.companyId, window.from, window.to),
+      loadCashClosingPositions(context.companyId)
+    ]);
+    const report = enrichCashFinancialReport(formatCashReport({
       title: 'Relatório Semanal',
       from: window.from,
       to: window.to,
       summary,
       name: settings.owner_name
-    });
+    }), positions);
     const paymentMenu = await cashPaymentMenuForCompany(context.companyId);
     await this.send(settings.owner_phone, [
       report,
@@ -229,9 +237,7 @@ export class CashReports {
       '⏰ Seu trial encerra hoje!',
       'Continue acompanhando suas finanças — escolha seu plano:',
       '',
-      paymentMenu,
-      '',
-      'Assim que a Cakto confirmar o pagamento, seu acesso é liberado automaticamente.'
+      paymentMenu
     ].join('\n'));
   }
 
@@ -246,9 +252,7 @@ export class CashReports {
       '',
       'Para reativar, escolha um plano:',
       '',
-      paymentMenu,
-      '',
-      'O pagamento é confirmado pela Cakto e seu histórico continua na mesma conta.'
+      paymentMenu
     ].join('\n'));
   }
 }
