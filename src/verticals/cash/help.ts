@@ -14,28 +14,26 @@ export function cashHelpSection(input: string): CashHelpSection | null {
   const value = normalizeCashText(input);
   if (!value) return null;
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(agendar|agendamento|previsao|previsoes|previsto|previstos|projecao futura|contas futuras)\b/.test(value)
-    || /^(?:agendamento|agendamentos|previsao|previsoes|previstos?|agenda financeira)$/.test(value)) return 'forecasts';
+  // Ajuda só é ajuda quando o usuário realmente pede explicação. Palavras de ação
+  // isoladas como “histórico”, “saldo”, “planos”, “cofrinhos” e “relatório mensal”
+  // devem executar a função, e não abrir um tutorial.
+  const asksHelp = /\b(ajuda|guia|como|ensina|explica|aprender|tutorial)\b/.test(value);
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(cofrinho|cofrinhos|caixinha|caixinhas|separar dinheiro)\b/.test(value)
-    || /^(?:cofrinho|cofrinhos|caixinha|caixinhas)$/.test(value)) return 'pockets';
+  if (asksHelp && /\b(agendar|agendamento|previsao|previsoes|previsto|previstos|projecao futura|contas futuras)\b/.test(value)) return 'forecasts';
+
+  if (asksHelp && /\b(cofrinho|cofrinhos|caixinha|caixinhas|separar dinheiro)\b/.test(value)) return 'pockets';
 
   // Gestão vem antes de “registro”: “como edito um registro?” é ajuda de edição,
   // não instrução de como registrar uma movimentação nova.
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(editar|edito|corrigir|corrijo|alterar|altero|apagar|apago|remover|removo|excluir|excluo|desfazer|desfaco)\b/.test(value)
-    || /^(?:editar|corrigir|apagar|remover|excluir|desfazer)$/.test(value)) return 'manage';
+  if (asksHelp && /\b(editar|edito|corrigir|corrijo|alterar|altero|apagar|apago|remover|removo|excluir|excluo|desfazer|desfaco)\b/.test(value)) return 'manage';
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(registrar|registro|lancar|lancamento|despesa|receita|guardar|reserva)\b/.test(value)
-    || /^(?:registrar|registro|lancamentos?|despesas?|receitas?)$/.test(value)) return 'register';
+  if (asksHelp && /\b(registrar|registro|lancar|lancamento|despesa|receita|guardar|reserva)\b/.test(value)) return 'register';
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(consultar|consulta|pesquisar|pesquisa|buscar|gastos|saldo|historico|lista|simular|simulacao)\b/.test(value)
-    || /^(?:consultar|consulta|pesquisar|pesquisa|historico|saldo|simular|simulacao)$/.test(value)) return 'query';
+  if (asksHelp && /\b(consultar|consulta|pesquisar|pesquisa|buscar|gastos|saldo|historico|lista|simular|simulacao)\b/.test(value)) return 'query';
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(relatorio|relatorios|semanal|mensal)\b/.test(value)
-    || /^(?:relatorios?|semanal|mensal)$/.test(value)) return 'reports';
+  if (asksHelp && /\b(relatorio|relatorios|semanal|mensal|resumo)\b/.test(value)) return 'reports';
 
-  if (/\b(ajuda|guia|como|ensina|explica)\b.*\b(plano|planos|preco|precos|pagamento|assinar|trial|teste gratis)\b/.test(value)
-    || /^(?:planos?|pagamento|trial)$/.test(value)) return 'plans';
+  if (asksHelp && /\b(plano|planos|preco|precos|pagamento|assinar|trial|teste gratis)\b/.test(value)) return 'plans';
 
   if (/^(ajuda|menu|comandos|guia|guia de ajuda|tutorial|me ajuda|me ensina|como usar|como uso|o que voce faz|o que posso fazer|como funciona)[!.? ]*$/.test(value)) return 'menu';
 
