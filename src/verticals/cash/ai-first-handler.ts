@@ -3,8 +3,11 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
+import { executeCashAiDeletion, cashHistoryContextMarker } from './ai-deletion-executor.js';
 import { cashBroadHandler } from './broad-handler.js';
 import { handleCashPocketCommand } from './cofrinhos.js';
+import { cashConversationHandler } from './conversation.js';
+import { rememberCashQueryContext } from './conversation-state.js';
 import { cashHelpMessage, cashHelpSection } from './help.js';
 import {
   handleCashLedgerDeterministic,
@@ -84,7 +87,7 @@ export function cashSocialReply(kind: SemanticIntent['social_kind'] | null | und
 function destructiveOriginalIsSafe(intent: 'edit' | 'delete', original: string): boolean {
   const value = normalize(original);
   if (/\b(conta|perfil|cadastro|dados pessoais|usuario|usuário)\b/.test(value)) return false;
-  if (intent === 'delete') return /\b(apag|exclu|remov|retir|delet|cancela(?:r)?\s+(?:o\s+)?(?:registro|lancamento|lançamento))\w*/.test(value);
+  if (intent === 'delete') return /\b(apag|exclu|remov|retir|delet|cancel)\w*/.test(value);
   return /\b(edit|alter|mud|corrig|ajust|troc|errei|errado)\w*/.test(value);
 }
 
@@ -103,34 +106,43 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
     const response = await client.responses.parse({
       model: env.cashOpenaiModel,
       reasoning: { effort: 'minimal' },
-      max_output_tokens: 280,
+      max_output_tokens: 300,
       input: [
         {
           role: 'system',
           content: [
             'Você é a PRIMEIRA camada de compreensão do Arles Cash.',
-            'Sua função é entender a intenção em português brasileiro natural: erros, abreviações, gírias e frases incompletas.',
+            'Sua função é entender a intenção em português brasileiro natural: erros, abreviações, gírias, referências como “isso/essas informações” e frases incompletas.',
             'Você NÃO consulta banco, NÃO calcula saldo, NÃO soma valores, NÃO grava e NÃO apaga nada.',
             'Você somente classifica a intenção e, quando útil, reescreve de forma explícita para o backend seguro.',
-            'Preserve exatamente valores, sinais, datas, nomes, períodos e recorrências. Nunca invente informação.',
+            'Preserve exatamente valores, sinais, datas, nomes, períodos, números de itens e recorrências. Nunca invente informação.',
             'transaction: dinheiro REAL que já entrou/saiu e deve virar lançamento. Frases curtas como “farmácia 45”, “35 no almoço” ou “entrou 1200 do cliente” podem ser lançamento quando o sentido for factual.',
-            'mixed: a mesma mensagem mistura dois ou mais objetivos diferentes, por exemplo lançar gastos E perguntar saldo/total, ou lançamentos reais E previsões.',
+            'mixed: somente quando a mensagem mistura objetivos de naturezas diferentes, como lançar gasto E perguntar saldo. NÃO use mixed só porque a pessoa quer apagar registros e cofrinhos na mesma mensagem: isso continua sendo delete.',
             'query: consultar registros reais, filtros, valores, lojas, categorias ou períodos.',
             'balance: consultar saldo atual/acumulado ou pedir um resumo/visão geral da situação financeira.',
             'projection: fazer conta/simulação pontual, por exemplo “se eu gastar 50, quanto sobra?”. A conta será feita por script.',
-            'pocket: criar/listar/consultar/usar cofrinho, caixinha ou envelope.',
+            'pocket: criar/listar/consultar/mover dinheiro em cofrinho, caixinha ou envelope. Se a ação principal for APAGAR um cofrinho, use delete.',
             'forecast_schedule: criar previsão/agendamento futuro ou recorrente. Nunca é lançamento real imediato.',
             'forecast_query: consultar previsões ou saldo projetado.',
-            'history: últimos registros.',
+            'history: mostrar os últimos registros. “histórico”, “meus registros”, “o que registrei” = history, nunca help.',
             'weekly_report/monthly_report: relatório real da semana/mês.',
-            'edit/delete/undo: gestão explícita de lançamentos existentes.',
+            'edit: corrigir lançamento existente.',
+            'delete: qualquer exclusão explícita de registro(s), lançamento(s), histórico e/ou cofrinho(s).',
+            'undo: restaurar algo que já foi excluído. “coloca ele de novo”, “restaura”, “desfaz exclusão” = undo.',
             'help/plans/trial/categories/schedule: funções administrativas do produto.',
             'acknowledgement: conversa social curta sem ação financeira.',
             'social_kind só é diferente de none quando intent=acknowledgement: greeting para oi/olá/oii/bom dia/boa tarde/boa noite; thanks para obrigado/obrigada/valeu; farewell para tchau/até mais/falou; wellbeing para “tudo bem?”/“como você está?”; ack para ok/certo/beleza/entendi/show.',
-            'Exemplos obrigatórios: “Oii” => intent=acknowledgement e social_kind=greeting; “valeu” => acknowledgement/thanks; “certo” => acknowledgement/ack.',
+            'Exemplos obrigatórios:',
+            '“Oii” => acknowledgement/greeting.',
+            '“histórico” => history.',
+            '“apaga o 2” => delete; NUNCA undo.',
+            '“quero que apague todos os lançamentos que fiz anteriormente” => delete.',
+            '“apague todas essas informações” => delete e rewritten_text deve tornar a referência explícita, por exemplo “apague todos esses registros mostrados”.',
+            '“exclua o cofrinho Poupex e o cofrinho Sonho” => delete, preservando os dois nomes em rewritten_text.',
+            '“exclua todos os lançamentos anteriores e delete todos os cofrinhos que fiz” => delete, não mixed.',
             'Para qualquer intent diferente de acknowledgement, social_kind=none.',
             'unknown: somente quando não houver informação suficiente para escolher com segurança.',
-            'rewritten_text: torne a intenção explícita sem alterar fatos. Para transaction, preserve valor e descrição e use uma frase curta factual.',
+            'rewritten_text: torne a intenção explícita sem alterar fatos. Preserve todos os alvos e nomes. Para transaction, preserve valor e descrição e use uma frase curta factual.',
             'clarification: use somente quando intent=unknown e faça uma pergunta curta e específica.',
             'CRÍTICO: cálculo, saldo, total, média, diferença, porcentagem e projeção são sempre executados por script/SQL, nunca pelo modelo.',
             'CRÍTICO: “todo dia 10 gasto 300” = forecast_schedule; “se eu gastar 300” = projection; nenhum deles é transaction.',
@@ -166,7 +178,6 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
 
 function canonical(intent: SemanticIntent['intent']): string | null {
   const map: Partial<Record<SemanticIntent['intent'], string>> = {
-    history: 'histórico',
     weekly_report: 'relatório semanal',
     monthly_report: 'relatório mensal',
     undo: 'coloca ele de novo',
@@ -197,9 +208,10 @@ export class CashAiFirstHandler implements VerticalHandler {
       return clarification ? text(clarification) : null;
     }
 
-    // Mensagens com múltiplos objetivos são entregues ao decompositor determinístico
-    // legado, mas somente DEPOIS de a OpenAI identificar que são mistas.
-    if (understood.intent === 'mixed') return null;
+    if (understood.intent === 'mixed') {
+      context.combinedText = understood.rewritten_text?.trim() || context.combinedText;
+      return null;
+    }
 
     if (understood.intent === 'transaction') {
       // Barreira determinística pós-IA: mesmo se o classificador errar, perguntas,
@@ -222,6 +234,12 @@ export class CashAiFirstHandler implements VerticalHandler {
       const requested = understood.rewritten_text?.trim() || context.combinedText;
       const section = cashHelpSection(requested) ?? 'menu';
       return text(cashHelpMessage(section));
+    }
+
+    if (understood.intent === 'history') {
+      // Marca o contexto para frases seguintes como “apaga todas essas informações”.
+      await rememberCashQueryContext(context.company.id, context.message.phone, cashHistoryContextMarker);
+      return await cashConversationHandler.handle({ ...context, combinedText: 'histórico' });
     }
 
     // “Resumo/visão geral” usa a composição completa (lançamentos + última posição
@@ -253,8 +271,17 @@ export class CashAiFirstHandler implements VerticalHandler {
       return null;
     }
 
-    if (understood.intent === 'edit' || understood.intent === 'delete') {
-      if (!destructiveOriginalIsSafe(understood.intent, context.combinedText)) return null;
+    if (understood.intent === 'delete') {
+      if (!destructiveOriginalIsSafe('delete', context.combinedText)) return null;
+      return await executeCashAiDeletion(
+        context,
+        understood.rewritten_text,
+        semantic.estimatedUsd
+      );
+    }
+
+    if (understood.intent === 'edit') {
+      if (!destructiveOriginalIsSafe('edit', context.combinedText)) return null;
       const rewritten = understood.rewritten_text?.trim();
       return await cashBroadHandler.handle(rewritten
         ? { ...context, combinedText: rewritten }
