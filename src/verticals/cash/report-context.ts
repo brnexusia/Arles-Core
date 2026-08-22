@@ -1,5 +1,6 @@
 import { redis } from '../../infrastructure/redis.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
+import { enrichCashFinancialReport, loadCashClosingPositions } from './report-position.js';
 import { formatCashReport } from './reports.js';
 import { cashService } from './service.js';
 import {
@@ -122,27 +123,31 @@ export async function handleCashReportContext(context: VerticalContext): Promise
   await rememberReportKind(context.company.id, context.message.phone, request.kind);
 
   if (request.kind === 'weekly') {
-    const summary = await cashService.summary(context.company.id, period.from, period.to);
-    return text(formatCashReport({
+    const [summary, positions] = await Promise.all([
+      cashService.summary(context.company.id, period.from, period.to),
+      loadCashClosingPositions(context.company.id)
+    ]);
+    return text(enrichCashFinancialReport(formatCashReport({
       title: 'Relatório Semanal',
       from: period.from,
       to: period.to,
       summary,
       name: settings.owner_name
-    }));
+    }), positions));
   }
 
   const previousPeriod = monthBeforeWindow(period.from);
-  const [summary, previous] = await Promise.all([
+  const [summary, previous, positions] = await Promise.all([
     cashService.summary(context.company.id, period.from, period.to),
-    cashService.summary(context.company.id, previousPeriod.from, previousPeriod.to)
+    cashService.summary(context.company.id, previousPeriod.from, previousPeriod.to),
+    loadCashClosingPositions(context.company.id)
   ]);
-  return text(formatCashReport({
+  return text(enrichCashFinancialReport(formatCashReport({
     title: 'Relatório Mensal',
     from: period.from,
     to: period.to,
     summary,
     previous,
     name: settings.owner_name
-  }));
+  }), positions));
 }
