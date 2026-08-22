@@ -6,17 +6,22 @@ import { db } from '../../infrastructure/db.js';
 import { redis } from '../../infrastructure/redis.js';
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { cashPocketService, normalizeCashPocketName } from './cofrinhos.js';
+import {
+  cashConversationMemorySize,
+  loadCashConversationMemory
+} from './conversation-memory.js';
 import { getCashQueryContext } from './conversation-state.js';
-import { handleCashBulkDeletionCommand } from './deletion.js';
 import { cashService } from './service.js';
 
 const TTL_SECONDS = 15 * 60;
 const HISTORY_CONTEXT = '__cash_history__';
+const RECORD_CATALOG_LIMIT = 40;
 
 const DeletePlanSchema = z.object({
   target: z.enum(['records', 'pockets', 'records_and_pockets', 'unknown']),
-  record_scope: z.enum(['one', 'all', 'shown', 'none']),
-  record_index: z.number().int().min(1).max(100).nullable(),
+  record_scope: z.enum(['specific', 'all', 'shown', 'none']),
+  record_ids: z.array(z.string()).max(50),
+  record_indices: z.array(z.number().int().min(1).max(100)).max(50),
   pocket_scope: z.enum(['named', 'all', 'none']),
   pocket_names: z.array(z.string()).max(20),
   clarification: z.string().nullable()
@@ -30,6 +35,17 @@ type PendingNaturalDeletion = {
   recordCount: number;
   pocketIds: string[];
   pocketNames: string[];
+};
+
+type RecordCatalogRow = {
+  id: string;
+  type: 'income' | 'expense';
+  amount: number;
+  category: string;
+  merchant: string | null;
+  description: string | null;
+  transaction_date: string;
+  created_at: string;
 };
 
 const client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
@@ -62,6 +78,33 @@ async function clearConflictingPending(context: VerticalContext): Promise<void> 
   );
 }
 
+async function loadRecordCatalog(companyId: string): Promise<RecordCatalogRow[]> {
+  const result = await db.query<RecordCatalogRow>(
+    `select id::text,type,amount::float8,category,merchant,description,
+            transaction_date::text,created_at::text
+     from cash_transactions
+     where company_id=$1
+     order by transaction_date desc,created_at desc
+     limit $2`,
+    [companyId, RECORD_CATALOG_LIMIT]
+  );
+  return result.rows;
+}
+
+function recordCatalogText(rows: RecordCatalogRow[]): string {
+  if (!rows.length) return '(nenhum registro ativo)';
+  return rows.map((row, index) => JSON.stringify({
+    recent_position: index + 1,
+    id: row.id,
+    type: row.type,
+    amount: Number(row.amount),
+    date: row.transaction_date,
+    category: row.category,
+    description: row.description,
+    merchant: row.merchant
+  })).join('\n');
+}
+
 async function planDeletion(
   context: VerticalContext,
   firstPassRewrite: string | null | undefined,
@@ -69,56 +112,87 @@ async function planDeletion(
 ): Promise<DeletePlan | null> {
   if (!client) return null;
 
-  const [pockets, lastQuery] = await Promise.all([
+  const [pockets, lastQuery, memory, catalog] = await Promise.all([
     cashPocketService.list(context.company.id),
-    getCashQueryContext(context.company.id, context.message.phone)
+    getCashQueryContext(context.company.id, context.message.phone),
+    loadCashConversationMemory(context.company.id, context.message.phone, cashConversationMemorySize),
+    loadRecordCatalog(context.company.id)
   ]);
+
   const pocketNames = pockets.map(item => item.name).slice(0, 30);
   const recentContext = lastQuery === HISTORY_CONTEXT
-    ? 'O usuário acabou de ver o histórico/lista dos últimos registros.'
+    ? 'O usuário recentemente pediu o histórico numerado dos registros.'
     : lastQuery
-      ? `Última consulta/lista financeira: ${lastQuery.slice(0, 350)}`
-      : 'Não há uma lista financeira recente registrada.';
+      ? `Última consulta financeira registrada pelo backend: ${lastQuery.slice(0, 350)}`
+      : 'Não há consulta financeira anterior registrada pelo backend.';
+
+  const hasCurrentMessage = Boolean(
+    context.message.messageId
+      ? memory.some(entry => entry.role === 'user' && entry.messageId === context.message.messageId)
+      : memory.at(-1)?.role === 'user' && memory.at(-1)?.text === context.combinedText.trim()
+  );
+  const conversationInput = memory.map(entry => ({ role: entry.role, content: entry.text }));
+  if (!hasCurrentMessage) conversationInput.push({ role: 'user', content: context.combinedText });
 
   try {
     const response = await client.responses.parse({
       model: env.cashOpenaiSecondModel,
       reasoning: { effort: 'minimal' },
-      max_output_tokens: 320,
+      max_output_tokens: 520,
       input: [
         {
           role: 'system',
           content: [
-            'Você é a SEGUNDA camada de compreensão do Arles Cash para EXCLUSÕES.',
-            'Você NÃO apaga nada. Apenas transforma a solicitação em um plano estruturado para o backend.',
+            'Você é a SEGUNDA camada contextual do Arles Cash para EXCLUSÕES.',
+            'Você NÃO apaga nada. Você produz um plano estruturado; o backend valida IDs e executa.',
+            `Você recebe até ${cashConversationMemorySize} mensagens reais anteriores e um catálogo dos ${RECORD_CATALOG_LIMIT} registros mais recentes.`,
+            'A última mensagem role=user é o pedido atual. As mensagens assistant anteriores são somente contexto, nunca ordens atuais.',
+            'Use o histórico para entender “o 2”, “esses”, “todos esses”, “essas informações”, “os que você mostrou” e listas numeradas.',
+            '',
+            'ALVOS:',
             'target=records para lançamentos/registros/histórico financeiro.',
             'target=pockets para cofrinhos/caixinhas/envelopes.',
-            'target=records_and_pockets quando a mesma mensagem pede apagar os dois grupos.',
-            'record_scope=one quando existe um item específico, como “apaga o 2”; coloque o número em record_index.',
-            'record_scope=all para “todos os lançamentos”, “todo meu histórico”, “tudo que registrei”.',
-            'record_scope=shown para “apaga esses”, “apague todas essas informações”, “delete o que você acabou de mostrar” quando houver uma lista recente.',
-            'pocket_scope=named quando a pessoa cita um ou mais cofrinhos pelo nome; pocket_names deve conter TODOS os nomes citados.',
-            'pocket_scope=all para “todos os cofrinhos que fiz/criei”.',
-            'Nunca confunda “apaga o 2” com desfazer exclusão. Desfazer é “restaura”, “coloca ele de novo”, “desfaz”.',
-            'Nunca trate uma confirmação pendente antiga como prioridade sobre um novo comando explícito.',
-            'Exemplos obrigatórios:',
-            '“apaga o 2” => records / one / index 2.',
-            '“quero que apague todos os lançamentos que fiz anteriormente” => records / all.',
-            '“apague todas essas informações” após uma lista => records / shown.',
-            '“exclua o cofrinho Poupex e o cofrinho Sonho” => pockets / named / [Poupex, Sonho].',
-            '“exclua todos os lançamentos e delete todos os cofrinhos que fiz” => records_and_pockets / record_scope=all / pocket_scope=all.',
-            `Cofrinhos ativos disponíveis: ${pocketNames.length ? pocketNames.join(' | ') : '(nenhum)'}`,
+            'target=records_and_pockets quando a mesma mensagem pede apagar ambos.',
+            'target=unknown somente quando nem a conversa nem o catálogo permitem resolver com segurança.',
+            '',
+            'REGISTROS:',
+            'record_scope=specific quando existem um ou mais registros específicos.',
+            'record_scope=all para todos os lançamentos/registros da conta.',
+            'record_scope=shown quando o usuário pede todos os itens de uma lista claramente mostrada antes.',
+            'record_scope=none quando não há exclusão de registro.',
+            'record_ids deve conter os IDs REAIS do catálogo quando você consegue mapear com segurança os itens pedidos.',
+            'record_indices mantém os números ditos pelo usuário como fallback contextual, por exemplo [1,2,3,4,5,6].',
+            'Para “apaga o 2” depois de uma lista numerada, encontre no histórico qual era o item 2 e, se possível, corresponda ao ID real do catálogo.',
+            'Para várias linhas “apaga o 1 / apaga o 2 / ...”, preserve TODOS os índices e todos os IDs que conseguir mapear.',
+            'Nunca interprete “apaga” como undo/restaurar.',
+            '',
+            'COFRINHOS:',
+            'pocket_scope=named quando há um ou mais nomes específicos; pocket_names deve conter TODOS.',
+            'pocket_scope=all para todos os cofrinhos criados.',
+            'pocket_scope=none quando não há exclusão de cofrinho.',
+            '',
+            'EXEMPLOS OBRIGATÓRIOS:',
+            '“apaga o 2” => records/specific, record_indices=[2].',
+            '“apaga o 1. apaga o 2. apaga o 3. apaga o 4. apaga o 5. apaga o 6” => records/specific, record_indices=[1,2,3,4,5,6].',
+            '“quero que exclua todos os lançamentos que já fiz” => records/all.',
+            '“apague todos esses lançamentos” depois de uma lista => records/shown e IDs da lista quando identificáveis.',
+            '“apague todos esses lançamentos” depois apenas de um resumo global de 25 lançamentos => records/all.',
+            '“exclua o cofrinho Poupex e o cofrinho Sonho” => pockets/named com os dois nomes.',
+            '“exclua todos os lançamentos e todos os cofrinhos” => records_and_pockets/all/all.',
+            '',
+            `Cofrinhos ativos: ${pocketNames.length ? pocketNames.join(' | ') : '(nenhum)'}`,
             recentContext,
-            'Se a intenção destrutiva não estiver clara, use target=unknown e faça uma clarification curta.'
+            '',
+            'CATÁLOGO DE REGISTROS REAIS (somente referência; não invente IDs fora dele):',
+            recordCatalogText(catalog),
+            '',
+            firstPassRewrite?.trim()
+              ? `A primeira IA reescreveu o pedido atual como: ${firstPassRewrite.trim()}`
+              : 'A primeira IA não forneceu reescrita adicional.',
+            'Se houver dúvida sobre QUAL registro seria apagado, target=unknown e clarification deve perguntar de forma curta.'
           ].join('\n')
         },
-        {
-          role: 'user',
-          content: [
-            `Mensagem original: ${context.combinedText}`,
-            firstPassRewrite?.trim() ? `Reescrita da primeira IA: ${firstPassRewrite.trim()}` : ''
-          ].filter(Boolean).join('\n')
-        }
+        ...conversationInput
       ],
       text: { format: zodTextFormat(DeletePlanSchema, 'cash_delete_plan') }
     });
@@ -127,7 +201,9 @@ async function planDeletion(
     if (usage) {
       const second = estimatedNanoCostUsd(response);
       console.info(
-        `[CashAI] stage=delete_plan model=${env.cashOpenaiSecondModel}` +
+        `[CashAI] stage=contextual_delete_plan model=${env.cashOpenaiSecondModel}` +
+        ` memory_messages=${conversationInput.length}` +
+        ` catalog_records=${catalog.length}` +
         ` message=${context.message.messageId || 'unknown'}` +
         ` input_tokens=${usage.input_tokens ?? 0}` +
         ` output_tokens=${usage.output_tokens ?? 0}` +
@@ -138,7 +214,7 @@ async function planDeletion(
 
     return response.output_parsed ?? null;
   } catch (error) {
-    console.error('[CashAI] falha na segunda camada de exclusão:', error);
+    console.error('[CashAI] falha na segunda camada contextual de exclusão:', error);
     return null;
   }
 }
@@ -154,6 +230,29 @@ async function countRecords(companyId: string): Promise<number> {
 async function historyIds(context: VerticalContext, limit = 5): Promise<string[]> {
   const rows = await cashService.listRecent(context.company.id, context.message.phone, limit);
   return rows.map((row: any) => String(row.id));
+}
+
+async function validateRecordIds(companyId: string, ids: string[]): Promise<string[]> {
+  const unique = [...new Set(ids.map(String).filter(Boolean))];
+  if (!unique.length) return [];
+  const result = await db.query<{ id: string }>(
+    `select id::text as id from cash_transactions
+     where company_id=$1 and id::text = any($2::text[])`,
+    [companyId, unique]
+  );
+  const valid = new Set(result.rows.map(row => row.id));
+  return unique.filter(id => valid.has(id));
+}
+
+async function idsFromIndices(context: VerticalContext, indices: number[]): Promise<string[]> {
+  const unique = [...new Set(indices.map(Number).filter(value => Number.isInteger(value) && value >= 1 && value <= 100))];
+  if (!unique.length) return [];
+  const maxIndex = Math.max(...unique);
+  const rows = await cashService.listRecent(context.company.id, context.message.phone, Math.max(5, maxIndex));
+  return unique
+    .map(index => rows[index - 1])
+    .filter(Boolean)
+    .map((row: any) => String(row.id));
 }
 
 async function savePending(context: VerticalContext, pending: PendingNaturalDeletion): Promise<void> {
@@ -279,9 +378,13 @@ export async function executeCashAiDeletion(
   firstStageEstimatedUsd = 0
 ): Promise<VerticalResult | null> {
   const plan = await planDeletion(context, firstPassRewrite, firstStageEstimatedUsd);
-  if (!plan) return null;
+  if (!plan) {
+    return client
+      ? text('Não consegui montar a exclusão com segurança agora. Pode repetir o pedido?')
+      : null;
+  }
   if (plan.target === 'unknown') {
-    return plan.clarification?.trim() ? text(plan.clarification.trim()) : null;
+    return text(plan.clarification?.trim() || 'Quais registros ou cofrinhos exatamente você quer apagar?');
   }
 
   await clearConflictingPending(context);
@@ -291,37 +394,24 @@ export async function executeCashAiDeletion(
   let recordCount = 0;
 
   if (plan.target === 'records' || plan.target === 'records_and_pockets') {
-    if (plan.record_scope === 'one') {
-      const index = plan.record_index ?? 1;
-      const rows = await cashService.listRecent(context.company.id, context.message.phone, Math.max(5, index));
-      const row = rows[index - 1];
-      if (!row) return text(`Não encontrei o registro ${index}. Mande *histórico* para ver a numeração atual.`);
-
-      if (plan.target === 'records') {
-        // Exclusão unitária isolada continua direta; confirmação fica só para lote.
-        await cashService.deleteTransaction(context.company.id, String((row as any).id));
-        return text(`🗑️ Registro ${index} apagado.`);
-      }
-
-      // Em comando combinado, nada é executado antes da confirmação do conjunto.
-      recordMode = 'ids';
-      recordIds = [String((row as any).id)];
-      recordCount = 1;
-    } else if (plan.record_scope === 'all') {
+    if (plan.record_scope === 'all') {
       recordMode = 'all';
       recordCount = await countRecords(context.company.id);
-    } else if (plan.record_scope === 'shown') {
-      const lastQuery = await getCashQueryContext(context.company.id, context.message.phone);
-      if (lastQuery && lastQuery !== HISTORY_CONTEXT && plan.target === 'records') {
-        return await handleCashBulkDeletionCommand({
-          ...context,
-          combinedText: 'apague todos esses registros'
-        });
+    } else if (plan.record_scope === 'specific') {
+      const aiIds = await validateRecordIds(context.company.id, plan.record_ids);
+      const fallbackIds = aiIds.length ? [] : await idsFromIndices(context, plan.record_indices);
+      recordIds = [...new Set([...aiIds, ...fallbackIds])];
+      if (!recordIds.length) {
+        return text('Não consegui identificar com segurança quais registros você apontou. Mande *histórico* e repita usando os números da lista.');
       }
-      recordIds = await historyIds(context, 5);
       recordMode = 'ids';
       recordCount = recordIds.length;
-      if (!recordCount) return text('Não há registros recentes para apagar.');
+    } else if (plan.record_scope === 'shown') {
+      const aiIds = await validateRecordIds(context.company.id, plan.record_ids);
+      recordIds = aiIds.length ? aiIds : await historyIds(context, 5);
+      if (!recordIds.length) return text('Não há registros recentes identificáveis para apagar.');
+      recordMode = 'ids';
+      recordCount = recordIds.length;
     }
   }
 
@@ -334,18 +424,39 @@ export async function executeCashAiDeletion(
       pocketNames = resolved.active.map(item => item.name);
     } else if (plan.pocket_scope === 'named') {
       if (resolved.missing.length) {
-        return text(`Não encontrei: ${resolved.missing.join(', ')}. Mande *meus cofrinhos* para conferir os nomes.`);
+        return text(`Não encontrei estes cofrinhos: ${resolved.missing.join(', ')}.`);
       }
       pocketIds = resolved.selected.map(item => String(item.id));
       pocketNames = resolved.selected.map(item => item.name);
     }
 
     if (!pocketIds.length && plan.target === 'pockets') {
-      return text('Não encontrei nenhum cofrinho para apagar.');
+      return text('Não encontrei nenhum cofrinho ativo correspondente ao seu pedido.');
     }
   }
 
-  if (plan.target === 'pockets' && pocketIds.length === 1) {
+  if (recordMode === 'all' && recordCount === 0 && !pocketIds.length) {
+    return text('Você não tem registros para apagar.');
+  }
+
+  if (!recordMode && !pocketIds.length) {
+    return text(plan.clarification?.trim() || 'Não consegui identificar com segurança o que deve ser apagado.');
+  }
+
+  // Uma única exclusão específica continua imediata. Qualquer lote, combinação ou
+  // exclusão total exige confirmação explícita antes de tocar no banco.
+  if (recordMode === 'ids' && recordIds.length === 1 && !pocketIds.length && plan.target === 'records') {
+    const done = await executePending(context, {
+      recordMode,
+      recordIds,
+      recordCount: 1,
+      pocketIds: [],
+      pocketNames: []
+    });
+    return text(done.records === 1 ? '🗑️ Registro apagado.' : 'Esse registro já não existe mais.');
+  }
+
+  if (!recordMode && pocketIds.length === 1 && plan.target === 'pockets') {
     const done = await executePending(context, {
       recordMode: null,
       recordIds: [],
@@ -356,10 +467,6 @@ export async function executeCashAiDeletion(
     return text(done.pockets === 1 ? `🐷 Cofrinho *${pocketNames[0]}* apagado.` : 'Esse cofrinho já não estava ativo.');
   }
 
-  if (recordMode === 'all' && recordCount === 0 && !pocketIds.length) {
-    return text('Você não tem registros para apagar.');
-  }
-
   const pending: PendingNaturalDeletion = {
     recordMode,
     recordIds,
@@ -367,21 +474,20 @@ export async function executeCashAiDeletion(
     pocketIds,
     pocketNames
   };
-
-  if (!recordMode && !pocketIds.length) {
-    return plan.clarification?.trim() ? text(plan.clarification.trim()) : text('Não consegui identificar com segurança o que você quer apagar.');
-  }
-
   await savePending(context, pending);
   return confirmationPrompt(pending);
 }
 
+function normalizedReply(value: string): string {
+  return String(value ?? '').trim().toLocaleLowerCase('pt-BR');
+}
+
 function isConfirmation(value: string): boolean {
-  return /^(sim|confirmo|pode|pode apagar|apaga|isso mesmo|correto)$/i.test(String(value ?? '').trim().replace(/[!.]+$/g, ''));
+  return new Set(['sim', 'confirmo', 'pode', 'pode apagar', 'apaga', 'isso mesmo', 'correto']).has(normalizedReply(value));
 }
 
 function isCancellation(value: string): boolean {
-  return /^(não|nao|n|cancela|cancelar|deixa pra lá|deixa pra la|não apaga|nao apaga)$/i.test(String(value ?? '').trim().replace(/[!.]+$/g, ''));
+  return new Set(['não', 'nao', 'n', 'cancela', 'cancelar', 'deixa pra lá', 'deixa pra la', 'não apaga', 'nao apaga']).has(normalizedReply(value));
 }
 
 export async function handleCashPendingAiDeletion(context: VerticalContext): Promise<VerticalResult | undefined> {
@@ -394,6 +500,8 @@ export async function handleCashPendingAiDeletion(context: VerticalContext): Pro
   }
 
   if (!isConfirmation(context.combinedText)) {
+    // Qualquer mensagem nova que não seja confirmação/cancelamento explícito abandona
+    // o estado antigo e segue para a IA contextual como uma nova intenção.
     await clearPending(context);
     return undefined;
   }
