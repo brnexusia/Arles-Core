@@ -16,6 +16,7 @@ import { executeCashAiTransaction } from './ai-transaction-executor.js';
 const SemanticSchema = z.object({
   intent: z.enum([
     'transaction',
+    'mixed',
     'query',
     'balance',
     'projection',
@@ -41,6 +42,10 @@ const SemanticSchema = z.object({
 });
 
 type SemanticIntent = z.infer<typeof SemanticSchema>;
+type SemanticRouteResult = {
+  parsed: SemanticIntent;
+  estimatedUsd: number;
+};
 
 const client = env.openaiApiKey ? new OpenAI({ apiKey: env.openaiApiKey }) : null;
 
@@ -81,7 +86,7 @@ function estimatedNanoCostUsd(response: unknown): number {
   return (input * 0.05 + output * 0.40) / 1_000_000;
 }
 
-async function semanticRoute(context: VerticalContext): Promise<SemanticIntent | null> {
+async function semanticRoute(context: VerticalContext): Promise<SemanticRouteResult | null> {
   if (!client) return null;
 
   const quoted = String(context.message.quotedText ?? '').trim();
@@ -100,6 +105,7 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
             'Você somente classifica a intenção e, quando útil, reescreve de forma explícita para o backend seguro.',
             'Preserve exatamente valores, sinais, datas, nomes, períodos e recorrências. Nunca invente informação.',
             'transaction: dinheiro REAL que já entrou/saiu e deve virar lançamento. Frases curtas como “farmácia 45”, “35 no almoço” ou “entrou 1200 do cliente” podem ser lançamento quando o sentido for factual.',
+            'mixed: a mesma mensagem mistura dois ou mais objetivos diferentes, por exemplo lançar gastos E perguntar saldo/total, ou lançamentos reais E previsões.',
             'query: consultar registros reais, filtros, valores, lojas, categorias ou períodos.',
             'balance: consultar saldo atual/acumulado.',
             'projection: fazer conta/simulação pontual, por exemplo “se eu gastar 50, quanto sobra?”. A conta será feita por script.',
@@ -124,6 +130,10 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
       text: { format: zodTextFormat(SemanticSchema, 'cash_semantic_intent') }
     });
 
+    const parsed = response.output_parsed;
+    if (!parsed) return null;
+
+    const estimatedUsd = estimatedNanoCostUsd(response);
     const usage = (response as any).usage;
     if (usage) {
       console.info(
@@ -131,11 +141,11 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticIntent |
         ` message=${context.message.messageId || 'unknown'}` +
         ` input_tokens=${usage.input_tokens ?? 0}` +
         ` output_tokens=${usage.output_tokens ?? 0}` +
-        ` estimated_usd=${estimatedNanoCostUsd(response).toFixed(8)}`
+        ` estimated_usd=${estimatedUsd.toFixed(8)}`
       );
     }
 
-    return response.output_parsed ?? null;
+    return { parsed, estimatedUsd };
   } catch (error) {
     console.error('[CashAI] falha na primeira camada semântica:', error);
     return null;
@@ -166,13 +176,18 @@ export class CashAiFirstHandler implements VerticalHandler {
     }
 
     // A partir daqui, OpenAI é a PRIMEIRA camada de linguagem natural.
-    const understood = await semanticRoute(context);
-    if (!understood) return null;
+    const semantic = await semanticRoute(context);
+    if (!semantic) return null;
+    const understood = semantic.parsed;
 
     if (understood.intent === 'unknown') {
       const clarification = understood.clarification?.trim();
       return clarification ? text(clarification) : null;
     }
+
+    // Mensagens com múltiplos objetivos são entregues ao decompositor determinístico
+    // legado, mas somente DEPOIS de a OpenAI identificar que são mistas.
+    if (understood.intent === 'mixed') return null;
 
     if (understood.intent === 'transaction') {
       // Barreira determinística pós-IA: mesmo se o classificador errar, perguntas,
@@ -180,7 +195,11 @@ export class CashAiFirstHandler implements VerticalHandler {
       if (isCashProtectedNonTransaction(context.combinedText)) return null;
 
       // SEGUNDA OpenAI: extrai/valida os campos. Só depois o backend persiste.
-      return await executeCashAiTransaction(context, understood.rewritten_text);
+      return await executeCashAiTransaction(
+        context,
+        understood.rewritten_text,
+        semantic.estimatedUsd
+      );
     }
 
     if (understood.intent === 'acknowledgement') {
@@ -209,7 +228,6 @@ export class CashAiFirstHandler implements VerticalHandler {
       const rewritten = understood.rewritten_text?.trim() || context.combinedText;
       const result = await handleCashPocketCommand({ ...context, combinedText: rewritten });
       if (result) return result;
-      // Operações especializadas de cofrinho continuam no backend legado abaixo da IA.
       context.combinedText = rewritten;
       return null;
     }
