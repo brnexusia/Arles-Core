@@ -263,8 +263,7 @@ export async function handleCashPendingDeletion(context: VerticalContext): Promi
       : `🗑️ Confirmado! ${deleted} registros apagados.`);
   }
 
-  return text([
-    `Tenho uma exclusão de ${pending.expectedCount} registro${pending.expectedCount === 1 ? '' : 's'} aguardando sua confirmação.`,
-    'Responda *sim* para apagar ou *não* para cancelar.'
-  ].join('\n'));
+  // Nova mensagem explícita vence a confirmação antiga; não sequestramos o turno.
+  await clearPending(context.company.id, context.message.phone);
+  return undefined;
 }
