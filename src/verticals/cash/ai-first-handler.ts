@@ -17,7 +17,14 @@ import {
   handleCashLedgerDeterministic,
   isCashProtectedNonTransaction
 } from './ledger.js';
+import { handleCashMixedNarrativeGate } from './mixed-narrative-gate.js';
+import { handleCashPocketClosingFlow } from './pocket-closing-flow.js';
+import { handleCashPocketContextCommand } from './pocket-context.js';
+import { handleCashPocketOrganization } from './pocket-organization.js';
+import { handleCashPocketReceivable } from './pocket-receivables.js';
+import { handleCashPocketTransfer } from './pocket-transfer.js';
 import { handleCashQuotedManagement } from './quoted-management.js';
+import { handleCashScheduleDeterministic } from './schedules.js';
 import { executeCashAiTransaction } from './ai-transaction-executor.js';
 
 const HelpSectionSchema = z.enum([
@@ -82,8 +89,8 @@ function normalize(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
-// Mantido apenas para compatibilidade com testes/rotas legadas. Não participa do
-// roteamento semântico principal quando a OpenAI está disponível.
+// Compatibilidade para testes/rotas legadas. Não participa do roteamento semântico
+// principal quando a OpenAI está disponível.
 export function isCashNaturalRecordListRequest(input: string): boolean {
   const value = normalize(input).replace(/[!?.,]+$/g, '').trim();
   if (!value || /\b(como|ajuda|ensina|explica)\b/.test(value)) return false;
@@ -123,7 +130,7 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
       : memory.at(-1)?.role === 'user' && memory.at(-1)?.text === context.combinedText.trim()
   );
 
-  const conversationInput = memory.map(entry => ({
+  const conversationInput: Array<{ role: 'user' | 'assistant'; content: string }> = memory.map(entry => ({
     role: entry.role,
     content: entry.text
   }));
@@ -171,7 +178,7 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             'unknown: somente quando nem o histórico permite saber com segurança o que o usuário quer.',
             '',
             'REGRAS IMPORTANTES PARA OS CASOS REAIS:',
-            '“Poderia me informar o valor total dos lançamentos?” => balance, porque quer uma visão total do que foi registrado; o backend mostrará entradas, saídas e saldo.',
+            '“Poderia me informar o valor total dos lançamentos?” => balance; o backend mostrará entradas, saídas e saldo.',
             '“Me mande o valor que eu registrei hoje” => query e rewritten_text deve explicitar “listar/somar as movimentações registradas hoje”, NÃO balance acumulado.',
             '“Quanto que ainda tem nos registros?” => balance.',
             '“Quero que exclua todos os lançamentos que já fiz” => delete. NUNCA undo.',
@@ -233,6 +240,27 @@ function canonical(intent: SemanticIntent['intent']): string | null {
   return map[intent] ?? null;
 }
 
+async function executePocketCanonical(context: VerticalContext, rewritten: string): Promise<VerticalResult | null> {
+  const canonicalContext = { ...context, combinedText: rewritten };
+
+  const direct = await handleCashPocketCommand(canonicalContext);
+  if (direct) return direct;
+
+  const closing = await handleCashPocketClosingFlow(canonicalContext);
+  if (closing) return closing;
+
+  const receivable = await handleCashPocketReceivable(canonicalContext);
+  if (receivable) return receivable;
+
+  const transfer = await handleCashPocketTransfer(canonicalContext);
+  if (transfer) return transfer;
+
+  const organization = await handleCashPocketOrganization(canonicalContext);
+  if (organization) return organization;
+
+  return await handleCashPocketContextCommand(canonicalContext);
+}
+
 export class CashAiFirstHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
     if (context.message.quotedMessageId || context.message.quotedText) {
@@ -242,8 +270,8 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     const semantic = await semanticRoute(context);
     if (!semantic) {
-      // Com OPENAI_API_KEY configurada, uma falha da IA não deve jogar a frase natural
-      // para uma árvore de regex e produzir uma ação errada. Falha fechada e explícita.
+      // Com OPENAI_API_KEY configurada, uma falha da IA não cai em classificadores
+      // naturais por regex. Falha fechada: melhor pedir repetição do que executar errado.
       return client
         ? text('Tive uma falha ao interpretar sua mensagem agora. Pode repetir a mesma frase em alguns segundos?')
         : null;
@@ -255,9 +283,11 @@ export class CashAiFirstHandler implements VerticalHandler {
     }
 
     if (understood.intent === 'transaction') {
-      // Esta barreira é somente de segurança contra persistência acidental; não é o
-      // classificador principal de linguagem natural.
-      if (isCashProtectedNonTransaction(context.combinedText)) return null;
+      // Barreira de segurança contra persistência acidental. Ela não decide a intenção;
+      // a decisão já veio da IA contextual acima.
+      if (isCashProtectedNonTransaction(context.combinedText)) {
+        return text('Entendi que essa mensagem não deve virar um lançamento real. Não registrei nada. Pode repetir dizendo se é consulta, simulação ou previsão?');
+      }
       return await executeCashAiTransaction(
         context,
         understood.rewritten_text,
@@ -284,7 +314,8 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     if (understood.intent === 'projection') {
       const rewritten = understood.rewritten_text?.trim() || context.combinedText;
-      return await handleCashLedgerDeterministic({ ...context, combinedText: rewritten });
+      const result = await handleCashLedgerDeterministic({ ...context, combinedText: rewritten });
+      return result ?? text('Entendi a simulação, mas não consegui calcular com os dados fornecidos.');
     }
 
     if (understood.intent === 'delete') {
@@ -297,30 +328,33 @@ export class CashAiFirstHandler implements VerticalHandler {
 
     if (understood.intent === 'pocket') {
       const rewritten = understood.rewritten_text?.trim() || context.combinedText;
-      const result = await handleCashPocketCommand({ ...context, combinedText: rewritten });
-      if (result) return result;
-      // O legado recebe somente a forma canônica produzida pela IA, nunca a frase
-      // natural original como mecanismo primário de entendimento.
-      context.combinedText = rewritten;
-      return null;
+      const result = await executePocketCanonical(context, rewritten);
+      return result ?? text('Entendi a ação de cofrinho, mas faltou algum dado para executá-la com segurança. Diga qual cofrinho e o que deseja fazer.');
     }
 
-    if (
-      understood.intent === 'mixed'
-      || understood.intent === 'forecast_schedule'
-      || understood.intent === 'forecast_query'
-    ) {
-      context.combinedText = understood.rewritten_text?.trim() || context.combinedText;
-      return null;
+    if (understood.intent === 'forecast_schedule' || understood.intent === 'forecast_query') {
+      const rewritten = understood.rewritten_text?.trim() || context.combinedText;
+      const result = await handleCashScheduleDeterministic({ ...context, combinedText: rewritten });
+      return result ?? text('Entendi a previsão/agendamento, mas não consegui executá-la com segurança. Informe valor e data/recorrência.');
+    }
+
+    if (understood.intent === 'mixed') {
+      const rewritten = understood.rewritten_text?.trim() || context.combinedText;
+      const result = await handleCashMixedNarrativeGate({ ...context, combinedText: rewritten });
+      return result ?? text('Entendi que há mais de uma ação na mensagem, mas não consegui separar todas com segurança. Pode reenviar em duas frases?');
     }
 
     if (understood.intent === 'edit' || understood.intent === 'query') {
       const rewritten = understood.rewritten_text?.trim() || context.combinedText;
-      return await cashBroadHandler.handle({ ...context, combinedText: rewritten });
+      const result = await cashBroadHandler.handle({ ...context, combinedText: rewritten });
+      return result ?? text('Entendi o pedido, mas não consegui localizar os dados necessários para concluir.');
     }
 
     const command = canonical(understood.intent);
-    if (command) return await cashBroadHandler.handle({ ...context, combinedText: command });
+    if (command) {
+      const result = await cashBroadHandler.handle({ ...context, combinedText: command });
+      return result ?? text('Entendi o pedido, mas não consegui concluir essa ação agora.');
+    }
 
     return text('Entendi sua mensagem, mas não consegui concluir a ação com segurança. Pode repetir o pedido?');
   }
