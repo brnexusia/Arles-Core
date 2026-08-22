@@ -1,6 +1,11 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { clearCashEditState, getCashEditState } from './edit-state.js';
-import { deletionTarget, normalizeCashText } from './management.js';
+import {
+  deletionTarget,
+  hasCashEditPatch,
+  normalizeCashText,
+  parseCashEditPatch
+} from './management.js';
 import { cashService } from './service.js';
 
 function text(value: string): VerticalResult {
@@ -12,29 +17,58 @@ function isEditCancellation(input: string): boolean {
   return /^(cancelar edicao|cancela edicao|cancelar a edicao|cancela a edicao|deixa pra la|deixa pra la a edicao)$/.test(value);
 }
 
+function isEditHelp(input: string): boolean {
+  const value = normalizeCashText(input).replace(/[!.?]+$/g, '').trim();
+  return /^(ajuda|como|o que posso mudar|o que da pra mudar|o que fazer|como edito)$/.test(value);
+}
+
 export async function handleCashPendingEditInteraction(
   context: VerticalContext
 ): Promise<VerticalResult | undefined> {
   const transactionId = await getCashEditState(context.company.id, context.message.phone);
   if (!transactionId) return undefined;
 
-  // “Cancelar edição” cancela somente o modo de edição. Já “cancela ele” ou
-  // “apaga ele” se referem ao próprio lançamento e, portanto, excluem o registro.
   if (isEditCancellation(context.combinedText)) {
     await clearCashEditState(context.company.id, context.message.phone);
     return text('Tudo bem 😊 Edição cancelada. O lançamento continua como estava.');
   }
 
-  if (!deletionTarget(context.combinedText)) return undefined;
-
   const rows = await cashService.listRecent(context.company.id, context.message.phone, 20);
   const editing = rows.find((row: any) => String(row.id) === transactionId);
-  await clearCashEditState(context.company.id, context.message.phone);
-
   if (!editing) {
-    return text('Esse lançamento não existe mais. O modo de edição foi encerrado.');
+    await clearCashEditState(context.company.id, context.message.phone);
+    return undefined;
   }
 
-  await cashService.deleteTransaction(context.company.id, transactionId);
-  return text('🗑️ Certo! Lançamento apagado.');
+  // “Cancela ele” / “apaga ele” se referem ao lançamento em edição.
+  if (deletionTarget(context.combinedText)) {
+    await cashService.deleteTransaction(context.company.id, transactionId);
+    await clearCashEditState(context.company.id, context.message.phone);
+    return text('🗑️ Certo! Lançamento apagado.');
+  }
+
+  // Uma continuação real de edição é aplicada aqui; o modelo não executa a alteração.
+  const patch = parseCashEditPatch(context.combinedText);
+  if (hasCashEditPatch(patch)) {
+    const nextType = patch.type ?? editing.type;
+    const updated = await cashService.updateTransaction(context.company.id, transactionId, {
+      type: nextType,
+      amount: patch.amount ?? Number(editing.amount),
+      category: nextType === 'income' ? 'Receita' : (patch.category ?? editing.category),
+      merchant: editing.merchant ?? null,
+      description: patch.description ?? editing.description ?? null,
+      transaction_date: patch.transaction_date ?? String(editing.transaction_date)
+    });
+    await clearCashEditState(context.company.id, context.message.phone);
+    const amount = Number(updated.amount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    return text(`✅ Registro atualizado: ${amount} em ${updated.category}.`);
+  }
+
+  // “Ajuda” dentro do modo de edição ainda é uma continuação legítima; deixamos o
+  // handler normal mostrar as opções. Qualquer outro comando encerra silenciosamente
+  // o modo antigo para que a nova frase chegue à OpenAI sem ser sequestrada.
+  if (isEditHelp(context.combinedText)) return undefined;
+
+  await clearCashEditState(context.company.id, context.message.phone);
+  return undefined;
 }
