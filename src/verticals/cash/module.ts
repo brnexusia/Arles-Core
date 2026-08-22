@@ -1,6 +1,5 @@
 import type { VerticalModule } from '../vertical.js';
 import { cashAccessHandler } from './access-handler.js';
-import { handleCashPendingConfirmation } from './confirmation.js';
 import { handleCashPendingDeletion } from './deletion.js';
 import { handleCashPendingEditInteraction } from './pending-edit-interaction.js';
 import { handleCashPendingPocketClosing } from './pocket-closing-flow.js';
@@ -12,7 +11,7 @@ import { registerCashRoutes } from './routes.js';
 export const cashModule: VerticalModule = {
   id: 'cash',
   name: 'Arles Cash',
-  version: '2.5.1',
+  version: '2.6.0',
   capabilities: [
     'cash.transactions',
     'cash.summaries',
@@ -28,7 +27,6 @@ export const cashModule: VerticalModule = {
     (await handleCashPendingPocketClosing(context))
       ?? (await handleCashPendingPocketTransfer(context))
       ?? (await handleCashPendingDeletion(context))
-      ?? (await handleCashPendingConfirmation(context))
       ?? (await handleCashPendingEditInteraction(context)),
   registerRoutes: registerCashRoutes,
   jobs: {
