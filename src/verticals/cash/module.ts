@@ -13,6 +13,35 @@ import { cashReports } from './reports.js';
 import { formatCashUserResponse } from './response-format.js';
 import { registerCashRoutes } from './routes.js';
 
+const SHORT_PENDING_REPLIES = new Set([
+  'sim',
+  's',
+  'não',
+  'nao',
+  'n',
+  'confirmo',
+  'confirma',
+  'pode',
+  'pode fazer',
+  'pode apagar',
+  'pode excluir',
+  'isso',
+  'isso mesmo',
+  'correto',
+  'certo',
+  'ok',
+  'cancelar',
+  'cancela',
+  'cancelar edição',
+  'cancelar edicao',
+  'deixa pra lá',
+  'deixa pra la'
+]);
+
+function isShortPendingReply(value: string): boolean {
+  return SHORT_PENDING_REPLIES.has(String(value ?? '').trim().toLocaleLowerCase('pt-BR'));
+}
+
 async function handleWithMemory(context: Parameters<typeof cashAccessHandler.handle>[0]): Promise<VerticalResult | null> {
   await rememberCashUserMessage(context);
   const raw = await cashAccessHandler.handle(context);
@@ -24,9 +53,11 @@ async function handleWithMemory(context: Parameters<typeof cashAccessHandler.han
 async function handlePendingWithMemory(
   context: Parameters<NonNullable<VerticalModule['handlePendingInteraction']>>[0]
 ): Promise<VerticalResult | undefined> {
-  // O mesmo messageId pode passar depois pelo handler principal. A memória faz
-  // deduplicação por messageId+role, então o usuário entra apenas uma vez.
   await rememberCashUserMessage(context);
+
+  // Estados pendentes só podem interceptar respostas curtas e inequívocas. Qualquer
+  // frase normal segue para a IA contextual, que enxerga as últimas 30 mensagens.
+  if (!isShortPendingReply(context.combinedText)) return undefined;
 
   const result = (await handleCashPendingAiDeletion(context))
     ?? (await handleCashPendingPocketClosing(context))
