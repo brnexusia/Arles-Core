@@ -16,7 +16,7 @@ import { registerCashRoutes } from './routes.js';
 async function handleWithMemory(context: Parameters<typeof cashAccessHandler.handle>[0]): Promise<VerticalResult | null> {
   await rememberCashUserMessage(context);
   const raw = await cashAccessHandler.handle(context);
-  const formatted = formatCashUserResponse(context, raw);
+  const formatted = await formatCashUserResponse(context, raw);
   await rememberCashAssistantResult(context, formatted);
   return formatted;
 }
