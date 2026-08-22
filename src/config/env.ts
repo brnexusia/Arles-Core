@@ -43,6 +43,9 @@ export const env = {
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
   cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5575999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
+  // Modelo exclusivo do Cash para compreensão semântica. Mantido separado do modelo
+  // global para não aumentar o custo das demais verticais quando o modelo global mudar.
+  cashOpenaiModel: process.env.CASH_OPENAI_MODEL?.trim() || 'gpt-5-nano',
   // Janela antiga mantida só por compatibilidade com deploys existentes.
   cashMessageBufferMs: numberEnv('CASH_MESSAGE_BUFFER_MS', 15000),
   // Novo comportamento: enquanto houver presença `composing`, espera; depois de parar,
