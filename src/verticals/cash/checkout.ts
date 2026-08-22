@@ -139,21 +139,13 @@ export async function cashCheckoutLinks(companyId: string) {
 export async function cashPaymentMenuForCompany(companyId: string): Promise<string> {
   const links = await cashCheckoutLinks(companyId);
   return [
-    '💰 Escolha seu plano para continuar com o Arles Cash:',
+    '🏆 *Anual* — R$39,90/ano · R$3,33/mês',
+    'Economia de R$20,10 no ano.' + (links.annual ? `\n👉 ${links.annual}` : ''),
     '',
-    '🏆 ANUAL — MELHOR ESCOLHA',
-    'R$39,90 por 12 meses · só R$3,33/mês',
-    '🔥 Economize R$20,10 no ano contra o mensal — mais de 33% de economia, o equivalente a 4 mensalidades.',
-    '✅ Um pagamento e 12 meses sem se preocupar com renovação.' + (links.annual ? `\n👉 ${links.annual}` : ''),
+    '🔥 *Trimestral* — R$13,50/3 meses · R$4,50/mês' + (links.quarterly ? `\n👉 ${links.quarterly}` : ''),
     '',
-    '🔥 TRIMESTRAL — ECONOMIZE DESDE JÁ',
-    'R$13,50 por 3 meses · R$4,50/mês',
-    'Você já paga 10% menos do que ficando no mensal e fica 3 meses tranquilo.' + (links.quarterly ? `\n👉 ${links.quarterly}` : ''),
+    '💳 *Mensal* — R$5,00/mês' + (links.monthly ? `\n👉 ${links.monthly}` : ''),
     '',
-    '💳 MENSAL — MAIS FLEXÍVEL',
-    'R$5,00/mês',
-    'Se mantiver por 12 meses, são R$60,00 no total. É o mais flexível, mas também o que mais custa no ano.' + (links.monthly ? `\n👉 ${links.monthly}` : ''),
-    '',
-    '💡 Se você pretende continuar organizando suas finanças, o Anual entrega de longe o menor custo.'
+    '✅ Liberação automática após a confirmação da Cakto.'
   ].join('\n');
 }
