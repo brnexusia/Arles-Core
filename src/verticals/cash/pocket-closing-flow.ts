@@ -101,10 +101,8 @@ function replyPocketName(input: string): string | null {
   if (!raw || raw.split(/\s+/).length > 6 || /\d/.test(raw)) return null;
   if (/^(sim|s|nao|não|n|cancela|cancelar|ok|certo|beleza)$/i.test(raw)) return null;
 
-  // Um fechamento pendente não pode sequestrar um novo comando financeiro e tratar
-  // “saldo”, “gastei 50” ou “meus cofrinhos” como se fossem nomes de cofrinho.
   const value = normalize(raw);
-  if (/\b(saldo|extrato|historico|relatorio|resumo|ajuda|menu|planos?|trial|categorias?|gastei|paguei|comprei|recebi|ganhei|entrou|faturei|quanto|quais|meus cofrinhos)\b/.test(value)) {
+  if (/\b(saldo|extrato|historico|relatorio|resumo|ajuda|menu|planos?|trial|categorias?|gastei|paguei|comprei|recebi|ganhei|entrou|faturei|quanto|quais|meus cofrinhos|apag|exclu|remov|delet|edit|alter)\b/.test(value)) {
     return null;
   }
   return raw.slice(0, 80);
@@ -159,10 +157,6 @@ async function replayClosing(
   return await handleCashPocketClosing(replayContext);
 }
 
-/**
- * Entrada inicial de um fechamento. Resolve o cofrinho citado quando ele existe e,
- * quando não existe ou não foi informado, persiste o contexto para a próxima resposta.
- */
 export async function handleCashPocketClosingFlow(context: VerticalContext): Promise<VerticalResult | null> {
   if (!isCashPocketClosingMessage(context.combinedText)) return null;
   if (!wantsRegister(context.combinedText)) return await handleCashPocketClosing(context);
@@ -187,10 +181,6 @@ export async function handleCashPocketClosingFlow(context: VerticalContext): Pro
   return text(await pocketListMessage(context, requestedName));
 }
 
-/**
- * Continuação de um fechamento pendente. Permite escolher um cofrinho existente ou
- * criar o nome solicitado com um simples “sim”, sem exigir que o usuário repita os dados.
- */
 export async function handleCashPendingPocketClosing(context: VerticalContext): Promise<VerticalResult | null> {
   const pending = await loadPending(context);
   if (!pending) return null;
@@ -211,7 +201,11 @@ export async function handleCashPendingPocketClosing(context: VerticalContext): 
   }
 
   const candidate = replyPocketName(context.combinedText);
-  if (!candidate) return null;
+  if (!candidate) {
+    // Um novo comando não fica preso ao fechamento anterior.
+    await clearPending(context);
+    return null;
+  }
 
   const existing = await cashPocketService.findByName(context.company.id, candidate);
   if (existing) {
