@@ -37,6 +37,7 @@ const SemanticSchema = z.object({
     'acknowledgement',
     'unknown'
   ]),
+  social_kind: z.enum(['greeting', 'thanks', 'farewell', 'wellbeing', 'ack', 'none']),
   rewritten_text: z.string().nullable(),
   clarification: z.string().nullable()
 });
@@ -72,7 +73,7 @@ export function isCashNaturalRecordListRequest(input: string): boolean {
     || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value);
 }
 
-export function cashSocialReply(kind: string | null | undefined): string {
+export function cashSocialReply(kind: SemanticIntent['social_kind'] | null | undefined): string {
   if (kind === 'greeting') return 'Oi! 😊 Como posso te ajudar?';
   if (kind === 'thanks') return 'Por nada! 😊';
   if (kind === 'farewell') return 'Até mais! 👋';
@@ -102,7 +103,7 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
     const response = await client.responses.parse({
       model: env.cashOpenaiModel,
       reasoning: { effort: 'minimal' },
-      max_output_tokens: 260,
+      max_output_tokens: 280,
       input: [
         {
           role: 'system',
@@ -125,7 +126,9 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             'edit/delete/undo: gestão explícita de lançamentos existentes.',
             'help/plans/trial/categories/schedule: funções administrativas do produto.',
             'acknowledgement: conversa social curta sem ação financeira.',
-            'Quando intent=acknowledgement, rewritten_text DEVE ser exatamente um destes marcadores: greeting para oi/olá/oii/bom dia/boa tarde/boa noite; thanks para obrigado/obrigada/valeu; farewell para tchau/até mais/falou; wellbeing para “tudo bem?”/“como você está?”; ack para ok/certo/beleza/entendi/show.',
+            'social_kind só é diferente de none quando intent=acknowledgement: greeting para oi/olá/oii/bom dia/boa tarde/boa noite; thanks para obrigado/obrigada/valeu; farewell para tchau/até mais/falou; wellbeing para “tudo bem?”/“como você está?”; ack para ok/certo/beleza/entendi/show.',
+            'Exemplos obrigatórios: “Oii” => intent=acknowledgement e social_kind=greeting; “valeu” => acknowledgement/thanks; “certo” => acknowledgement/ack.',
+            'Para qualquer intent diferente de acknowledgement, social_kind=none.',
             'unknown: somente quando não houver informação suficiente para escolher com segurança.',
             'rewritten_text: torne a intenção explícita sem alterar fatos. Para transaction, preserve valor e descrição e use uma frase curta factual.',
             'clarification: use somente quando intent=unknown e faça uma pergunta curta e específica.',
@@ -212,7 +215,7 @@ export class CashAiFirstHandler implements VerticalHandler {
     }
 
     if (understood.intent === 'acknowledgement') {
-      return text(cashSocialReply(understood.rewritten_text?.trim().toLowerCase()));
+      return text(cashSocialReply(understood.social_kind));
     }
 
     if (understood.intent === 'help') {
