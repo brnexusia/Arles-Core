@@ -43,14 +43,17 @@ export const env = {
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
   cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5575999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
-  // Modelo exclusivo do Cash para compreensão semântica. Mantido separado do modelo
-  // global para não aumentar o custo das demais verticais quando o modelo global mudar.
+  // IA 1 entende intenção; IA 2 extrai/valida lançamentos. Ambas usam nano por padrão.
   cashOpenaiModel: process.env.CASH_OPENAI_MODEL?.trim() || 'gpt-5-nano',
+  cashOpenaiSecondModel:
+    process.env.CASH_OPENAI_SECOND_MODEL?.trim() ||
+    process.env.CASH_OPENAI_MODEL?.trim() ||
+    'gpt-5-nano',
   // Janela antiga mantida só por compatibilidade com deploys existentes.
   cashMessageBufferMs: numberEnv('CASH_MESSAGE_BUFFER_MS', 15000),
-  // Novo comportamento: enquanto houver presença `composing`, espera; depois de parar,
-  // processa após este período de silêncio. Não depende da variável legada de 15s.
-  cashMessageSilenceMs: numberEnv('CASH_MESSAGE_SILENCE_MS', 5000),
+  // Alvo de baixa latência: após o usuário parar de digitar/gravar, processa quase
+  // imediatamente. O teto de 500ms também corrige deploys antigos que ainda tenham 5s.
+  cashMessageSilenceMs: Math.min(numberEnv('CASH_MESSAGE_SILENCE_MS', 250), 500),
 
   // Checkouts Cakto. O Core acrescenta nome, e-mail, telefone e sck da conta
   // dinamicamente antes de redirecionar o cliente para a Cakto.
