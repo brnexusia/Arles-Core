@@ -110,7 +110,7 @@ export async function fastCashFaq(context: VerticalContext): Promise<VerticalRes
     return text('📱 Não precisa instalar nada. O Arles Cash funciona direto por aqui no WhatsApp.');
   }
 
-  // Registrar e confirmação.
+  // Registrar: lançamento válido é salvo diretamente, sem etapa extra de confirmação.
   if (matches(value, [
     /^(como registrar|como registro|como lancar|como lanco|como anotar)( um)? (gasto|despesa|receita|lancamento)?$/,
     /^(como adiciono|como adicionar)( um)? (gasto|despesa|receita)?$/
@@ -118,14 +118,14 @@ export async function fastCashFaq(context: VerticalContext): Promise<VerticalRes
     return text([
       '✍️ É só escrever naturalmente.',
       'Ex.: “gastei 50 no mercado” ou “recebi 800 de um cliente”.',
-      'Antes de salvar, eu mostro o resumo e peço sua confirmação.'
+      'Quando os dados estiverem completos, eu registro automaticamente e te aviso na hora.'
     ].join('\n'));
   }
 
   if (matches(value, [
     /^(por que confirma|porque confirma|precisa confirmar|por que pede confirmacao|como funciona a confirmacao)$/
   ])) {
-    return text('✅ A confirmação evita registrar algo errado. Eu interpreto sua mensagem, mostro o resumo e só salvo depois que você responder *sim*.');
+    return text('✅ Não precisa mais confirmar cada lançamento. Se os dados estiverem completos, eu registro na hora. Se faltar algo essencial, como o valor, eu pergunto antes.');
   }
 
   // Consultas e histórico.
