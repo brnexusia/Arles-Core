@@ -72,6 +72,14 @@ export function isCashNaturalRecordListRequest(input: string): boolean {
     || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value);
 }
 
+export function cashSocialReply(kind: string | null | undefined): string {
+  if (kind === 'greeting') return 'Oi! 😊 Como posso te ajudar?';
+  if (kind === 'thanks') return 'Por nada! 😊';
+  if (kind === 'farewell') return 'Até mais! 👋';
+  if (kind === 'wellbeing') return 'Tudo certo por aqui 😊 E com você?';
+  return 'Certo 👍';
+}
+
 function destructiveOriginalIsSafe(intent: 'edit' | 'delete', original: string): boolean {
   const value = normalize(original);
   if (/\b(conta|perfil|cadastro|dados pessoais|usuario|usuário)\b/.test(value)) return false;
@@ -116,7 +124,8 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             'weekly_report/monthly_report: relatório real da semana/mês.',
             'edit/delete/undo: gestão explícita de lançamentos existentes.',
             'help/plans/trial/categories/schedule: funções administrativas do produto.',
-            'acknowledgement: resposta social curta sem ação financeira.',
+            'acknowledgement: conversa social curta sem ação financeira.',
+            'Quando intent=acknowledgement, rewritten_text DEVE ser exatamente um destes marcadores: greeting para oi/olá/oii/bom dia/boa tarde/boa noite; thanks para obrigado/obrigada/valeu; farewell para tchau/até mais/falou; wellbeing para “tudo bem?”/“como você está?”; ack para ok/certo/beleza/entendi/show.',
             'unknown: somente quando não houver informação suficiente para escolher com segurança.',
             'rewritten_text: torne a intenção explícita sem alterar fatos. Para transaction, preserve valor e descrição e use uma frase curta factual.',
             'clarification: use somente quando intent=unknown e faça uma pergunta curta e específica.',
@@ -203,7 +212,7 @@ export class CashAiFirstHandler implements VerticalHandler {
     }
 
     if (understood.intent === 'acknowledgement') {
-      return text('Perfeito 😊 Pode continuar falando comigo do seu jeito.');
+      return text(cashSocialReply(understood.rewritten_text?.trim().toLowerCase()));
     }
 
     if (understood.intent === 'help') {
