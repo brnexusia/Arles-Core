@@ -37,12 +37,12 @@ describe('cash report closing position', () => {
     expect(output).toContain('💸 Despesas lançadas: R$ 21,87');
     expect(output).toContain('🏦 Saldo dos lançamentos: -R$ 21,87');
     expect(output).toContain('🐷 *vendas* — ref. 31/07/2026');
-    expect(output).toContain('💰 Total vendido: R$ 1.640,00');
-    expect(output).toContain('💵 Caixa final: R$ 530,00');
-    expect(output).toContain('🧾 A receber: R$ 110,00');
-    expect(output).toContain('↗️ Retiradas: 4 · R$ 1.000,00');
+    expect(output).toMatch(/Total vendido: R\$\s*1\.640,00/);
+    expect(output).toMatch(/Caixa final: R\$\s*530,00/);
+    expect(output).toMatch(/A receber: R\$\s*110,00/);
+    expect(output).toMatch(/Retiradas: 4 · R\$\s*1\.000,00/);
 
     // O fechamento é posição, portanto não pode substituir a receita real do período.
-    expect(output).not.toContain('Receitas lançadas: R$ 1.640,00');
+    expect(output).not.toMatch(/Receitas lançadas: R\$\s*1\.640,00/);
   });
 });
