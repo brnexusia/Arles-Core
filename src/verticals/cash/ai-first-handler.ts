@@ -120,6 +120,25 @@ function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
 }
 
+function normalize(value: string): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+// Compatibilidade exclusiva com testes/parsers legados. Esta função NÃO é chamada
+// pelo pipeline de roteamento e nunca pode decidir a intenção de uma mensagem real.
+export function isCashNaturalRecordListRequest(input: string): boolean {
+  const value = normalize(input).replace(/[!?.,]+$/g, '').trim();
+  if (!value || /\b(como|ajuda|ensina|explica)\b/.test(value)) return false;
+
+  return /^(?:(?:me )?(?:fala|mostra|mostre|lista|liste|traz|traga|diz|fale)\s+)?(?:(?:ai|aí)\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)(?:\s+(?:ai|aí|pra mim|para mim))?$/.test(value)
+    || /^(?:quais|qual)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:registros|registos|lancamentos|movimentacoes)$/.test(value);
+}
+
 export function cashSocialReply(kind: CashSemanticIntent['social_kind'] | null | undefined): string {
   if (kind === 'greeting') return 'Oi! 😊 Como posso te ajudar?';
   if (kind === 'thanks') return 'Por nada! 😊';
