@@ -1,25 +1,14 @@
 import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
-import { cashAiFirstHandler } from './ai-first-handler.js';
+import {
+  cashAiFirstHandler,
+  cashAiInterpretationFailure,
+  type CashSemanticRouteResult
+} from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
-import { cashConversationHandler } from './conversation.js';
-import { handleCashConversationSafety } from './conversation-safety.js';
-import { handleCashDeterministicLanguage } from './deterministic-language.js';
-import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
-import { fastCashFaq } from './fast-faq.js';
-import { handleCashLedgerDeterministic } from './ledger.js';
-import { handleCashMixedNarrativeGate } from './mixed-narrative-gate.js';
-import { handleCashPocketClosingFlow } from './pocket-closing-flow.js';
-import { handleCashPocketContextCommand } from './pocket-context.js';
-import { normalizeCashPocketLanguage } from './pocket-language.js';
-import { handleCashPocketOrganization } from './pocket-organization.js';
-import { handleCashPocketReceivable } from './pocket-receivables.js';
-import { handleCashPocketTransfer } from './pocket-transfer.js';
 import { enrichCashBalanceResult } from './report-position.js';
 import { cashReports } from './reports.js';
-import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
-import { handleCashSnapshotSafety } from './snapshot-safety.js';
 
 function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
@@ -48,6 +37,10 @@ function looksLikeName(value: string): boolean {
   return !/^(oi|ola|olá|oii+|quero começar|quero comecar|ajuda|menu|saldo|resumo|historico|histórico|certo|ok|okay|beleza|entendi|obrigado|obrigada|valeu|tudo bem|sim|não|nao)$/i.test(clean);
 }
 
+/**
+ * Validador técnico de nome. A origem deve ser o rewritten_text do GPT-5 Nano;
+ * esta função não participa mais da decisão de intenção da mensagem do usuário.
+ */
 export function extractCashOnboardingName(value: string): string | null {
   const lines = String(value ?? '')
     .split(/\r?\n+/)
@@ -157,28 +150,58 @@ async function personalizePaymentMenu(companyId: string, result: VerticalResult 
   };
 }
 
+function onboardingIntent(semantic: CashSemanticRouteResult, expected: 'onboarding_name' | 'onboarding_email'): string | null {
+  if (semantic.parsed.intent !== expected) return null;
+  return semantic.parsed.rewritten_text?.trim() || null;
+}
+
+function canUseWithoutSubscription(intent: CashSemanticRouteResult['parsed']['intent']): boolean {
+  return intent === 'plans'
+    || intent === 'trial'
+    || intent === 'help'
+    || intent === 'acknowledgement'
+    || intent === 'categories'
+    || intent === 'schedule';
+}
+
 export class CashAccessHandler implements VerticalHandler {
   async handle(context: VerticalContext): Promise<VerticalResult | null> {
-    const { company, combinedText } = context;
+    const { company } = context;
     const state = await onboarding(company.id);
+    const effectiveOnboardingState = state.onboarding_state === 'active' && !state.owner_email
+      ? 'awaiting_email'
+      : (state.onboarding_state ?? 'active');
 
-    if (state.onboarding_state === 'welcome') {
+    // REGRA DE ARQUITETURA: o primeiro componente que interpreta a mensagem é sempre
+    // o GPT-5 Nano. Estado de onboarding/financeiro é apenas contexto de entrada.
+    const semantic = await cashAiFirstHandler.interpret(context, {
+      onboardingState: effectiveOnboardingState,
+      ownerName: state.owner_name,
+      ownerEmail: state.owner_email
+    });
+    if (!semantic) return cashAiInterpretationFailure();
+
+    if (effectiveOnboardingState === 'welcome') {
       await db.query(
         `update cash_settings set onboarding_state='awaiting_name',updated_at=now()
          where company_id=$1 and onboarding_state='welcome'`,
         [company.id]
       );
       await cashReports.ensureScheduled(company.id);
-      return text([
-        'Oi! Seja bem-vindo ao Arles Cash 💰',
-        'Seu assistente financeiro direto no WhatsApp.',
-        'Antes de começar, qual é o seu nome?'
-      ].join('\n'));
     }
 
-    if (state.onboarding_state === 'awaiting_name') {
-      const name = extractCashOnboardingName(combinedText);
-      if (!name) return text('Antes de começar, me diz seu nome 😊');
+    if (effectiveOnboardingState === 'welcome' || effectiveOnboardingState === 'awaiting_name') {
+      const candidate = onboardingIntent(semantic, 'onboarding_name');
+      const name = candidate ? extractCashOnboardingName(candidate) : null;
+      if (!name) {
+        return text([
+          effectiveOnboardingState === 'welcome'
+            ? 'Oi! Seja bem-vindo ao Arles Cash 💰\nSeu assistente financeiro direto no WhatsApp.'
+            : '',
+          'Antes de começar, qual é o seu nome?'
+        ].filter(Boolean).join('\n'));
+      }
+
       await saveName(company.id, name);
       return text([
         `Perfeito, ${name}! 😊`,
@@ -187,10 +210,18 @@ export class CashAccessHandler implements VerticalHandler {
       ].join('\n'));
     }
 
-    if (state.onboarding_state === 'awaiting_email') {
-      const email = normalizeEmail(combinedText);
+    if (effectiveOnboardingState === 'awaiting_email') {
+      if (state.onboarding_state === 'active') {
+        await db.query(
+          `update cash_settings set onboarding_state='awaiting_email',updated_at=now() where company_id=$1`,
+          [company.id]
+        );
+      }
+
+      const candidate = onboardingIntent(semantic, 'onboarding_email');
+      const email = candidate ? normalizeEmail(candidate) : '';
       if (!isValidEmail(email)) {
-        return text('Esse e-mail não parece válido 🤔\nMe envie algo como: nome@email.com');
+        return text('Antes de continuar, me passa seu melhor e-mail 😊\nExemplo: nome@email.com');
       }
 
       try {
@@ -212,9 +243,7 @@ export class CashAccessHandler implements VerticalHandler {
           '',
           'Escolha um plano para reativar:',
           '',
-          await cashPaymentMenuForCompany(company.id),
-          '',
-          'Assim que o pagamento for confirmado, seu acesso é liberado automaticamente aqui no WhatsApp.'
+          await cashPaymentMenuForCompany(company.id)
         ].join('\n'));
       }
 
@@ -227,72 +256,25 @@ export class CashAccessHandler implements VerticalHandler {
       ].join('\n'));
     }
 
-    if (state.onboarding_state === 'active' && !state.owner_email) {
-      await db.query(
-        `update cash_settings set onboarding_state='awaiting_email',updated_at=now() where company_id=$1`,
-        [company.id]
-      );
-      return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
+    // Acesso é validação de backend posterior à decisão semântica. Ele pode impedir a
+    // execução financeira, mas nunca troca a intenção escolhida pelo Nano.
+    const access = await cashService.accessState(company.id);
+    if (!access.hasAccess && !canUseWithoutSubscription(semantic.parsed.intent)) {
+      return text([
+        '⚠️ Seu acesso ao Arles Cash não está ativo no momento.',
+        'Seus dados continuam salvos.',
+        '',
+        await cashPaymentMenuForCompany(company.id)
+      ].join('\n'));
     }
 
-    // A partir daqui, toda linguagem natural passa primeiro pela OpenAI. Para um
-    // lançamento, o próprio handler chama uma segunda OpenAI antes do backend gravar.
-    // Cálculos identificados pela IA são executados por script/SQL dentro do handler.
-    const aiFirst = await cashAiFirstHandler.handle(context);
-    if (aiFirst) {
-      const positioned = await enrichCashBalanceResult(company.id, aiFirst);
-      return await personalizePaymentMenu(company.id, positioned);
+    const result = await cashAiFirstHandler.execute(context, semantic);
+    if (!result) {
+      return text('Entendi sua mensagem, mas não consegui validar os dados necessários para executar a ação. Nenhuma alteração foi feita.');
     }
 
-    // Daqui para baixo ficam somente motores determinísticos/legados de execução e
-    // fallback. Eles não precedem mais a camada semântica principal.
-    context.combinedText = normalizeCashPocketLanguage(context.combinedText);
-
-    const mixedNarrative = await handleCashMixedNarrativeGate(context);
-    if (mixedNarrative) return mixedNarrative;
-
-    const conversationSafety = await handleCashConversationSafety(context);
-    if (conversationSafety) return conversationSafety;
-
-    const pocketClosing = await handleCashPocketClosingFlow(context);
-    if (pocketClosing) return pocketClosing;
-
-    const pocketReceivable = await handleCashPocketReceivable(context);
-    if (pocketReceivable) return pocketReceivable;
-
-    const scheduled = await handleCashScheduleDeterministic(context);
-    if (scheduled) return scheduled;
-
-    const pocketTransfer = await handleCashPocketTransfer(context);
-    if (pocketTransfer) return pocketTransfer;
-
-    const pocketOrganization = await handleCashPocketOrganization(context);
-    if (pocketOrganization) return pocketOrganization;
-
-    const snapshotSafety = await handleCashSnapshotSafety(context);
-    if (snapshotSafety) return snapshotSafety;
-
-    const pocketCommand = await handleCashPocketContextCommand(context);
-    if (pocketCommand) return pocketCommand;
-
-    const deterministicLanguage = await handleCashDeterministicLanguage(context);
-    if (deterministicLanguage) return deterministicLanguage;
-
-    // Mesmo no fallback, toda matemática continua 100% determinística.
-    const ledger = await handleCashLedgerDeterministic(context);
-    if (ledger) return await enrichCashBalanceResult(company.id, ledger);
-
-    if (isCashDeletionCommand(context.combinedText)) {
-      const bulk = await handleCashBulkDeletionCommand(context);
-      if (bulk) return bulk;
-      return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
-    }
-
-    const fastFaq = await fastCashFaq(context);
-    if (fastFaq) return fastFaq;
-
-    // Último fallback local caso a OpenAI esteja indisponível ou retorne unknown.
-    return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
+    const positioned = await enrichCashBalanceResult(company.id, result);
+    return await personalizePaymentMenu(company.id, positioned);
   }
 }
 
