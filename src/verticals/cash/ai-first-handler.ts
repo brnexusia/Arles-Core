@@ -38,6 +38,14 @@ const HelpSectionSchema = z.enum([
   'plans'
 ]);
 
+const CalculationSchema = z.object({
+  explicit_base: z.number().nonnegative().nullable(),
+  operations: z.array(z.object({
+    type: z.enum(['income', 'expense']),
+    amount: z.number().positive()
+  })).max(20)
+}).nullable();
+
 const SemanticSchema = z.object({
   intent: z.enum([
     'transaction',
@@ -65,6 +73,7 @@ const SemanticSchema = z.object({
   social_kind: z.enum(['greeting', 'thanks', 'farewell', 'wellbeing', 'ack', 'none']),
   help_section: HelpSectionSchema.nullable(),
   rewritten_text: z.string().nullable(),
+  calculation: CalculationSchema,
   clarification: z.string().nullable()
 });
 
@@ -87,6 +96,19 @@ function normalize(value: string): string {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+function calculationCanonical(calculation: SemanticIntent['calculation']): string | null {
+  if (!calculation?.operations?.length) return null;
+
+  const parts = ['calcular saldo'];
+  if (calculation.explicit_base != null) {
+    parts.push(`considera saldo de ${calculation.explicit_base}`);
+  }
+  for (const operation of calculation.operations) {
+    parts.push(`${operation.type === 'income' ? 'somar' : 'descontar'} ${operation.amount}`);
+  }
+  return parts.join('; ');
 }
 
 // Compatibilidade para testes/rotas legadas. Não participa do roteamento semântico
@@ -141,8 +163,8 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
   try {
     const response = await client.responses.parse({
       model: env.cashOpenaiModel,
-      reasoning: { effort: 'minimal' },
-      max_output_tokens: 360,
+      reasoning: { effort: 'low' },
+      max_output_tokens: 420,
       input: [
         {
           role: 'system',
@@ -151,19 +173,21 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             `Você recebe até ${cashConversationMemorySize} mensagens recentes da conversa real, alternando user e assistant.`,
             'A ÚLTIMA mensagem com role=user é o pedido atual. Execute/classifique SOMENTE a intenção desse último pedido.',
             'Mensagens anteriores do assistant são contexto e podem conter exemplos/sugestões. NUNCA trate uma sugestão anterior do assistant como se o usuário tivesse pedido aquilo agora.',
-            'Use o histórico para resolver referências naturais: “isso”, “esses”, “essas informações”, “o 2”, “eles”, “todos esses”, “o que eu registrei”, “aquela lista”, “de hoje”, etc.',
+            'Use o histórico para resolver referências naturais: “isso”, “esses”, “essas informações”, “o 2”, “eles”, “todos esses”, “o que eu registrei”, “aquela lista”, “de hoje”, “as coisas”, “o que eu paguei”, “depois disso”, etc.',
+            'Ao resolver referências, dê prioridade às mensagens do usuário imediatamente anteriores e aos valores explicitamente citados na mensagem atual.',
+            'Se o usuário citar um valor-base explicitamente agora, esse valor vence saldo global, totais antigos e outros números parecidos existentes no histórico.',
             'Se o usuário mudar de assunto ou der uma nova ordem explícita, a nova ordem tem prioridade total sobre confirmações ou assuntos antigos.',
             'Sua função é ENTENDER português brasileiro natural, erros, abreviações, gírias, frases incompletas e múltiplas linhas.',
             'Você NÃO consulta banco, NÃO calcula saldo, NÃO soma valores, NÃO grava e NÃO apaga nada.',
-            'Você classifica a intenção e reescreve o pedido de forma explícita/canônica para executores seguros do backend.',
+            'Você classifica a intenção e extrai/reformula os fatos necessários para executores seguros do backend.',
             'Preserve exatamente valores, sinais, datas, nomes, períodos, números de itens, cofrinhos e recorrências. Nunca invente informação.',
             '',
             'INTENÇÕES:',
             'transaction: dinheiro REAL que já entrou/saiu e deve virar lançamento.',
             'mixed: a última mensagem contém objetivos de naturezas diferentes, por exemplo registrar um gasto E perguntar saldo. Reescreva todos os objetivos, um por linha.',
             'query: consultar/listar/somar registros já salvos, com filtros de data, descrição, categoria ou período.',
-            'balance: posição financeira atual/acumulada — saldo, quanto ainda tem, total disponível, entradas/saídas acumuladas.',
-            'projection: simulação hipotética (“se eu gastar 50, quanto sobra?”).',
+            'balance: posição financeira GLOBAL/ACUMULADA atual — saldo, quanto ainda tem, total disponível, entradas/saídas acumuladas. NÃO use balance quando o usuário pede uma conta ancorada em um valor específico.',
+            'projection: simulação hipotética OU cálculo contextual ancorado em um valor específico, inclusive “quanto sobrou dos 970 depois que paguei as coisas?”.',
             'pocket: criar/listar/consultar/mover dinheiro em cofrinho. Se a ação principal for APAGAR cofrinho(s), use delete.',
             'forecast_schedule: criar previsão/agendamento futuro ou recorrente.',
             'forecast_query: consultar previsões ou saldo projetado.',
@@ -176,6 +200,15 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             'plans/trial/categories/schedule: funções administrativas do produto.',
             'acknowledgement: conversa social curta sem ação financeira.',
             'unknown: somente quando nem o histórico permite saber com segurança o que o usuário quer.',
+            '',
+            'CÁLCULO CONTEXTUAL — REGRA PRIORITÁRIA:',
+            'Quando o usuário pergunta quanto sobrou/restou/ficou DE/DOS um valor específico depois de gastos, pagamentos ou entradas mencionados na conversa recente, classifique como projection, NÃO como balance.',
+            'Preencha calculation.explicit_base com o valor-base citado pelo usuário e calculation.operations com cada operação relevante mencionada nas mensagens recentes do USER. Não use números das respostas do assistant como novas operações.',
+            'Para “as coisas”, “esses gastos”, “o que eu paguei” e referências parecidas, use o bloco financeiro mais próximo imediatamente anterior ao pedido atual.',
+            'Não calcule o resultado dentro da IA. Apenas extraia base e operações; o backend fará a matemática.',
+            'Exemplo: user antes disse “paguei 77 da unha, 140 de skin care e 24 de lanche”; agora pergunta “quanto sobrou dos 970 depois que paguei as coisas?” => intent=projection, explicit_base=970 e três operações expense: 77, 140, 24.',
+            'Se o usuário disser apenas “quanto sobrou?” sem valor-base nem operações específicas referidas, isso é balance global.',
+            'Se houver valor-base explícito mas o histórico não permitir identificar quais operações ele quer aplicar, use unknown e faça uma pergunta curta em vez de responder o saldo global.',
             '',
             'REGRAS IMPORTANTES PARA OS CASOS REAIS:',
             '“Poderia me informar o valor total dos lançamentos?” => balance; o backend mostrará entradas, saídas e saldo.',
@@ -191,6 +224,8 @@ async function semanticRoute(context: VerticalContext): Promise<SemanticRouteRes
             '',
             'Para transaction, rewritten_text deve manter valor e descrição factual.',
             'Para query, rewritten_text deve tornar período/filtro/referente explícito usando o contexto recente.',
+            'Para projection, preencha calculation sempre que houver operandos claros; rewritten_text pode resumir o pedido, mas NÃO precisa fazer a conta.',
+            'Para qualquer intent que não seja um cálculo/simulação, calculation deve ser null.',
             'Para delete/edit/pocket/forecast, rewritten_text deve preservar todos os alvos e detalhes mencionados.',
             'Para acknowledgement, social_kind identifica greeting/thanks/farewell/wellbeing/ack; nos demais intents use none.',
             'Para help, help_section deve ser menu/register/query/pockets/forecasts/manage/reports/plans; nos demais intents use null.',
@@ -277,6 +312,10 @@ export class CashAiFirstHandler implements VerticalHandler {
         : null;
     }
     const understood = semantic.parsed;
+    const canonicalCalculation = calculationCanonical(understood.calculation);
+    const anchoredCalculation = Boolean(
+      understood.calculation?.explicit_base != null && understood.calculation.operations.length
+    );
 
     if (understood.intent === 'unknown') {
       return text(understood.clarification?.trim() || 'Não consegui identificar exatamente o que você quer fazer. Pode me dizer em uma frase curta?');
@@ -308,14 +347,22 @@ export class CashAiFirstHandler implements VerticalHandler {
       return await cashConversationHandler.handle({ ...context, combinedText: 'histórico' });
     }
 
+    // Salvaguarda contra a confusão que originou o bug: se a própria IA extraiu uma
+    // conta ancorada em valor específico, executamos a matemática determinística mesmo
+    // que o rótulo tenha vindo como balance/query.
+    if (anchoredCalculation && canonicalCalculation && (understood.intent === 'balance' || understood.intent === 'query')) {
+      const result = await handleCashLedgerDeterministic({ ...context, combinedText: canonicalCalculation });
+      if (result) return result;
+    }
+
     if (understood.intent === 'balance') {
       return await handleCashLedgerDeterministic({ ...context, combinedText: 'saldo' });
     }
 
     if (understood.intent === 'projection') {
-      const rewritten = understood.rewritten_text?.trim() || context.combinedText;
+      const rewritten = canonicalCalculation || understood.rewritten_text?.trim() || context.combinedText;
       const result = await handleCashLedgerDeterministic({ ...context, combinedText: rewritten });
-      return result ?? text('Entendi a simulação, mas não consegui calcular com os dados fornecidos.');
+      return result ?? text('Entendi a conta, mas não consegui calcular com os dados fornecidos.');
     }
 
     if (understood.intent === 'delete') {
