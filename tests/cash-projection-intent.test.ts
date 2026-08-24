@@ -30,6 +30,25 @@ describe('Arles Cash — contrato tipado de simulação', () => {
     expect(intent?.projection?.operations).toEqual([{ type: 'expense', amount: 50 }]);
   });
 
+  it('executa uma conta contextual canonicalizada com base explícita e vários gastos', () => {
+    const intent = interpretCashFinancialIntent(
+      'calcular saldo; considera saldo de 970; descontar 77; descontar 140; descontar 24'
+    );
+    expect(intent).toMatchObject({
+      kind: 'projection',
+      operation: 'simulate',
+      mutation: false,
+      projection: {
+        explicitBase: 970,
+        operations: [
+          { type: 'expense', amount: 77 },
+          { type: 'expense', amount: 140 },
+          { type: 'expense', amount: 24 }
+        ]
+      }
+    });
+  });
+
   it.each([
     'gastei 50 no cofrinho Viagem',
     'quanto gastei no cofrinho Viagem?',
