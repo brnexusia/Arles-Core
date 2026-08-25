@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Arles</title>
+  <defs>
+    <linearGradient id="dark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07102f"/>
+      <stop offset="1" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#174ef2"/>
+      <stop offset="1" stop-color="#2a64ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="#ffffff"/>
+  <path fill="url(#dark)" d="M296 103 219 105 54 410 302 410 270 350 159 349 255 170 330 169Z"/>
+  <path fill="url(#blue)" d="M272 201 380 409 457 410 346 201Z"/>
+</svg>
