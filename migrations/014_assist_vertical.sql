@@ -1,5 +1,27 @@
 create extension if not exists pgcrypto;
 
+insert into vertical_definitions(id, name, version, capabilities)
+values (
+  'assist',
+  'Arles Assist',
+  '0.1.0',
+  array[
+    'assist.services',
+    'assist.import',
+    'assist.quotes',
+    'assist.orders',
+    'assist.customers',
+    'assist.status',
+    'assist.ai_triage'
+  ]::text[]
+)
+on conflict (id) do update set
+  name = excluded.name,
+  version = excluded.version,
+  capabilities = excluded.capabilities,
+  enabled = true,
+  updated_at = now();
+
 create table if not exists assist_settings (
   company_id uuid primary key references companies(id) on delete cascade,
   business_name text,
@@ -61,6 +83,9 @@ create table if not exists assist_orders (
 );
 create index if not exists idx_assist_orders_company_status on assist_orders(company_id,status,updated_at desc);
 create index if not exists idx_assist_orders_phone on assist_orders(company_id,customer_phone,updated_at desc);
+create unique index if not exists idx_assist_orders_source_message_unique
+  on assist_orders(company_id, source_message_id)
+  where source_message_id is not null and source_message_id <> '';
 
 create table if not exists assist_order_events (
   id uuid primary key default gen_random_uuid(),
