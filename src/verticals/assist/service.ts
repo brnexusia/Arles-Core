@@ -1,7 +1,11 @@
 import { db } from '../../infrastructure/db.js';
 
 function clean(value: unknown): string { return String(value ?? '').trim(); }
-function num(value: unknown): number | null { const n = Number(value); return Number.isFinite(n) ? n : null; }
+function num(value: unknown): number | null {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 export type AssistServiceInput = {
   category?: unknown; equipment_type?: unknown; brand?: unknown; model_pattern?: unknown; name?: unknown; description?: unknown;
@@ -37,8 +41,20 @@ export class AssistService {
     if (!name) throw new Error('SERVICE_NAME_REQUIRED');
     if (!equipment) throw new Error('EQUIPMENT_TYPE_REQUIRED');
     if (!['exact','range','diagnosis'].includes(pricing)) throw new Error('PRICING_MODE_INVALID');
+
+    let priceMin = num(body.price_min);
+    let priceMax = num(body.price_max);
+    if (pricing === 'diagnosis') {
+      priceMin = null;
+      priceMax = null;
+    } else {
+      if (priceMin === null || priceMin < 0) throw new Error('SERVICE_PRICE_MIN_REQUIRED');
+      if (pricing === 'exact') priceMax = priceMin;
+      if (priceMax !== null && priceMax < priceMin) throw new Error('SERVICE_PRICE_RANGE_INVALID');
+    }
+
     const values = [category,equipment,clean(body.brand)||null,clean(body.model_pattern)||null,name,clean(body.description)||null,pricing,
-      num(body.price_min),num(body.price_max),num(body.labor_price),num(body.parts_price),Boolean(body.requires_diagnosis),body.active!==false];
+      priceMin,priceMax,num(body.labor_price),num(body.parts_price),Boolean(body.requires_diagnosis),body.active!==false];
     const result = id
       ? await db.query(`update assist_services set category=$3,equipment_type=$4,brand=$5,model_pattern=$6,name=$7,description=$8,pricing_mode=$9,
           price_min=$10,price_max=$11,labor_price=$12,parts_price=$13,requires_diagnosis=$14,active=$15,updated_at=now()
@@ -53,7 +69,7 @@ export class AssistService {
   async orders(companyId: string, status?: string) {
     return (await db.query(`select o.id::text,o.customer_name,o.customer_phone,o.channel,o.equipment_type,o.brand,o.model,o.serial_number,o.reported_issue,
       o.quoted_min::float,o.quoted_max::float,o.approved_price::float,o.status,o.diagnosis_notes,o.internal_notes,o.promised_at,o.created_at,o.updated_at,
-      s.name as probable_service_name
+      s.name as probable_service_name,s.pricing_mode as probable_service_pricing_mode
       from assist_orders o left join assist_services s on s.id=o.probable_service_id
       where o.company_id=$1 and ($2::text is null or o.status=$2) order by o.updated_at desc limit 300`, [companyId,status||null])).rows;
   }
@@ -63,7 +79,7 @@ export class AssistService {
     if (!phone) return null;
     return (await db.query(`select o.id::text,o.customer_name,o.customer_phone,o.channel,o.equipment_type,o.brand,o.model,o.serial_number,o.reported_issue,
       o.quoted_min::float,o.quoted_max::float,o.approved_price::float,o.status,o.diagnosis_notes,o.internal_notes,o.promised_at,o.created_at,o.updated_at,
-      s.name as probable_service_name
+      s.name as probable_service_name,s.pricing_mode as probable_service_pricing_mode
       from assist_orders o left join assist_services s on s.id=o.probable_service_id
       where o.company_id=$1 and o.customer_phone=$2 order by o.updated_at desc limit 1`, [companyId,phone])).rows[0] ?? null;
   }
@@ -71,6 +87,12 @@ export class AssistService {
   async createOrder(companyId: string, body: Record<string, unknown>) {
     const phone = clean(body.customer_phone).replace(/\D/g,'');
     if (!phone) throw new Error('CUSTOMER_PHONE_REQUIRED');
+    const sourceMessageId = clean(body.source_message_id);
+    if (sourceMessageId) {
+      const duplicate = await db.query<{id:string}>(`select id::text from assist_orders where company_id=$1 and source_message_id=$2 limit 1`, [companyId,sourceMessageId]);
+      if (duplicate.rows[0]) return { id: duplicate.rows[0].id };
+    }
+
     const customer = clean(body.customer_name) || 'Cliente';
     const contact = await db.query<{id:string}>(`insert into contacts(company_id,name,phone_number,last_seen_at)
       values($1,$2,$3,now()) on conflict(company_id,phone_number) do update set name=excluded.name,last_seen_at=now(),updated_at=now() returning id::text`, [companyId,customer,phone]);
@@ -79,7 +101,7 @@ export class AssistService {
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) returning id::text`, [
       companyId,contact.rows[0]?.id,body.probable_service_id||null,customer,phone,clean(body.channel)||'panel',clean(body.equipment_type)||null,clean(body.brand)||null,
       clean(body.model)||null,clean(body.serial_number)||null,clean(body.reported_issue)||null,num(body.quoted_min),num(body.quoted_max),num(body.approved_price),clean(body.status)||'triage',
-      clean(body.diagnosis_notes)||null,clean(body.internal_notes)||null,body.promised_at||null,clean(body.source_message_id)||null]);
+      clean(body.diagnosis_notes)||null,clean(body.internal_notes)||null,body.promised_at||null,sourceMessageId||null]);
     await this.addEvent(companyId,result.rows[0].id,'created',null,clean(body.status)||'triage','OS criada','system');
     return { id: result.rows[0].id };
   }
@@ -148,7 +170,7 @@ export class AssistService {
     if (input.problem) patch.reported_issue = input.problem;
     if (service?.id) patch.probable_service_id = service.id;
     if (service?.price_min != null) patch.quoted_min = service.price_min;
-    if (service?.price_max != null || service?.price_min != null) patch.quoted_max = service?.price_max ?? service?.price_min;
+    if (service?.price_max != null) patch.quoted_max = service.price_max;
     if (priced && active.rows[0]?.status !== 'confirmed') patch.status = 'quoted';
 
     if (active.rows[0]) {
