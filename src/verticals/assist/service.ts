@@ -116,8 +116,22 @@ export class AssistService {
     if (!tokens) return [];
     return (await db.query(`select id::text,category,equipment_type,brand,model_pattern,name,description,pricing_mode,price_min::float,price_max::float,requires_diagnosis
       from assist_services where company_id=$1 and active=true and (
-        lower($2) like '%'||lower(equipment_type)||'%' or lower($2) like '%'||lower(coalesce(brand,''))||'%' or lower($2) like '%'||lower(name)||'%'
-        or lower(name) like '%'||lower($2)||'%') order by case when pricing_mode='exact' then 0 when pricing_mode='range' then 1 else 2 end,name limit 8`, [companyId,tokens])).rows;
+        lower($2) like '%'||lower(equipment_type)||'%'
+        or (nullif(trim(brand),'') is not null and lower($2) like '%'||lower(brand)||'%')
+        or (nullif(trim(model_pattern),'') is not null and lower($2) like '%'||lower(model_pattern)||'%')
+        or lower($2) like '%'||lower(name)||'%'
+        or lower(name) like '%'||lower($2)||'%'
+      )
+      order by
+        case
+          when nullif(trim(model_pattern),'') is not null and lower($2) like '%'||lower(model_pattern)||'%' then 0
+          when nullif(trim(brand),'') is not null and lower($2) like '%'||lower(brand)||'%' then 1
+          when lower($2) like '%'||lower(equipment_type)||'%' then 2
+          else 3
+        end,
+        case when pricing_mode='exact' then 0 when pricing_mode='range' then 1 else 2 end,
+        name
+      limit 8`, [companyId,tokens])).rows;
   }
 
   async upsertConversationOrder(input: {companyId:string;phone:string;name:string;messageId:string;channel?:string;equipment?:string;brand?:string;model?:string;problem?:string;service?:any}) {
