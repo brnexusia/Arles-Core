@@ -8,7 +8,7 @@ const brl=(n:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'
 function fallback(text:string){
   const t=norm(text);
   return {
-    intent:/\b(preco|valor|quanto|orcamento|orcamento)\b/.test(t)?'quote':/\b(consert|arrum|reparo|quebrou|parou|defeito)\b/.test(t)?'repair':/\b(status|pronto|ficou pronto|meu aparelho|minha ordem)\b/.test(t)?'status':/\b(oi|ola|bom dia|boa tarde|boa noite)\b/.test(t)?'greeting':'unknown',
+    intent:/\b(preco|valor|quanto|orcamento|orçamento)\b/.test(t)?'quote':/\b(consert|arrum|reparo|quebrou|parou|defeito)\b/.test(t)?'repair':/\b(status|pronto|ficou pronto|meu aparelho|minha ordem)\b/.test(t)?'status':/\b(oi|ola|bom dia|boa tarde|boa noite)\b/.test(t)?'greeting':'unknown',
     equipment_type:'',brand:'',model:'',problem:text,customer_name:'',wants_pickup:false,approval:'unknown',confidence:.25
   } as const;
 }
@@ -30,7 +30,8 @@ export class AssistHandler{
     }
 
     if(intent.intent==='status'){
-      const order=await assistService.latestForPhone(company.id,message.phone);
+      const phone=message.phone.replace(/\D/g,'');
+      const order=(await assistService.orders(company.id) as any[]).find(item=>String(item.customer_phone).replace(/\D/g,'')===phone);
       if(!order)return {actions:[{type:'text',text:'Não encontrei uma ordem de serviço aberta nesse número. Se quiser, me diga qual aparelho está com problema e eu começo um atendimento agora.'}]};
       const labels:Record<string,string>={triage:'em triagem',quoted:'com orçamento enviado',awaiting_approval:'aguardando sua aprovação',received:'recebido na assistência',diagnosis:'em diagnóstico',approved:'aprovado',repairing:'em reparo',ready:'pronto para retirada/entrega',delivered:'entregue',cancelled:'cancelado'};
       return {actions:[{type:'text',text:`Encontrei sua OS para ${[order.brand,order.model,order.equipment_type].filter(Boolean).join(' ')||'o aparelho'}. O status atual é: *${labels[order.status]||order.status}*.${order.promised_at?`\nPrevisão: ${new Date(order.promised_at).toLocaleString('pt-BR')}.`:''}`}]};
