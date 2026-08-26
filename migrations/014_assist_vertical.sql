@@ -51,7 +51,7 @@ create table if not exists assist_orders (
   quoted_min numeric(12,2),
   quoted_max numeric(12,2),
   approved_price numeric(12,2),
-  status text not null default 'triage' check (status in ('triage','quoted','awaiting_approval','received','diagnosis','approved','repairing','ready','delivered','cancelled')),
+  status text not null default 'triage' check (status in ('triage','quoted','awaiting_approval','confirmed','received','diagnosis','approved','repairing','ready','delivered','cancelled')),
   diagnosis_notes text,
   internal_notes text,
   promised_at timestamptz,
