@@ -42,17 +42,20 @@ export class AssistHandler {
     const waitingForDecision = existing && ['quoted','awaiting_approval'].includes(existing.status);
     const approval = intent.approval !== 'unknown' ? intent.approval : decision;
     if (waitingForDecision && approval === 'yes') {
-      const exactQuote = existing.quoted_min != null && existing.quoted_max != null && Number(existing.quoted_min) === Number(existing.quoted_max);
+      const exactQuote = existing.probable_service_pricing_mode === 'exact'
+        && existing.quoted_min != null
+        && existing.quoted_max != null
+        && Number(existing.quoted_min) === Number(existing.quoted_max);
       await assistService.updateOrder(company.id, existing.id, {
         status: 'confirmed',
         approved_price: exactQuote ? Number(existing.quoted_min) : null,
-        note: 'Orçamento confirmado pelo cliente no atendimento automático.'
+        note: 'Orçamento/entrada confirmado pelo cliente no atendimento automático.'
       });
       return { actions: [{ type:'text', text:`Perfeito! ✅ Deixei sua OS *confirmada* para ${[existing.brand,existing.model,existing.equipment_type].filter(Boolean).join(' ') || 'o aparelho'}.${exactQuote ? ` O valor confirmado é ${brl(Number(existing.quoted_min))}.` : ''}\n\nAgora é só trazer o aparelho para a assistência${(await assistService.settings(company.id) as any).pickup_enabled ? ' ou solicitar a retirada' : ''}.` }] };
     }
     if (waitingForDecision && approval === 'no') {
-      await assistService.updateOrder(company.id, existing.id, { status:'cancelled', note:'Orçamento recusado/cancelado pelo cliente.' });
-      return { actions: [{ type:'text', text:'Sem problema. Deixei esse orçamento como não confirmado. Se quiser consultar outro reparo ou aparelho, é só me falar.' }] };
+      await assistService.updateOrder(company.id, existing.id, { status:'cancelled', note:'Orçamento/entrada recusado pelo cliente.' });
+      return { actions: [{ type:'text', text:'Sem problema. Deixei esse atendimento como não confirmado. Se quiser consultar outro reparo ou aparelho, é só me falar.' }] };
     }
 
     if (intent.intent === 'greeting' || (intent.intent === 'unknown' && /^\s*(oi|ola|opa|eai|e ai)\b/.test(text))) {
@@ -100,7 +103,8 @@ export class AssistHandler {
 
     const settings = await assistService.settings(company.id);
     const fee = Number((settings as any).diagnosis_fee || 0);
-    return { actions: [{ type:'text', text:`Esse serviço precisa de diagnóstico antes de fechar o valor.${fee > 0 ? ` A avaliação custa ${brl(fee)}${(settings as any).diagnosis_waived_if_approved ? ', e esse valor é abatido/dispensado se o serviço for aprovado' : ''}.` : ''}\n\nPosso deixar a entrada do aparelho encaminhada agora.` }] };
+    await assistService.updateOrder(company.id, String((order as any).id), { status:'awaiting_approval', note:'Entrada para diagnóstico oferecida pela IA.' });
+    return { actions: [{ type:'text', text:`Esse serviço precisa de diagnóstico antes de fechar o valor.${fee > 0 ? ` A avaliação custa ${brl(fee)}${(settings as any).diagnosis_waived_if_approved ? ', e esse valor é abatido/dispensado se o serviço for aprovado' : ''}.` : ''}\n\nPosso deixar a entrada do aparelho encaminhada agora?` }] };
   }
 }
 
