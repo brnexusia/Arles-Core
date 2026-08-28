@@ -43,12 +43,10 @@ export const env = {
   cashEvolutionInstance: process.env.CASH_EVOLUTION_INSTANCE?.trim() ?? '',
   cashOfficialNumber: (process.env.CASH_OFFICIAL_NUMBER?.trim() || '5575999622157').replace(/\D/g, ''),
   cashSignupUrl: process.env.CASH_SIGNUP_URL?.trim() ?? '',
-  // IA 1 entende intenção; IA 2 extrai/valida lançamentos. Ambas usam nano por padrão.
-  cashOpenaiModel: process.env.CASH_OPENAI_MODEL?.trim() || 'gpt-5-nano',
-  cashOpenaiSecondModel:
-    process.env.CASH_OPENAI_SECOND_MODEL?.trim() ||
-    process.env.CASH_OPENAI_MODEL?.trim() ||
-    'gpt-5-nano',
+  // O Cash fica fixado no GPT-5 nano tanto para intenção/contexto quanto para
+  // extrações estruturadas. Assim um env antigo não troca o modelo sem revisão de código.
+  cashOpenaiModel: 'gpt-5-nano',
+  cashOpenaiSecondModel: 'gpt-5-nano',
   // Janela antiga mantida só por compatibilidade com deploys existentes.
   cashMessageBufferMs: numberEnv('CASH_MESSAGE_BUFFER_MS', 15000),
   // Alvo de baixa latência: após o usuário parar de digitar/gravar, processa quase
