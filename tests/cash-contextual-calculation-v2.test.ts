@@ -41,4 +41,15 @@ describe('Arles Cash contextual calculation v2', () => {
       ]
     }).result).toBe(729);
   });
+
+  it('rounds financial math to cents', () => {
+    expect(calculateCashContextualValue({
+      base_mode: 'zero',
+      explicit_base: null,
+      operations: [
+        { type: 'income', amount: 0.1 },
+        { type: 'income', amount: 0.2 }
+      ]
+    }).result).toBe(0.3);
+  });
 });
