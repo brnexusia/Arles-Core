@@ -2,24 +2,9 @@ import { db } from '../../infrastructure/db.js';
 import type { VerticalContext, VerticalHandler, VerticalResult } from '../vertical.js';
 import { cashAiFirstHandler } from './ai-first-handler.js';
 import { cashPaymentMenuForCompany } from './checkout.js';
-import { cashConversationHandler } from './conversation.js';
-import { handleCashConversationSafety } from './conversation-safety.js';
-import { handleCashDeterministicLanguage } from './deterministic-language.js';
-import { handleCashBulkDeletionCommand, isCashDeletionCommand } from './deletion.js';
-import { fastCashFaq } from './fast-faq.js';
-import { handleCashLedgerDeterministic } from './ledger.js';
-import { handleCashMixedNarrativeGate } from './mixed-narrative-gate.js';
-import { handleCashPocketClosingFlow } from './pocket-closing-flow.js';
-import { handleCashPocketContextCommand } from './pocket-context.js';
-import { normalizeCashPocketLanguage } from './pocket-language.js';
-import { handleCashPocketOrganization } from './pocket-organization.js';
-import { handleCashPocketReceivable } from './pocket-receivables.js';
-import { handleCashPocketTransfer } from './pocket-transfer.js';
 import { enrichCashBalanceResult } from './report-position.js';
 import { cashReports } from './reports.js';
-import { handleCashScheduleDeterministic } from './schedules.js';
 import { cashService } from './service.js';
-import { handleCashSnapshotSafety } from './snapshot-safety.js';
 
 function text(value: string): VerticalResult {
   return { actions: [{ type: 'text', text: value }] };
@@ -162,6 +147,8 @@ export class CashAccessHandler implements VerticalHandler {
     const { company, combinedText } = context;
     const state = await onboarding(company.id);
 
+    // Cadastro e validação de dados continuam em código por segurança. Depois que a
+    // conta está ativa, nenhuma regra textual determinística decide intenção financeira.
     if (state.onboarding_state === 'welcome') {
       await db.query(
         `update cash_settings set onboarding_state='awaiting_name',updated_at=now()
@@ -222,8 +209,7 @@ export class CashAccessHandler implements VerticalHandler {
         `Perfeito, ${name}! 🎉`,
         `E-mail cadastrado: ${email}`,
         'Seu trial gratuito de 7 dias está ativo.',
-        'Você pode registrar receitas, despesas, criar cofrinhos e consultar seu saldo aqui mesmo.',
-        'Já pode começar! Tente mandar: “Gastei 50 no mercado”'
+        'Você já pode registrar receitas, despesas, criar cofrinhos e consultar seu saldo.'
       ].join('\n'));
     }
 
@@ -235,64 +221,12 @@ export class CashAccessHandler implements VerticalHandler {
       return text('Antes de continuar, me passa seu melhor e-mail 😊\nEle será usado para identificar e recuperar seus pagamentos quando necessário.');
     }
 
-    // A partir daqui, toda linguagem natural passa primeiro pela OpenAI. Para um
-    // lançamento, o próprio handler chama uma segunda OpenAI antes do backend gravar.
-    // Cálculos identificados pela IA são executados por script/SQL dentro do handler.
-    const aiFirst = await cashAiFirstHandler.handle(context);
-    if (aiFirst) {
-      const positioned = await enrichCashBalanceResult(company.id, aiFirst);
-      return await personalizePaymentMenu(company.id, positioned);
-    }
-
-    // Daqui para baixo ficam somente motores determinísticos/legados de execução e
-    // fallback. Eles não precedem mais a camada semântica principal.
-    context.combinedText = normalizeCashPocketLanguage(context.combinedText);
-
-    const mixedNarrative = await handleCashMixedNarrativeGate(context);
-    if (mixedNarrative) return mixedNarrative;
-
-    const conversationSafety = await handleCashConversationSafety(context);
-    if (conversationSafety) return conversationSafety;
-
-    const pocketClosing = await handleCashPocketClosingFlow(context);
-    if (pocketClosing) return pocketClosing;
-
-    const pocketReceivable = await handleCashPocketReceivable(context);
-    if (pocketReceivable) return pocketReceivable;
-
-    const scheduled = await handleCashScheduleDeterministic(context);
-    if (scheduled) return scheduled;
-
-    const pocketTransfer = await handleCashPocketTransfer(context);
-    if (pocketTransfer) return pocketTransfer;
-
-    const pocketOrganization = await handleCashPocketOrganization(context);
-    if (pocketOrganization) return pocketOrganization;
-
-    const snapshotSafety = await handleCashSnapshotSafety(context);
-    if (snapshotSafety) return snapshotSafety;
-
-    const pocketCommand = await handleCashPocketContextCommand(context);
-    if (pocketCommand) return pocketCommand;
-
-    const deterministicLanguage = await handleCashDeterministicLanguage(context);
-    if (deterministicLanguage) return deterministicLanguage;
-
-    // Mesmo no fallback, toda matemática continua 100% determinística.
-    const ledger = await handleCashLedgerDeterministic(context);
-    if (ledger) return await enrichCashBalanceResult(company.id, ledger);
-
-    if (isCashDeletionCommand(context.combinedText)) {
-      const bulk = await handleCashBulkDeletionCommand(context);
-      if (bulk) return bulk;
-      return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
-    }
-
-    const fastFaq = await fastCashFaq(context);
-    if (fastFaq) return fastFaq;
-
-    // Último fallback local caso a OpenAI esteja indisponível ou retorne unknown.
-    return await personalizePaymentMenu(company.id, await cashConversationHandler.handle(context));
+    // Único caminho de interpretação conversacional: GPT-5 nano. Os handlers chamados
+    // por ele são executores técnicos (SQL, validação, persistência e cálculo), não
+    // fallbacks de linguagem natural.
+    const aiResult = await cashAiFirstHandler.handle(context);
+    const positioned = await enrichCashBalanceResult(company.id, aiResult);
+    return await personalizePaymentMenu(company.id, positioned);
   }
 }
 
