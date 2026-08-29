@@ -30,7 +30,7 @@ function explicitAllTimeUntilNowCue(value: string): boolean {
 }
 
 function allTimeCue(value: string): boolean {
-  return /\b(?:total geral|geral|global|acumulad\w*|historico completo|historico inteiro|historico todo|todo o historico|desde o inicio|desde que comecei|desde sempre|no geral|ao todo|no total|de tudo|tudo que|tudo o que|todos? os lancamentos|todos? os registros|todas? as movimentacoes|vida toda)\b/.test(value);
+  return /\b(?:total geral|geral|global|acumulad\w*|historico completo|historico inteiro|historico todo|todo o historico|desde o inicio|desde que comecei|desde sempre|no geral|ao todo|no total|de tudo|tudo que|tudo o que|todos?\s+(?:os\s+)?(?:meus\s+)?lancamentos|todos?\s+(?:os\s+)?(?:meus\s+)?registros|todas?\s+(?:as\s+)?(?:minhas\s+)?movimentacoes|vida toda)\b/.test(value);
 }
 
 function aggregateCue(value: string): boolean {
@@ -156,6 +156,7 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
   if (explicitPeriod) return { flow, scope: 'period', periodCanonical: explicitPeriod };
 
   const historical = allTimeCue(value)
+    || (records && aggregate)
     || (income && expense && aggregate && /\b(?:tudo|todos|todas|geral|acumulad\w*)\b/.test(value))
     || (income && expense && /\bquanto\b/.test(value) && /\b(?:ja|tudo|geral|acumulad\w*)\b/.test(value));
 
