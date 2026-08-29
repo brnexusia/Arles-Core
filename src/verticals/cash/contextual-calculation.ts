@@ -1,3 +1,6 @@
+import type { VerticalContext, VerticalResult } from '../vertical.js';
+import { cashLedgerService } from './ledger.js';
+
 export type CashContextualCalculationBaseMode = 'zero' | 'current_balance' | 'explicit';
 
 export interface CashContextualCalculationOperation {
@@ -23,6 +26,14 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function brl(value: number): string {
+  return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function text(value: string): VerticalResult {
+  return { actions: [{ type: 'text', text: value }] };
+}
+
 export function calculateCashContextualValue(
   spec: CashContextualCalculationSpec,
   currentBalance = 0
@@ -41,19 +52,42 @@ export function calculateCashContextualValue(
   let income = 0;
   let expense = 0;
   for (const operation of spec.operations) {
-    if (!Number.isFinite(operation.amount) || operation.amount <= 0) {
-      throw new Error('Invalid calculation operation');
-    }
+    if (!Number.isFinite(operation.amount) || operation.amount <= 0) throw new Error('Invalid calculation operation');
     if (operation.type === 'income') income += operation.amount;
     else expense += operation.amount;
   }
 
   income = roundMoney(income);
   expense = roundMoney(expense);
-  return {
-    base: roundMoney(base),
-    income,
-    expense,
-    result: roundMoney(base + income - expense)
-  };
+  return { base: roundMoney(base), income, expense, result: roundMoney(base + income - expense) };
+}
+
+export async function executeCashContextualCalculation(
+  context: VerticalContext,
+  spec: CashContextualCalculationSpec | null | undefined
+): Promise<VerticalResult> {
+  if (!spec?.operations?.length) {
+    return text('Entendi que você quer fazer uma conta, mas faltou identificar os valores com segurança.');
+  }
+
+  try {
+    const currentBalance = spec.base_mode === 'current_balance'
+      ? (await cashLedgerService.snapshot(context.company.id)).balance
+      : 0;
+    const result = calculateCashContextualValue(spec, currentBalance);
+    const operations = spec.operations.map(operation =>
+      `${operation.type === 'income' ? '➕' : '➖'} ${brl(operation.amount)}`
+    );
+    const baseLine = spec.base_mode === 'zero' ? [] : [`Base: ${brl(result.base)}`];
+    return text([
+      '🧮 *Cálculo*',
+      ...baseLine,
+      ...operations,
+      `Resultado: *${brl(result.result)}*`,
+      '',
+      'Não registrei nenhum lançamento — foi só um cálculo.'
+    ].join('\n'));
+  } catch {
+    return text('Não consegui validar os valores dessa conta. Pode repetir os valores que entram e saem?');
+  }
 }
