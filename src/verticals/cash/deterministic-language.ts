@@ -20,7 +20,6 @@ import {
 import { handleCashLedgerDeterministic } from './ledger.js';
 import { matchCashNaturalLanguageAnyExample } from './natural-language-corpus-doubled.js';
 import { executeCashProjection } from './projection-executor.js';
-import { deterministicCashQuery } from './query.js';
 import { executeCashQueryFilters } from './query-filter-executor.js';
 import { executeCashRecentBatchReference } from './recent-batch.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
@@ -77,13 +76,14 @@ function mapCentralIntent(intent: CashFinancialIntent): CashDeterministicLanguag
   return { intent: intent.kind, canonical: intent.canonical };
 }
 
-function corpusRoute(input: string): CashDeterministicLanguageRoute {
-  const corpus = matchCashNaturalLanguageAnyExample(input);
+function corpusRoute(input: string, normalized: string): CashDeterministicLanguageRoute {
+  const direct = matchCashNaturalLanguageAnyExample(input);
+  const corpus = direct ?? (normalized !== input ? matchCashNaturalLanguageAnyExample(normalized) : null);
   return corpus ? { intent: corpus.intent, canonical: corpus.canonical } : null;
 }
 
 function hasStrongAggregateLanguage(value: string): boolean {
-  return /\b(?:soma|some|somar|somando|total|totaliza|totalize|totalizar|valor total|valor acumulado|acumulado|balanco|fechamento|resumo|quanto deu|quanto ficou|quanto foi|ao todo|no total)\b/.test(value);
+  return /\b(?:soma|some|somar|somando|total|totaliza|totalize|totalizar|valor total|valor acumulado|acumulado|balanco|fechamento|resumo|quanto deu|quanto ficou|ao todo|no total)\b/.test(value);
 }
 
 function hasCombinedFlowAggregateQuestion(value: string): boolean {
@@ -91,6 +91,15 @@ function hasCombinedFlowAggregateQuestion(value: string): boolean {
   const income = /\b(?:ganhei|ganho|ganhos|recebi|recebido|recebimentos?|receitas?|entradas?|entrou|entraram|vendi|vendas?|faturei|faturamento|renda|salario)\b/.test(value);
   const expense = /\b(?:gastei|gasto|gastos|despesas?|saidas?|saiu|sairam|paguei|pagamentos?|comprei|compras?|custos?)\b/.test(value);
   return income && expense;
+}
+
+function hasNaturalListQuery(value: string): boolean {
+  return /\bme mostra (?:tudo que|os|as|meus|minhas) (?:entrou|saiu|recebimentos?|receitas?|entradas?|gastos?|despesas?|compras?)\b/.test(value);
+}
+
+function hasExplicitEditLanguage(value: string): boolean {
+  return /\b(?:edita|editar|corrige|corrigir|muda|mudar|altera|alterar|errei)\b/.test(value)
+    && /\b(?:ultimo|registro|lancamento|valor|descricao)\b/.test(value);
 }
 
 export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
@@ -121,24 +130,26 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'undo', canonical: 'coloca ele de novo' };
   }
 
-  // Compatibility fast path: known, simple scoped questions preserve their
-  // established query route. Explicit totals and combined income+expense
-  // questions still go through the central aggregate interpreter.
-  const legacy = corpusRoute(input);
+  const legacy = corpusRoute(input, value);
   const shouldPromoteAggregate = hasStrongAggregateLanguage(value) || hasCombinedFlowAggregateQuestion(value);
+
+  // Exact established phrases remain stable unless the wording explicitly asks
+  // for a total/summary or combines income and expense in one calculation.
   if (legacy && !shouldPromoteAggregate) return legacy;
 
-  // Some established scoped questions are parsed deterministically even when
-  // they are not exact corpus entries (for example, "quanto gastei hoje?").
-  // Keep those as detailed queries unless the user explicitly asks for a total
-  // or combines income + expense in the same aggregate question.
-  if (!shouldPromoteAggregate && deterministicCashQuery(input)) {
+  // Natural list requests are queries even when words such as "tudo" appear;
+  // they ask to show records, not to calculate a total.
+  if (!shouldPromoteAggregate && hasNaturalListQuery(value)) {
     return { intent: 'query', canonical: input };
   }
 
   const central = interpretCashFinancialIntent(input);
-  if (central?.kind === 'aggregate') return mapCentralIntent(central);
 
+  // Edit language must continue to the dedicated edit route below this classifier;
+  // do not reinterpret "errei o valor do último registro" as a recent-batch summary.
+  if (central?.kind === 'recent_batch' && hasExplicitEditLanguage(value)) return null;
+
+  if (central?.kind === 'aggregate') return mapCentralIntent(central);
   if (legacy) return legacy;
   if (central) return mapCentralIntent(central);
 
