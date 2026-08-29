@@ -1,10 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  classifyCashCorpus,
-  isCashMixedFinancialNarrative
-} from '../src/verticals/cash/conversation-corpus.js';
+import { classifyCashCorpus, isCashMixedFinancialNarrative } from '../src/verticals/cash/conversation-corpus.js';
 
 const EXACT_LONG_MESSAGE = `Ontem paguei a fatura do cartão de crédito no valor de R$ 1.850,00 referente às compras do mês passado, e logo depois recebi meu salário de R$ 7.500,00 na conta corrente. Aproveitei para deixar agendado o pagamento do aluguel de R$ 1.600,00 que vence amanhã, além da conta de luz de R$ 220,00 e a de internet de R$ 110,00. Na semana passada fiz uma compra de supermercado no valor de R$ 450,00 e abasteci o carro por R$ 250,00. Para o lazer do fim de semana passado, gastei R$ 180,00 em um jantar fora e R$ 90,00 em aplicativos de transporte.
 Pensando nos próximos dias, tenho uma projeção de receber R$ 1.200,00 de um freela que termino na quinta-feira, mas também precisarei desembolsar R$ 350,00 para a manutenção preventiva do carro na sexta. Se eu decidir viajar no feriado do mês que vem, estimo que gastarei cerca de R$ 900,00 com hospedagem e R$ 400,00 com combustível, o que elevará bastante minhas despesas daquele período. Por outro lado, se eu optar por ficar em casa, imagino que meus gastos extras com lazer não passem de R$ 200,00 no total.
@@ -24,7 +21,6 @@ describe('Cash mixed financial narratives', () => {
       'Todo dia 10 tenho uma parcela de R$ 320,00 do notebook.',
       'Se eu mantiver meu padrão atual, estimo fechar o semestre com R$ 4.500,00 de sobra.'
     ].join(' ');
-
     expect(isCashMixedFinancialNarrative(input)).toBe(true);
     expect(classifyCashCorpus(input).intent).toBe('batch_transaction');
   });
@@ -34,29 +30,20 @@ describe('Cash mixed financial narratives', () => {
     expect(classifyCashCorpus(EXACT_LONG_MESSAGE).intent).toBe('batch_transaction');
   });
 
-  it('production access gate runs before scheduler', () => {
-    const access = readFileSync(
-      join(process.cwd(), 'src/verticals/cash/access-handler.ts'),
-      'utf8'
-    );
-    const gateCall = access.indexOf('await handleCashMixedNarrativeGate(context)');
-    const scheduleCall = access.indexOf('await handleCashScheduleDeterministic(context)');
-
-    expect(gateCall).toBeGreaterThan(-1);
-    expect(scheduleCall).toBeGreaterThan(-1);
-    expect(gateCall).toBeLessThan(scheduleCall);
+  it('production access delegates financial language to the AI-first router', () => {
+    const access = readFileSync(join(process.cwd(), 'src/verticals/cash/access-handler.ts'), 'utf8');
+    expect(access).toContain('const aiResult = await cashAiFirstHandler.handle(context)');
+    expect(access).not.toContain('await handleCashMixedNarrativeGate(context)');
+    expect(access).not.toContain('await handleCashScheduleDeterministic(context)');
   });
 
   it('keeps a simple recurring future bill as schedule', () => {
     expect(classifyCashCorpus('todo dia 10 pago R$ 100 do cartão').intent).toBe('schedule');
   });
-
   it('keeps a simple hypothetical calculation as projection', () => {
     expect(classifyCashCorpus('se eu gastar R$ 100, quanto sobra?').intent).toBe('projection');
   });
-
   it('does not call a short factual batch a mixed narrative', () => {
-    const input = 'paguei R$ 80 no mercado e recebi R$ 200 de um freela';
-    expect(isCashMixedFinancialNarrative(input)).toBe(false);
+    expect(isCashMixedFinancialNarrative('paguei R$ 80 no mercado e recebi R$ 200 de um freela')).toBe(false);
   });
 });
