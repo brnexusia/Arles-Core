@@ -92,5 +92,13 @@ export function matchCashNaturalLanguageDoubledExample(input: string): CashNatur
   return DOUBLED_INDEX.get(normalize(input)) ?? null;
 }
 
+// Fast path compartilhado: CURRENT_INDEX já contém base + expansão + coloquial + 4x.
+// Assim, o roteador faz uma única normalização e no máximo duas consultas Map para
+// todo o universo de 96.000+ frases, em vez de normalizar/buscar em cinco índices.
+export function matchCashNaturalLanguageAnyExample(input: string): CashNaturalLanguageExample | null {
+  const key = normalize(input);
+  return CURRENT_INDEX.get(key) ?? DOUBLED_INDEX.get(key) ?? null;
+}
+
 export const CASH_NATURAL_LANGUAGE_PRE_DOUBLING_UNIQUE_COUNT = CURRENT_INDEX.size;
 export const CASH_NATURAL_LANGUAGE_DOUBLED_EXAMPLE_COUNT = DOUBLED_INDEX.size;
