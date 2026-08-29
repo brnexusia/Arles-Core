@@ -103,6 +103,13 @@ function hasStrongAggregateLanguage(value: string): boolean {
   return /\b(?:soma|some|somar|somando|total|totaliza|totalize|totalizar|valor total|valor acumulado|acumulado|balanco|fechamento|resumo|quanto deu|quanto ficou|quanto foi|ao todo|no total)\b/.test(value);
 }
 
+function hasCombinedFlowAggregateQuestion(value: string): boolean {
+  if (!/\bquanto\b/.test(value)) return false;
+  const income = /\b(?:ganhei|ganho|ganhos|recebi|recebido|recebimentos?|receitas?|entradas?|entrou|entraram|vendi|vendas?|faturei|faturamento|renda|salario)\b/.test(value);
+  const expense = /\b(?:gastei|gasto|gastos|despesas?|saidas?|saiu|sairam|paguei|pagamentos?|comprei|compras?|custos?)\b/.test(value);
+  return income && expense;
+}
+
 export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
   const value = normalize(input);
   if (!value) return null;
@@ -131,13 +138,12 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'undo', canonical: 'coloca ele de novo' };
   }
 
-  // Fast compatibility path: known corpus phrases keep their established route.
-  // Only explicit aggregation language is allowed to promote a known query to
-  // the dedicated aggregate executor. This prevents plain scoped questions such
-  // as "quanto gastei hoje?" from being reclassified and avoids running the
-  // heavier central interpreter across the entire 96k+ regression corpus.
+  // Compatibility fast path: known, simple scoped questions preserve their
+  // established query route. Explicit totals and combined income+expense
+  // questions still go through the central aggregate interpreter.
   const legacy = corpusRoute(input);
-  if (legacy && !hasStrongAggregateLanguage(value)) return legacy;
+  const shouldPromoteAggregate = hasStrongAggregateLanguage(value) || hasCombinedFlowAggregateQuestion(value);
+  if (legacy && !shouldPromoteAggregate) return legacy;
 
   const central = interpretCashFinancialIntent(input);
   if (central?.kind === 'aggregate') return mapCentralIntent(central);
