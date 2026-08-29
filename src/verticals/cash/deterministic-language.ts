@@ -97,6 +97,26 @@ function hasNaturalListQuery(value: string): boolean {
   return /\bme mostra (?:tudo que|os|as|meus|minhas) (?:entrou|saiu|recebimentos?|receitas?|entradas?|gastos?|despesas?|compras?)\b/.test(value);
 }
 
+function hasSimpleScopedAmountQuery(value: string): boolean {
+  const period = '(?:hoje|ontem|(?:esse|este) mes|no mes atual|no mes passado|na semana passada)';
+  return new RegExp(`^quanto (?:gastei|paguei|ganhei|recebi|entrou|saiu) ${period}$`).test(value)
+    || /^quanto foi de (?:entrada|saida) hoje$/.test(value);
+}
+
+function hasSimpleBalanceQuery(value: string): boolean {
+  return /^(?:me fala|me diz|mostra|qual e|qual eh) (?:o )?(?:meu )?saldo(?: atual)?$/.test(value);
+}
+
+function hasSimpleProjectionQuery(value: string): boolean {
+  return /\b(?:simulacao|simula|simular)\b/.test(value)
+    && /\bquanto (?:resta|sobra|fica)\b/.test(value);
+}
+
+function hasSuperlativePurchaseQuery(value: string): boolean {
+  return /^(?:qual foi a )?(?:compra|despesa) mais cara (?:hoje|ontem|(?:esse|este) mes|no mes passado)$/.test(value)
+    || /^(?:qual foi o )?gasto mais caro (?:hoje|ontem|(?:esse|este) mes|no mes passado)$/.test(value);
+}
+
 function hasExplicitEditLanguage(value: string): boolean {
   return /\b(?:edita|editar|corrige|corrigir|muda|mudar|altera|alterar|errei)\b/.test(value)
     && /\b(?:ultimo|registro|lancamento|valor|descricao)\b/.test(value);
@@ -133,28 +153,23 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
   const legacy = corpusRoute(input, value);
   const shouldPromoteAggregate = hasStrongAggregateLanguage(value) || hasCombinedFlowAggregateQuestion(value);
 
-  // Exact established phrases remain stable unless the wording explicitly asks
-  // for a total/summary or combines income and expense in one calculation.
   if (legacy && !shouldPromoteAggregate) return legacy;
 
-  // Natural list requests are queries even when words such as "tudo" appear;
-  // they ask to show records, not to calculate a total.
-  if (!shouldPromoteAggregate && hasNaturalListQuery(value)) {
+  if (!shouldPromoteAggregate && (hasNaturalListQuery(value) || hasSimpleScopedAmountQuery(value) || hasSuperlativePurchaseQuery(value))) {
     return { intent: 'query', canonical: input };
   }
 
+  if (hasSimpleBalanceQuery(value)) return { intent: 'balance', canonical: 'saldo' };
+  if (hasSimpleProjectionQuery(value)) return { intent: 'projection', canonical: input };
+
   const central = interpretCashFinancialIntent(input);
 
-  // Edit language must continue to the dedicated edit route below this classifier;
-  // do not reinterpret "errei o valor do último registro" as a recent-batch summary.
   if (central?.kind === 'recent_batch' && hasExplicitEditLanguage(value)) return null;
 
   if (central?.kind === 'aggregate') return mapCentralIntent(central);
   if (legacy) return legacy;
   if (central) return mapCentralIntent(central);
 
-  // Generic help is intentionally last: "me ajuda a conferir quanto gastei"
-  // is a financial query, not a request for the help menu.
   if (/\b(ajuda|menu|comandos|como usar|como usa|o que voce faz|me ensina|tutorial)\b/.test(value)) {
     return { intent: 'help', canonical: input };
   }
