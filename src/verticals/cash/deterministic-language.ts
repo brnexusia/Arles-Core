@@ -99,6 +99,10 @@ function corpusRoute(input: string): CashDeterministicLanguageRoute {
   return null;
 }
 
+function hasStrongAggregateLanguage(value: string): boolean {
+  return /\b(?:soma|some|somar|somando|total|totaliza|totalize|totalizar|valor total|valor acumulado|acumulado|balanco|fechamento|resumo|quanto deu|quanto ficou|quanto foi|ao todo|no total)\b/.test(value);
+}
+
 export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
   const value = normalize(input);
   if (!value) return null;
@@ -127,18 +131,18 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'undo', canonical: 'coloca ele de novo' };
   }
 
-  // Aggregate is the one deliberate promotion over the legacy corpus. It has a
-  // dedicated deterministic executor and must remain visible as aggregate even
-  // for period-scoped summaries.
+  // Fast compatibility path: known corpus phrases keep their established route.
+  // Only explicit aggregation language is allowed to promote a known query to
+  // the dedicated aggregate executor. This prevents plain scoped questions such
+  // as "quanto gastei hoje?" from being reclassified and avoids running the
+  // heavier central interpreter across the entire 96k+ regression corpus.
+  const legacy = corpusRoute(input);
+  if (legacy && !hasStrongAggregateLanguage(value)) return legacy;
+
   const central = interpretCashFinancialIntent(input);
   if (central?.kind === 'aggregate') return mapCentralIntent(central);
 
-  // Preserve the established 96k+ deterministic corpus for non-aggregate
-  // fallbacks. The AI-first production router remains the semantic authority;
-  // this path exists only as the compatible technical fallback.
-  const legacy = corpusRoute(input);
   if (legacy) return legacy;
-
   if (central) return mapCentralIntent(central);
 
   // Generic help is intentionally last: "me ajuda a conferir quanto gastei"
