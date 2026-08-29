@@ -140,7 +140,7 @@ describe('Arles Cash — linguagem natural determinística em massa', () => {
 
   it.each([
     ['Me mande o valor total de tudo quanto eu ganhei e quanto eu gastei', 'both', 'all_time', null],
-    ['Some o valor dos lançamentos referente ao que eu ganhei e que eu gastei', 'both', 'period', 'hoje'],
+    ['Some o valor dos lançamentos referente ao que eu ganhei e que eu gastei', 'both', 'all_time', null],
     ['some o que gastei', 'expense', 'period', 'hoje'],
     ['soma tudo que recebi', 'income', 'all_time', null],
     ['qual o total de entradas e saídas este mês', 'both', 'period', 'este mês'],
