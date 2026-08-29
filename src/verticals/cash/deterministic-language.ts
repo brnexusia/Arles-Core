@@ -77,16 +77,29 @@ function scheduleCanonical(input: string, value: string): string | null {
 }
 
 function mapCentralIntent(intent: CashFinancialIntent): CashDeterministicLanguageRoute {
-  if (intent.kind === 'aggregate' && intent.scope !== 'all_time') {
-    return { intent: 'query', canonical: intent.canonical };
-  }
   return { intent: intent.kind, canonical: intent.canonical };
 }
 
-export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
-  const central = interpretCashFinancialIntent(input);
-  if (central) return mapCentralIntent(central);
+function corpusRoute(input: string): CashDeterministicLanguageRoute {
+  const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
+  if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
 
+  const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
+  if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
+
+  const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
+  if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
+
+  const doubledCorpus = matchCashNaturalLanguageDoubledExample(input);
+  if (doubledCorpus) return { intent: doubledCorpus.intent, canonical: doubledCorpus.canonical };
+
+  const corpus = matchCashNaturalLanguageExample(input);
+  if (corpus) return { intent: corpus.intent, canonical: corpus.canonical };
+
+  return null;
+}
+
+export function classifyCashDeterministicLanguage(input: string): CashDeterministicLanguageRoute {
   const value = normalize(input);
   if (!value) return null;
 
@@ -114,24 +127,25 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
     return { intent: 'undo', canonical: 'coloca ele de novo' };
   }
 
+  // Aggregate is the one deliberate promotion over the legacy corpus. It has a
+  // dedicated deterministic executor and must remain visible as aggregate even
+  // for period-scoped summaries.
+  const central = interpretCashFinancialIntent(input);
+  if (central?.kind === 'aggregate') return mapCentralIntent(central);
+
+  // Preserve the established 96k+ deterministic corpus for non-aggregate
+  // fallbacks. The AI-first production router remains the semantic authority;
+  // this path exists only as the compatible technical fallback.
+  const legacy = corpusRoute(input);
+  if (legacy) return legacy;
+
+  if (central) return mapCentralIntent(central);
+
+  // Generic help is intentionally last: "me ajuda a conferir quanto gastei"
+  // is a financial query, not a request for the help menu.
   if (/\b(ajuda|menu|comandos|como usar|como usa|o que voce faz|me ensina|tutorial)\b/.test(value)) {
     return { intent: 'help', canonical: input };
   }
-
-  const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
-  if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
-
-  const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
-  if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
-
-  const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
-  if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
-
-  const doubledCorpus = matchCashNaturalLanguageDoubledExample(input);
-  if (doubledCorpus) return { intent: doubledCorpus.intent, canonical: doubledCorpus.canonical };
-
-  const corpus = matchCashNaturalLanguageExample(input);
-  if (corpus) return { intent: corpus.intent, canonical: corpus.canonical };
 
   return null;
 }
