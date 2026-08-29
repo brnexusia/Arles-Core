@@ -41,10 +41,10 @@ export function parseCashAggregateIntent(input: string): CashAggregateIntent | n
   const asksHowMuch = /\bquanto\b/.test(value) && (income || expense || records); const genericSummary = /\b(?:balanco|resumo|fechamento)\b/.test(value) || (aggregate && /\btudo\b/.test(value));
   if (!aggregate && !asksHowMuch) return null; if (!income && !expense && !records && !genericSummary) return null; if (hasSpecificFilter(value)) return null; if (hasMoney(value) && !requestCue(value) && !/\?$/.test(String(input).trim())) return null;
   const flow: CashAggregateFlow = income && expense ? 'both' : income ? 'income' : expense ? 'expense' : 'both';
-  // Limites como “até hoje/até agora/desde o início” são históricos e precisam vencer o token isolado “hoje”.
   if (historicalBoundaryCue(value)) return { flow, scope: 'all_time', periodCanonical: null };
   const explicitPeriod = periodCanonical(value); if (explicitPeriod) return { flow, scope: 'period', periodCanonical: explicitPeriod };
   const historical = allTimeCue(value) || (records && aggregate) || (income && expense && aggregate && /\b(?:tudo|todos|todas|geral|acumulad\w*)\b/.test(value)) || (income && expense && /\bquanto\b/.test(value) && /\b(?:ja|tudo|geral|acumulad\w*)\b/.test(value));
-  if (historical) return { flow, scope: 'all_time', periodCanonical: null }; return { flow, scope: 'period', periodCanonical: 'hoje' };
+  if (historical) return { flow, scope: 'all_time', periodCanonical: null };
+  return { flow, scope: 'all_time', periodCanonical: null };
 }
 export function isCashAllTimeTotalsRequest(input: string): boolean { return parseCashAggregateIntent(input)?.scope === 'all_time'; }
