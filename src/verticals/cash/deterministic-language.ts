@@ -18,12 +18,9 @@ import {
   rememberCashFinancialIntentContext
 } from './intent-context.js';
 import { handleCashLedgerDeterministic } from './ledger.js';
-import { matchCashNaturalLanguageExample } from './natural-language-corpus.js';
-import { matchCashNaturalLanguageExpandedExample } from './natural-language-corpus-expanded.js';
-import { matchCashNaturalLanguageColloquialExample } from './natural-language-corpus-colloquial.js';
-import { matchCashNaturalLanguageQuadrupledExample } from './natural-language-corpus-quadrupled.js';
-import { matchCashNaturalLanguageDoubledExample } from './natural-language-corpus-doubled.js';
+import { matchCashNaturalLanguageAnyExample } from './natural-language-corpus-doubled.js';
 import { executeCashProjection } from './projection-executor.js';
+import { deterministicCashQuery } from './query.js';
 import { executeCashQueryFilters } from './query-filter-executor.js';
 import { executeCashRecentBatchReference } from './recent-batch.js';
 import { handleCashScheduleDeterministic } from './schedules.js';
@@ -81,22 +78,8 @@ function mapCentralIntent(intent: CashFinancialIntent): CashDeterministicLanguag
 }
 
 function corpusRoute(input: string): CashDeterministicLanguageRoute {
-  const expandedCorpus = matchCashNaturalLanguageExpandedExample(input);
-  if (expandedCorpus) return { intent: expandedCorpus.intent, canonical: expandedCorpus.canonical };
-
-  const colloquialCorpus = matchCashNaturalLanguageColloquialExample(input);
-  if (colloquialCorpus) return { intent: colloquialCorpus.intent, canonical: colloquialCorpus.canonical };
-
-  const quadrupledCorpus = matchCashNaturalLanguageQuadrupledExample(input);
-  if (quadrupledCorpus) return { intent: quadrupledCorpus.intent, canonical: quadrupledCorpus.canonical };
-
-  const doubledCorpus = matchCashNaturalLanguageDoubledExample(input);
-  if (doubledCorpus) return { intent: doubledCorpus.intent, canonical: doubledCorpus.canonical };
-
-  const corpus = matchCashNaturalLanguageExample(input);
-  if (corpus) return { intent: corpus.intent, canonical: corpus.canonical };
-
-  return null;
+  const corpus = matchCashNaturalLanguageAnyExample(input);
+  return corpus ? { intent: corpus.intent, canonical: corpus.canonical } : null;
 }
 
 function hasStrongAggregateLanguage(value: string): boolean {
@@ -144,6 +127,14 @@ export function classifyCashDeterministicLanguage(input: string): CashDeterminis
   const legacy = corpusRoute(input);
   const shouldPromoteAggregate = hasStrongAggregateLanguage(value) || hasCombinedFlowAggregateQuestion(value);
   if (legacy && !shouldPromoteAggregate) return legacy;
+
+  // Some established scoped questions are parsed deterministically even when
+  // they are not exact corpus entries (for example, "quanto gastei hoje?").
+  // Keep those as detailed queries unless the user explicitly asks for a total
+  // or combines income + expense in the same aggregate question.
+  if (!shouldPromoteAggregate && deterministicCashQuery(input)) {
+    return { intent: 'query', canonical: input };
+  }
 
   const central = interpretCashFinancialIntent(input);
   if (central?.kind === 'aggregate') return mapCentralIntent(central);
