@@ -23,7 +23,6 @@ Falta cobrar: 110,00
 30,00 Stefane (devendo de Rosana)
 80,00 Brenda
 (Registre essas informações no "cofrinho de vendas").`;
-
     expect(extractRequestedClosingPocketName(input)?.toLowerCase()).toBe('vendas');
   });
 
@@ -36,33 +35,27 @@ Falta cobrar: 110,00
     expect(extractRequestedClosingPocketName(input)).toBe(expected);
   });
 
-  it('checks pending closing interaction before generic pending handlers', () => {
-    const moduleSource = readFileSync(join(process.cwd(), 'src/verticals/cash/module.ts'), 'utf8');
-    const closing = moduleSource.indexOf('await handleCashPendingPocketClosing(context)');
-    const transfer = moduleSource.indexOf('await handleCashPendingPocketTransfer(context)');
-    const confirmation = moduleSource.indexOf('await handleCashPendingConfirmation(context)');
-
-    expect(closing).toBeGreaterThan(-1);
-    expect(closing).toBeLessThan(transfer);
-    expect(closing).toBeLessThan(confirmation);
+  it('keeps pending semantics centralized after semantic interpretation', () => {
+    const ai = readFileSync(join(process.cwd(), 'src/verticals/cash/ai-first-handler.ts'), 'utf8');
+    expect(ai).toContain('executeCashPendingSemanticDecision');
+    expect(ai).toContain("understood.intent === 'confirmation'");
+    expect(ai).toContain("understood.intent === 'cancellation'");
   });
 
-  it('routes an initial closing through the context-preserving flow before receivables', () => {
-    const access = readFileSync(join(process.cwd(), 'src/verticals/cash/access-handler.ts'), 'utf8');
-    const closing = access.indexOf('await handleCashPocketClosingFlow(context)');
-    const receivable = access.indexOf('await handleCashPocketReceivable(context)');
-
+  it('keeps pocket closing before receivables inside the pocket executor', () => {
+    const ai = readFileSync(join(process.cwd(), 'src/verticals/cash/ai-first-handler.ts'), 'utf8');
+    const closing = ai.indexOf('handleCashPocketClosingFlow(c)');
+    const receivable = ai.indexOf('handleCashPocketReceivable(c)');
     expect(closing).toBeGreaterThan(-1);
+    expect(receivable).toBeGreaterThan(-1);
     expect(closing).toBeLessThan(receivable);
   });
 
-  it('requires AI semantic clarification before falling back to generic help', () => {
+  it('requires semantic clarification before generic fallback', () => {
     const ai = readFileSync(join(process.cwd(), 'src/verticals/cash/ai-first-handler.ts'), 'utf8');
-    expect(ai).toContain("clarification: z.string().nullable()");
+    expect(ai).toContain('clarification: z.string().nullable()');
     expect(ai).toContain("if (understood.intent === 'unknown')");
-    expect(ai).toContain('if (clarification) return text(clarification)');
-    expect(ai.indexOf('const understood = await semanticRoute(context)')).toBeLessThan(
-      ai.indexOf("if (understood.intent === 'unknown')")
-    );
+    expect(ai).toContain('understood.clarification?.trim()');
+    expect(ai.indexOf('const semantic = await semanticRoute(context)')).toBeLessThan(ai.indexOf("if (understood.intent === 'unknown')"));
   });
 });
