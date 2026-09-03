@@ -10,6 +10,8 @@ export type EvolutionClusterConfig = {
   metricsUrl?: string;
 };
 
+type ClusterMetrics = { cpu: number | null; ram: number | null };
+
 const clients = new Map<string, EvolutionClient>();
 let parsedCache: EvolutionClusterConfig[] | null = null;
 
@@ -54,6 +56,23 @@ export function evolutionForCluster(clusterKey?: string | null): EvolutionClient
   return client;
 }
 
+async function readMetrics(cluster: EvolutionClusterConfig): Promise<ClusterMetrics> {
+  if (!cluster.metricsUrl) return { cpu: null, ram: null };
+  try {
+    const response = await fetch(cluster.metricsUrl, { signal: AbortSignal.timeout(2500) });
+    if (!response.ok) return { cpu: null, ram: null };
+    const metrics = await response.json() as any;
+    const cpuRaw = Number(metrics?.cpu_percent ?? metrics?.cpu);
+    const ramRaw = Number(metrics?.ram_percent ?? metrics?.ram);
+    return {
+      cpu: Number.isFinite(cpuRaw) ? cpuRaw : null,
+      ram: Number.isFinite(ramRaw) ? ramRaw : null
+    };
+  } catch {
+    return { cpu: null, ram: null };
+  }
+}
+
 export async function chooseBeautyEvolutionCluster(): Promise<string | null> {
   const clusters = parseClusters();
   if (!clusters.length) return null;
@@ -62,10 +81,23 @@ export async function chooseBeautyEvolutionCluster(): Promise<string | null> {
     where cluster_key is not null and status in ('connecting','open','connected')
     group by cluster_key`);
   const countByKey = new Map(usage.rows.map(row => [row.cluster_key, Number(row.count)]));
+  const metrics = new Map<string, ClusterMetrics>();
+  await Promise.all(clusters.map(async cluster => metrics.set(cluster.key, await readMetrics(cluster))));
+
   const available = clusters
-    .map(cluster => ({ cluster, used: countByKey.get(cluster.key) || 0 }))
+    .map(cluster => {
+      const used = countByKey.get(cluster.key) || 0;
+      const resource = metrics.get(cluster.key) || { cpu: null, ram: null };
+      const cpuPressure = resource.cpu === null ? 0 : resource.cpu / 100;
+      const ramPressure = resource.ram === null ? 0 : resource.ram / 100;
+      const instancePressure = used / cluster.maxInstances;
+      return { cluster, used, ...resource, pressure: Math.max(instancePressure, cpuPressure, ramPressure) };
+    })
     .filter(item => item.used < item.cluster.maxInstances)
-    .sort((a,b) => (a.used / a.cluster.maxInstances) - (b.used / b.cluster.maxInstances) || a.used - b.used);
+    // Metrics are optional. When present, avoid assigning new sessions to a VPS
+    // already under sustained pressure even if the raw instance count is low.
+    .filter(item => (item.cpu === null || item.cpu < 85) && (item.ram === null || item.ram < 85))
+    .sort((a,b) => a.pressure - b.pressure || a.used - b.used);
   if (!available.length) throw new Error('EVOLUTION_CLUSTER_CAPACITY_EXHAUSTED');
   return available[0].cluster.key;
 }
@@ -91,21 +123,9 @@ export async function beautyEvolutionHealth() {
   return Promise.all(clusters.map(async cluster => {
     const client = evolutionForCluster(cluster.key);
     try {
-      const instances = await client.fetchInstances();
+      const [instances, metrics] = await Promise.all([client.fetchInstances(), readMetrics(cluster)]);
       const counts = countInstances(instances);
-      let cpu: number | null = null;
-      let ram: number | null = null;
-      if (cluster.metricsUrl) {
-        try {
-          const response = await fetch(cluster.metricsUrl, { signal: AbortSignal.timeout(2500) });
-          if (response.ok) {
-            const metrics = await response.json() as any;
-            cpu = Number.isFinite(Number(metrics?.cpu_percent ?? metrics?.cpu)) ? Number(metrics.cpu_percent ?? metrics.cpu) : null;
-            ram = Number.isFinite(Number(metrics?.ram_percent ?? metrics?.ram)) ? Number(metrics.ram_percent ?? metrics.ram) : null;
-          }
-        } catch { /* optional VPS metrics must never break WhatsApp */ }
-      }
-      return { key: cluster.key, configured_capacity: cluster.maxInstances, ...counts, cpu, ram, healthy: true };
+      return { key: cluster.key, configured_capacity: cluster.maxInstances, ...counts, ...metrics, healthy: true };
     } catch (error) {
       return { key: cluster.key, configured_capacity: cluster.maxInstances, total: 0, connected: 0, cpu: null, ram: null, healthy: false, error: error instanceof Error ? error.message : String(error) };
     }
