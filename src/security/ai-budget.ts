@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { redis } from '../infrastructure/redis.js';
+import { raiseSecurityAlert } from './alerts.js';
 import { enforceRateLimit } from './rate-limit.js';
 
 const CONCURRENCY_LIMIT = 8;
@@ -13,9 +14,7 @@ function dayKey(): string {
 }
 
 export async function reserveBeautyAiBudget(companyId: string, phone: string): Promise<() => Promise<void>> {
-  if (await redis.get(`arles:beauty:ai:circuit:${companyId}`)) {
-    throw new Error('BEAUTY_AI_CIRCUIT_OPEN');
-  }
+  if (await redis.get(`arles:beauty:ai:circuit:${companyId}`)) throw new Error('BEAUTY_AI_CIRCUIT_OPEN');
 
   await enforceRateLimit({ scope: 'beauty:ai:phone:hour', limit: 60, windowSeconds: 3600, identity: `${companyId}:${phone}` });
   await enforceRateLimit({ scope: 'beauty:ai:company:hour', limit: 600, windowSeconds: 3600, identity: companyId });
@@ -43,10 +42,7 @@ export async function reserveBeautyAiBudget(companyId: string, phone: string): P
   );
 
   if (Number(raw) !== 1) throw new Error('BEAUTY_AI_BUSY');
-
-  return async () => {
-    await redis.zrem(key, token).catch(() => undefined);
-  };
+  return async () => { await redis.zrem(key, token).catch(() => undefined); };
 }
 
 export async function recordBeautyAiSuccess(companyId: string): Promise<void> {
@@ -59,5 +55,14 @@ export async function recordBeautyAiFailure(companyId: string): Promise<void> {
   if (count === 1) await redis.expire(failureKey, FAILURE_WINDOW_SECONDS);
   if (count >= FAILURE_THRESHOLD) {
     await redis.set(`arles:beauty:ai:circuit:${companyId}`, '1', 'EX', CIRCUIT_OPEN_SECONDS);
+    if(count===FAILURE_THRESHOLD){
+      void raiseSecurityAlert({
+        companyId,
+        kind:'beauty_ai_circuit_open',
+        severity:'critical',
+        fingerprint:`beauty-ai-circuit:${companyId}`,
+        metadata:{failures:count,window_seconds:FAILURE_WINDOW_SECONDS,circuit_seconds:CIRCUIT_OPEN_SECONDS}
+      }).catch(()=>undefined);
+    }
   }
 }
