@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
 import { authService } from './auth.service.js';
+import { finalizeBeautyRegistration } from './beauty-registration.js';
 
 function authorized(request: FastifyRequest): boolean {
   if (!env.internalApiKey) return false;
@@ -38,7 +39,7 @@ function authError(reply: FastifyReply, error: unknown) {
   }
   if (code === 'TRIAL_ALREADY_USED') {
     return reply.code(409).send({
-      error: 'Este e-mail ou telefone já utilizou o período gratuito.',
+      error: 'Este e-mail ou telefone já possui um cadastro anterior.',
       code
     });
   }
@@ -73,14 +74,20 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
       const body = (request.body ?? {}) as any;
+      const verticalId = String(body.vertical_id ?? body.verticalId ?? '').trim().toLowerCase();
       const result = await authService.register({
         name: String(body.name ?? ''),
         companyName: String(body.company_name ?? body.companyName ?? ''),
         email: String(body.email ?? ''),
         phone: String(body.phone ?? ''),
         password: String(body.password ?? ''),
-        verticalId: String(body.vertical_id ?? body.verticalId ?? '')
+        verticalId
       });
+
+      if (verticalId === 'beauty') {
+        await finalizeBeautyRegistration(result.user.companyId, body.acquisition ?? {});
+      }
+
       return reply.send({
         ok: true,
         session_token: result.sessionToken,
