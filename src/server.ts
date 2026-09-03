@@ -16,6 +16,7 @@ import { evolution } from './whatsapp/evolution.client.js';
 import { normalizeEvolutionPresence } from './whatsapp/normalize.js';
 import { registerCorsGuard } from './security/cors.js';
 import { safeStoredMediaMime } from './security/media.js';
+import { claimWebhookReplayKey, evolutionReplayId } from './security/webhook-replay.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
@@ -87,6 +88,12 @@ app.get('/media/:token', async (request, reply) => {
 
 app.post('/webhooks/evolution', { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
   const payload = request.body;
+  const replayId = evolutionReplayId(payload);
+  if (replayId) {
+    const claimed = await claimWebhookReplayKey('evolution', replayId);
+    if (!claimed) return reply.code(202).send({ accepted: true, duplicate: true });
+  }
+
   reply.code(202).send({ accepted: true });
   const presence = normalizeEvolutionPresence(payload);
   if (presence && env.cashEvolutionInstance && presence.instanceName === env.cashEvolutionInstance) {
