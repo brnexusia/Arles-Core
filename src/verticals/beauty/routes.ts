@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { db } from '../../infrastructure/db.js';
 import { enforceIpLimit, enforceRateLimit } from '../../security/rate-limit.js';
+import { recordAuditEvent } from '../../security/audit.js';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { beautyPublicBookingService } from './public-booking.service.js';
 import { beautyService } from './service.js';
@@ -41,8 +42,30 @@ async function tenantLimit(reply:FastifyReply,companyId:string,method:Method,url
   const windowSeconds=expensive?60*60:60;
   await enforceRateLimit({scope:`beauty:tenant:${method}:${url}`,limit,windowSeconds,identity:companyId},reply);
 }
+function auditAction(method:Method,url:string){
+  return `beauty.${method.toLowerCase()}.${url.replace('/internal/verticals/beauty/','').replace(/\//g,'.').replace(':id','item')}`;
+}
 function route(app:FastifyInstance,method:Method,url:string,handler:(req:FastifyRequest,reply:FastifyReply,companyId:string)=>Promise<unknown>){
-  app.route({method,url,bodyLimit:method==='GET'?undefined:128*1024,handler:async(req,reply)=>{try{const tenant=await resolveTenantContext(req);await assertPaidBeauty(tenant.companyId);await tenantLimit(reply,tenant.companyId,method,url);return await handler(req,reply,tenant.companyId);}catch(error){return fail(reply,error);}}});
+  app.route({method,url,bodyLimit:method==='GET'?undefined:128*1024,handler:async(req,reply)=>{
+    try{
+      const tenant=await resolveTenantContext(req);
+      await assertPaidBeauty(tenant.companyId);
+      await tenantLimit(reply,tenant.companyId,method,url);
+      const result=await handler(req,reply,tenant.companyId);
+      if(method!=='GET'){
+        await recordAuditEvent({
+          companyId:tenant.companyId,
+          actorUserId:tenant.user?.id||null,
+          action:auditAction(method,url),
+          targetType:url.includes('appointments')?'appointment':url.includes('professionals')?'professional':url.includes('services')?'service':url.includes('whatsapp')?'whatsapp':'beauty_setting',
+          targetId:String((req.params as any)?.id||'')||null,
+          requestId:req.id,
+          source:tenant.source
+        }).catch(error=>req.log.error({err:error},'Falha registrando auditoria Beauty'));
+      }
+      return result;
+    }catch(error){return fail(reply,error);}
+  }});
 }
 function routeId(req:FastifyRequest){return parseBeautyInput(uuidSchema,String((req.params as any).id||''));}
 
