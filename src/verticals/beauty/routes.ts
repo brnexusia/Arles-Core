@@ -1,12 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { beautyService } from './service.js';
+import { beautyWhatsAppService } from './whatsapp.service.js';
 
 type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
   const message=error instanceof Error?error.message:String(error);
   const tenant=tenantErrorStatus(error);
-  const status=tenant!==500?tenant:/NOT_FOUND/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
+  const status=tenant!==500?tenant:/NOT_FOUND/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
   return reply.code(status).send({error:message});
 }
 function route(app:FastifyInstance,method:Method,url:string,handler:(req:FastifyRequest,reply:FastifyReply,companyId:string)=>Promise<unknown>){
@@ -32,4 +33,9 @@ export async function registerBeautyRoutes(app:FastifyInstance){
 
   route(app,'GET','/internal/verticals/beauty/settings',async(_r,reply,id)=>reply.send({data:await beautyService.settings(id)}));
   route(app,'PUT','/internal/verticals/beauty/settings',async(r,reply,id)=>reply.send({data:await beautyService.saveSettings(id,(r.body??{}) as any)}));
+
+  route(app,'GET','/internal/verticals/beauty/whatsapp/status',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.status(id)}));
+  route(app,'POST','/internal/verticals/beauty/whatsapp/connect',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.connect(id)}));
+  route(app,'POST','/internal/verticals/beauty/whatsapp/disconnect',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.disconnect(id)}));
+  route(app,'GET','/internal/verticals/beauty/whatsapp/clusters',async(_r,reply,_id)=>reply.send({data:await beautyWhatsAppService.clusterHealth()}));
 }
