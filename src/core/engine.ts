@@ -17,7 +17,7 @@ import {
   setLastInbound,
   withConversationLock
 } from '../infrastructure/redis.js';
-import { evolution } from '../whatsapp/evolution.client.js';
+import { evolutionForCluster } from '../whatsapp/evolution.router.js';
 import {
   isMessageUpsert,
   normalizeEvolutionEditedMessage,
@@ -38,6 +38,12 @@ export class ArlesEngine {
   private outboundInstance(company: Company, message?: NormalizedMessage): string {
     if (company.vertical === 'cash' && env.cashEvolutionInstance) return env.cashEvolutionInstance;
     return message?.instanceName || company.evolution_instance;
+  }
+
+  private evolutionClient(company: Company) {
+    // Only companies with an explicit cluster leave the legacy singleton.
+    // Delivery/Cash/current numbers therefore keep exactly the existing endpoint.
+    return evolutionForCluster(company.evolution_cluster || null);
   }
 
   private async resolveCompany(message: NormalizedMessage): Promise<{
@@ -73,6 +79,7 @@ export class ArlesEngine {
   }
 
   private async sendActions(company: Company, message: NormalizedMessage, actions: OutgoingAction[]): Promise<void> {
+    const evolution = this.evolutionClient(company);
     for (const action of actions) {
       await markSystemSending(company.id, message.phone);
 
@@ -121,7 +128,7 @@ export class ArlesEngine {
     module: VerticalModule
   ): Promise<{ text?: string; result?: VerticalResult }> {
     try {
-      const media = await evolution.getMediaBase64({
+      const media = await this.evolutionClient(company).getMediaBase64({
         instanceName: this.outboundInstance(company, message),
         messageId: message.messageId
       });
@@ -147,7 +154,7 @@ export class ArlesEngine {
 
   private async processAudio(company: Company, message: NormalizedMessage): Promise<string | null> {
     try {
-      const media = await evolution.getMediaBase64({
+      const media = await this.evolutionClient(company).getMediaBase64({
         instanceName: this.outboundInstance(company, message),
         messageId: message.messageId
       });
@@ -171,8 +178,6 @@ export class ArlesEngine {
   }
 
   async handleEvolution(payload: unknown): Promise<void> {
-    // Edição tem formato diferente entre versões da Evolution. Tentamos normalizá-la
-    // antes da mensagem comum; update de status/ACK sem texto editado retorna null.
     const edited = normalizeEvolutionEditedMessage(payload);
     const message = edited ?? normalizeEvolutionMessage(payload);
     const phoneTail = message.phone ? message.phone.slice(-4) : '----';
@@ -198,7 +203,7 @@ export class ArlesEngine {
     }
 
     console.info(
-      `[Arles] Webhook roteado: instance=${message.instanceName} route=${resolved.route} vertical=${company.vertical} event=${message.event || 'sem_evento'} type=${message.type}${message.isEdit ? ' edit=true' : ''} phone=*${phoneTail}`
+      `[Arles] Webhook roteado: instance=${message.instanceName} cluster=${company.evolution_cluster || 'default'} route=${resolved.route} vertical=${company.vertical} event=${message.event || 'sem_evento'} type=${message.type}${message.isEdit ? ' edit=true' : ''} phone=*${phoneTail}`
     );
 
     const module = getVerticalModule(company.vertical);
@@ -233,8 +238,6 @@ export class ArlesEngine {
       return;
     }
 
-    // Edição de mensagem é exclusiva do Cash neste momento. Delivery e demais
-    // verticais continuam com o fluxo anterior, sem qualquer mudança de comportamento.
     if (message.isEdit) {
       if (company.vertical !== 'cash') return;
       const result = await handleCashEditedMessage({ company, message });
