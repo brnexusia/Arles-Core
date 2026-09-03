@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { db } from '../../infrastructure/db.js';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { beautyService } from './service.js';
 import { beautyWhatsAppService } from './whatsapp.service.js';
@@ -7,11 +8,19 @@ type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
   const message=error instanceof Error?error.message:String(error);
   const tenant=tenantErrorStatus(error);
-  const status=tenant!==500?tenant:/NOT_FOUND/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
+  const status=tenant!==500?tenant:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
   return reply.code(status).send({error:message});
 }
+async function assertPaidBeauty(companyId:string){
+  const result=await db.query<{subscription_status:string;access_active:boolean;vertical:string}>(`select
+    subscription_status,access_active,coalesce(active_vertical_id,vertical) vertical
+    from companies where id=$1 limit 1`,[companyId]);
+  const company=result.rows[0];
+  if(!company||company.vertical!=='beauty')throw new Error('BEAUTY_COMPANY_NOT_FOUND');
+  if(!company.access_active||String(company.subscription_status).toLowerCase()!=='active')throw new Error('BEAUTY_SUBSCRIPTION_REQUIRED');
+}
 function route(app:FastifyInstance,method:Method,url:string,handler:(req:FastifyRequest,reply:FastifyReply,companyId:string)=>Promise<unknown>){
-  app.route({method,url,handler:async(req,reply)=>{try{const tenant=await resolveTenantContext(req);return await handler(req,reply,tenant.companyId);}catch(error){return fail(reply,error);}}});
+  app.route({method,url,handler:async(req,reply)=>{try{const tenant=await resolveTenantContext(req);await assertPaidBeauty(tenant.companyId);return await handler(req,reply,tenant.companyId);}catch(error){return fail(reply,error);}}});
 }
 
 export async function registerBeautyRoutes(app:FastifyInstance){
