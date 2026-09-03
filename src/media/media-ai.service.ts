@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { env } from '../config/env.js';
+import { validateAudioInput, validateImageInput } from '../security/media.js';
 
 export interface ImageAnalysis {
   looksLikePaymentProof: boolean;
@@ -14,6 +15,7 @@ export class MediaAiService {
   }
 
   async analyzeImage(base64: string, mimeType: string): Promise<ImageAnalysis> {
+    const safeMime = validateImageInput(base64, mimeType);
     if (!this.client) {
       return { looksLikePaymentProof: false, description: 'Imagem enviada pelo cliente.' };
     }
@@ -29,7 +31,7 @@ export class MediaAiService {
           },
           {
             type: 'input_image',
-            image_url: `data:${mimeType || 'image/jpeg'};base64,${base64}`
+            image_url: `data:${safeMime};base64,${base64}`
           }
         ]
       }] as any
@@ -47,14 +49,14 @@ export class MediaAiService {
 
   async transcribeAudio(base64: string, mimeType: string): Promise<string> {
     if (!env.openaiApiKey) return '';
-
+    const safeMime = validateAudioInput(base64, mimeType);
     const bytes = Buffer.from(base64, 'base64');
     const form = new FormData();
     form.append('model', env.openaiTranscribeModel);
     form.append(
       'file',
-      new Blob([new Uint8Array(bytes)], { type: mimeType || 'audio/ogg' }),
-      'audio.ogg'
+      new Blob([new Uint8Array(bytes)], { type: safeMime }),
+      'audio.bin'
     );
 
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -64,8 +66,7 @@ export class MediaAiService {
     });
 
     if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`Transcrição OpenAI falhou (${response.status}): ${body.slice(0, 500)}`);
+      throw new Error(`Transcrição OpenAI falhou (${response.status})`);
     }
 
     const json = await response.json() as { text?: string };
