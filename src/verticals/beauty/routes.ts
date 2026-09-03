@@ -5,6 +5,19 @@ import { resolveTenantContext, tenantErrorStatus } from '../../platform/security
 import { beautyPublicBookingService } from './public-booking.service.js';
 import { beautyService } from './service.js';
 import { beautyWhatsAppService } from './whatsapp.service.js';
+import {
+  appointmentCreateSchema,
+  appointmentUpdateSchema,
+  appointmentsQuerySchema,
+  availabilityQuerySchema,
+  customersQuerySchema,
+  parseBeautyInput,
+  professionalInputSchema,
+  publicAppointmentSchema,
+  serviceInputSchema,
+  settingsInputSchema,
+  uuidSchema
+} from './validation.js';
 
 type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
@@ -31,30 +44,31 @@ async function tenantLimit(reply:FastifyReply,companyId:string,method:Method,url
 function route(app:FastifyInstance,method:Method,url:string,handler:(req:FastifyRequest,reply:FastifyReply,companyId:string)=>Promise<unknown>){
   app.route({method,url,bodyLimit:method==='GET'?undefined:128*1024,handler:async(req,reply)=>{try{const tenant=await resolveTenantContext(req);await assertPaidBeauty(tenant.companyId);await tenantLimit(reply,tenant.companyId,method,url);return await handler(req,reply,tenant.companyId);}catch(error){return fail(reply,error);}}});
 }
+function routeId(req:FastifyRequest){return parseBeautyInput(uuidSchema,String((req.params as any).id||''));}
 
 export async function registerBeautyRoutes(app:FastifyInstance){
-  app.get('/public/beauty/:slug',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:info',120,60);return reply.send({data:await beautyPublicBookingService.info((req.params as any).slug)});}catch(error){return fail(reply,error);}});
-  app.get('/public/beauty/:slug/availability',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:availability',120,60);const q=req.query as any;return reply.send({data:await beautyPublicBookingService.availability((req.params as any).slug,{serviceId:String(q.service_id||''),date:String(q.date||'')})});}catch(error){return fail(reply,error);}});
-  app.post('/public/beauty/:slug/appointments',{bodyLimit:32*1024},async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:book',20,60);return reply.send({data:await beautyPublicBookingService.book((req.params as any).slug,(req.body??{}) as any)});}catch(error){return fail(reply,error);}});
+  app.get('/public/beauty/:slug',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:info',120,60);return reply.send({data:await beautyPublicBookingService.info(String((req.params as any).slug||''))});}catch(error){return fail(reply,error);}});
+  app.get('/public/beauty/:slug/availability',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:availability',120,60);const q=parseBeautyInput(availabilityQuerySchema,req.query??{});return reply.send({data:await beautyPublicBookingService.availability(String((req.params as any).slug||''),{serviceId:q.service_id,date:q.date})});}catch(error){return fail(reply,error);}});
+  app.post('/public/beauty/:slug/appointments',{bodyLimit:32*1024},async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:book',20,60);const body=parseBeautyInput(publicAppointmentSchema,req.body??{});return reply.send({data:await beautyPublicBookingService.book(String((req.params as any).slug||''),body)});}catch(error){return fail(reply,error);}});
 
   route(app,'GET','/internal/verticals/beauty/overview',async(_r,reply,id)=>reply.send({data:await beautyService.overview(id)}));
   route(app,'GET','/internal/verticals/beauty/services',async(_r,reply,id)=>reply.send({data:await beautyService.services(id)}));
-  route(app,'POST','/internal/verticals/beauty/services',async(r,reply,id)=>reply.send({data:await beautyService.saveService(id,(r.body??{}) as any)}));
-  route(app,'PUT','/internal/verticals/beauty/services/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveService(cid,(r.body??{}) as any,(r.params as any).id)}));
+  route(app,'POST','/internal/verticals/beauty/services',async(r,reply,id)=>reply.send({data:await beautyService.saveService(id,parseBeautyInput(serviceInputSchema,r.body??{}))}));
+  route(app,'PUT','/internal/verticals/beauty/services/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveService(cid,parseBeautyInput(serviceInputSchema,r.body??{}),routeId(r))}));
 
   route(app,'GET','/internal/verticals/beauty/professionals',async(_r,reply,id)=>reply.send({data:await beautyService.professionals(id)}));
-  route(app,'POST','/internal/verticals/beauty/professionals',async(r,reply,id)=>reply.send({data:await beautyService.saveProfessional(id,(r.body??{}) as any)}));
-  route(app,'PUT','/internal/verticals/beauty/professionals/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveProfessional(cid,(r.body??{}) as any,(r.params as any).id)}));
+  route(app,'POST','/internal/verticals/beauty/professionals',async(r,reply,id)=>reply.send({data:await beautyService.saveProfessional(id,parseBeautyInput(professionalInputSchema,r.body??{}))}));
+  route(app,'PUT','/internal/verticals/beauty/professionals/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveProfessional(cid,parseBeautyInput(professionalInputSchema,r.body??{}),routeId(r))}));
 
-  route(app,'GET','/internal/verticals/beauty/customers',async(r,reply,id)=>{const q=r.query as any;return reply.send({data:await beautyService.customers(id,Number(q.limit)||200)});});
-  route(app,'GET','/internal/verticals/beauty/availability',async(r,reply,id)=>{const q=r.query as any;return reply.send({data:await beautyService.availableSlots(id,{serviceId:String(q.service_id||''),date:String(q.date||''),professionalId:q.professional_id?String(q.professional_id):undefined,limit:Number(q.limit)||30})});});
+  route(app,'GET','/internal/verticals/beauty/customers',async(r,reply,id)=>{const q=parseBeautyInput(customersQuerySchema,r.query??{});return reply.send({data:await beautyService.customers(id,q.limit)});});
+  route(app,'GET','/internal/verticals/beauty/availability',async(r,reply,id)=>{const q=parseBeautyInput(availabilityQuerySchema,r.query??{});return reply.send({data:await beautyService.availableSlots(id,{serviceId:q.service_id,date:q.date,professionalId:q.professional_id,limit:q.limit})});});
 
-  route(app,'GET','/internal/verticals/beauty/appointments',async(r,reply,id)=>{const q=r.query as any;return reply.send({data:await beautyService.appointments(id,q.from,q.to)});});
-  route(app,'POST','/internal/verticals/beauty/appointments',async(r,reply,id)=>reply.send({data:await beautyService.createAppointment(id,(r.body??{}) as any)}));
-  route(app,'PATCH','/internal/verticals/beauty/appointments/:id',async(r,reply,cid)=>reply.send({data:await beautyService.updateAppointment(cid,(r.params as any).id,(r.body??{}) as any)}));
+  route(app,'GET','/internal/verticals/beauty/appointments',async(r,reply,id)=>{const q=parseBeautyInput(appointmentsQuerySchema,r.query??{});return reply.send({data:await beautyService.appointments(id,q.from,q.to)});});
+  route(app,'POST','/internal/verticals/beauty/appointments',async(r,reply,id)=>reply.send({data:await beautyService.createAppointment(id,parseBeautyInput(appointmentCreateSchema,r.body??{}))}));
+  route(app,'PATCH','/internal/verticals/beauty/appointments/:id',async(r,reply,cid)=>reply.send({data:await beautyService.updateAppointment(cid,routeId(r),parseBeautyInput(appointmentUpdateSchema,r.body??{}))}));
 
   route(app,'GET','/internal/verticals/beauty/settings',async(_r,reply,id)=>reply.send({data:await beautyService.settings(id)}));
-  route(app,'PUT','/internal/verticals/beauty/settings',async(r,reply,id)=>reply.send({data:await beautyService.saveSettings(id,(r.body??{}) as any)}));
+  route(app,'PUT','/internal/verticals/beauty/settings',async(r,reply,id)=>reply.send({data:await beautyService.saveSettings(id,parseBeautyInput(settingsInputSchema,r.body??{}))}));
 
   route(app,'GET','/internal/verticals/beauty/whatsapp/status',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.status(id)}));
   route(app,'POST','/internal/verticals/beauty/whatsapp/connect',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.connect(id)}));
