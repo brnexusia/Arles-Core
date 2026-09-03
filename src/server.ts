@@ -18,7 +18,7 @@ import { registerCorsGuard } from './security/cors.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
-  bodyLimit: 32 * 1024 * 1024
+  bodyLimit: 2 * 1024 * 1024
 });
 
 registerCorsGuard(app);
@@ -80,7 +80,7 @@ app.get('/media/:token', async (request, reply) => {
   return reply.send(media.data);
 });
 
-app.post('/webhooks/evolution', async (request, reply) => {
+app.post('/webhooks/evolution', { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
   const payload = request.body;
   reply.code(202).send({ accepted: true });
   const presence = normalizeEvolutionPresence(payload);
@@ -96,7 +96,7 @@ app.post('/webhooks/evolution', async (request, reply) => {
   });
 });
 
-app.post('/internal/conversations/pause', async (request, reply) => {
+app.post('/internal/conversations/pause', { bodyLimit: 16 * 1024 }, async (request, reply) => {
   if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
   const body = (request.body ?? {}) as any;
   const companyId = String(body.company_id ?? '').trim();
@@ -106,7 +106,7 @@ app.post('/internal/conversations/pause', async (request, reply) => {
   return reply.send({ ok: true });
 });
 
-app.post('/internal/conversations/resume', async (request, reply) => {
+app.post('/internal/conversations/resume', { bodyLimit: 16 * 1024 }, async (request, reply) => {
   if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
   const body = (request.body ?? {}) as any;
   const companyId = String(body.company_id ?? '').trim();
