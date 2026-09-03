@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
+import { enforceRateLimit } from '../security/rate-limit.js';
 import { trackBeautyAsaasWebhook } from '../tracking/meta.service.js';
 import { billingService } from './billing.service.js';
 import { beautyAsaasService } from './beauty-asaas.service.js';
@@ -31,8 +32,13 @@ function companyIdFrom(request: FastifyRequest): string {
 
 function failure(reply: FastifyReply, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  const status = /NOT_FOUND/.test(message) ? 404 : /INVALID|REQUIRED|ONLY/.test(message) ? 400 : /NOT_CONFIGURED/.test(message) ? 503 : 500;
-  return reply.code(status).send({ error: message });
+  const status = message === 'RATE_LIMITED' ? 429 : /NOT_FOUND/.test(message) ? 404 : /INVALID|REQUIRED|ONLY/.test(message) ? 400 : /NOT_CONFIGURED/.test(message) ? 503 : 500;
+  return reply.code(status).send({ error: message === 'RATE_LIMITED' ? 'RATE_LIMITED' : message });
+}
+
+async function billingLimit(reply: FastifyReply, companyId: string, operation: string, limit: number, windowSeconds: number) {
+  if (!companyId) throw new Error('COMPANY_REQUIRED');
+  await enforceRateLimit({ scope: `billing:beauty:${operation}`, limit, windowSeconds, identity: companyId }, reply);
 }
 
 export async function registerBillingRoutes(app: FastifyInstance): Promise<void> {
@@ -59,7 +65,7 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
     }
   });
 
-  app.post('/internal/billing/customer', async (request, reply) => {
+  app.post('/internal/billing/customer', { bodyLimit: 32 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     const body = (request.body ?? {}) as any;
     const companyId = companyIdFrom(request);
@@ -71,7 +77,7 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
     return reply.send({ ok: true });
   });
 
-  app.post('/internal/billing/stripe-event', async (request, reply) => {
+  app.post('/internal/billing/stripe-event', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
       return reply.send({
@@ -86,37 +92,46 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
   // Beauty: single R$49,90 plan using Pix Automático / recurring Pix in Asaas.
   app.get('/internal/billing/beauty', async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
-    try { return reply.send({ data: await beautyAsaasService.info(companyIdFrom(request)) }); }
-    catch (error) { return failure(reply, error); }
-  });
-
-  app.post('/internal/billing/beauty/activate', async (request, reply) => {
-    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
-      const body = (request.body ?? {}) as any;
-      return reply.send({ data: await beautyAsaasService.startActivation(companyIdFrom(request), { cpf_cnpj: body.cpf_cnpj }) });
+      const companyId = companyIdFrom(request);
+      await billingLimit(reply, companyId, 'info', 120, 60);
+      return reply.send({ data: await beautyAsaasService.info(companyId) });
     } catch (error) { return failure(reply, error); }
   });
 
-  app.post('/internal/billing/beauty/refresh', async (request, reply) => {
+  app.post('/internal/billing/beauty/activate', { bodyLimit: 16 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
-    try { return reply.send({ data: await beautyAsaasService.refresh(companyIdFrom(request)) }); }
-    catch (error) { return failure(reply, error); }
+    try {
+      const body = (request.body ?? {}) as any;
+      const companyId = companyIdFrom(request);
+      await billingLimit(reply, companyId, 'activate', 5, 60 * 60);
+      return reply.send({ data: await beautyAsaasService.startActivation(companyId, { cpf_cnpj: body.cpf_cnpj }) });
+    } catch (error) { return failure(reply, error); }
   });
 
-  app.post('/internal/billing/beauty/cancel', async (request, reply) => {
+  app.post('/internal/billing/beauty/refresh', { bodyLimit: 8 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
-    try { return reply.send({ data: await beautyAsaasService.cancel(companyIdFrom(request)) }); }
-    catch (error) { return failure(reply, error); }
+    try {
+      const companyId = companyIdFrom(request);
+      await billingLimit(reply, companyId, 'refresh', 30, 60);
+      return reply.send({ data: await beautyAsaasService.refresh(companyId) });
+    } catch (error) { return failure(reply, error); }
   });
 
-  app.post('/webhooks/asaas', async (request, reply) => {
+  app.post('/internal/billing/beauty/cancel', { bodyLimit: 8 * 1024 }, async (request, reply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    try {
+      const companyId = companyIdFrom(request);
+      await billingLimit(reply, companyId, 'cancel', 3, 60 * 60);
+      return reply.send({ data: await beautyAsaasService.cancel(companyId) });
+    } catch (error) { return failure(reply, error); }
+  });
+
+  app.post('/webhooks/asaas', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!asaasAuthorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
       const payload = request.body ?? {};
       const result = await beautyAsaasService.applyWebhook(payload);
-      // Meta is best-effort and never blocks Asaas acknowledgement. The Asaas
-      // event idempotency gate above also prevents duplicate conversion sends.
       if (!result.duplicate && result.companyId) {
         void trackBeautyAsaasWebhook(result.companyId, payload).catch(error => {
           request.log.error({ err: error, companyId: result.companyId }, 'Falha enviando conversão Beauty à Meta');
