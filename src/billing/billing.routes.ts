@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
+import { trackBeautyAsaasWebhook } from '../tracking/meta.service.js';
 import { billingService } from './billing.service.js';
 import { beautyAsaasService } from './beauty-asaas.service.js';
 
@@ -112,7 +113,15 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
   app.post('/webhooks/asaas', async (request, reply) => {
     if (!asaasAuthorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
-      const result = await beautyAsaasService.applyWebhook(request.body ?? {});
+      const payload = request.body ?? {};
+      const result = await beautyAsaasService.applyWebhook(payload);
+      // Meta is best-effort and never blocks Asaas acknowledgement. The Asaas
+      // event idempotency gate above also prevents duplicate conversion sends.
+      if (!result.duplicate && result.companyId) {
+        void trackBeautyAsaasWebhook(result.companyId, payload).catch(error => {
+          request.log.error({ err: error, companyId: result.companyId }, 'Falha enviando conversão Beauty à Meta');
+        });
+      }
       return reply.code(200).send({ ok: true, duplicate: result.duplicate });
     } catch (error) {
       request.log.error({ err: error }, 'Falha processando webhook Asaas');
