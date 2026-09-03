@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { assertPublicHttpUrl } from '../security/safe-url.js';
 
 function numberFromJid(jidOrPhone: string): string {
   return jidOrPhone.replace(/\D/g, '');
@@ -166,6 +167,7 @@ export class EvolutionClient {
     fileName?: string;
   }): Promise<void> {
     const endpoint = this.baseUrl + pathFor(this.sendMediaPath, input.instanceName);
+    const safeMediaUrl = await assertPublicHttpUrl(input.mediaUrl);
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: this.headers(),
@@ -173,7 +175,7 @@ export class EvolutionClient {
         number: numberFromJid(input.to),
         mediatype: 'image',
         mimetype: 'image/jpeg',
-        media: input.mediaUrl,
+        media: safeMediaUrl,
         caption: input.caption ?? '',
         fileName: input.fileName || 'image.jpg'
       })
@@ -235,5 +237,4 @@ export class EvolutionClient {
   }
 }
 
-// Backwards-compatible singleton used by existing Arles integrations.
 export const evolution = new EvolutionClient();
