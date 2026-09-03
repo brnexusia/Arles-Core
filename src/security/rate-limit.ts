@@ -14,10 +14,11 @@ function digest(value: string): string {
 }
 
 export function requestIp(request: FastifyRequest): string {
+  const trustedClientIp = String(request.headers['x-arles-client-ip'] ?? '').trim();
   const forwarded = String(request.headers['x-forwarded-for'] ?? '')
     .split(',')[0]
     ?.trim();
-  return (forwarded || request.ip || 'unknown').slice(0, 128);
+  return (trustedClientIp || forwarded || request.ip || 'unknown').slice(0, 128);
 }
 
 export function rateIdentity(value: unknown): string {
