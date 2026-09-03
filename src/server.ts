@@ -14,6 +14,7 @@ import { registerBuiltInVerticals } from './verticals/index.js';
 import { registerBuiltInPlatformModules } from './composition.js';
 import { evolution } from './whatsapp/evolution.client.js';
 import { normalizeEvolutionPresence } from './whatsapp/normalize.js';
+import { isInternalRequest } from './platform/security/internal-auth.js';
 import { registerCorsGuard } from './security/cors.js';
 import { safeStoredMediaMime } from './security/media.js';
 import { claimWebhookReplayKey, evolutionReplayId } from './security/webhook-replay.js';
@@ -24,13 +25,6 @@ const app = Fastify({
 });
 
 registerCorsGuard(app);
-
-function authorized(request: { headers: Record<string, unknown> }): boolean {
-  if (!env.internalApiKey) return false;
-  const direct = String(request.headers['x-arles-key'] ?? '').trim();
-  const auth = String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
-  return direct === env.internalApiKey || auth === env.internalApiKey;
-}
 
 function evolutionInstanceName(payload: any): string {
   const body = payload?.body ?? payload ?? {};
@@ -109,7 +103,7 @@ app.post('/webhooks/evolution', { bodyLimit: 32 * 1024 * 1024 }, async (request,
 });
 
 app.post('/internal/conversations/pause', { bodyLimit: 16 * 1024 }, async (request, reply) => {
-  if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
+  if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
   const body = (request.body ?? {}) as any;
   const companyId = String(body.company_id ?? '').trim();
   const phone = String(body.phone ?? '').replace(/\D/g, '');
@@ -119,7 +113,7 @@ app.post('/internal/conversations/pause', { bodyLimit: 16 * 1024 }, async (reque
 });
 
 app.post('/internal/conversations/resume', { bodyLimit: 16 * 1024 }, async (request, reply) => {
-  if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
+  if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
   const body = (request.body ?? {}) as any;
   const companyId = String(body.company_id ?? '').trim();
   const phone = String(body.phone ?? '').replace(/\D/g, '');
