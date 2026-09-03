@@ -98,8 +98,9 @@ export async function chooseBeautyEvolutionCluster(): Promise<string | null> {
     // already under sustained pressure even if the raw instance count is low.
     .filter(item => (item.cpu === null || item.cpu < 85) && (item.ram === null || item.ram < 85))
     .sort((a,b) => a.pressure - b.pressure || a.used - b.used);
-  if (!available.length) throw new Error('EVOLUTION_CLUSTER_CAPACITY_EXHAUSTED');
-  return available[0].cluster.key;
+  const selected = available[0];
+  if (!selected) throw new Error('EVOLUTION_CLUSTER_CAPACITY_EXHAUSTED');
+  return selected.cluster.key;
 }
 
 function countInstances(data: any): { total: number; connected: number } {
