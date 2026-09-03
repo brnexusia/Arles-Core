@@ -6,7 +6,7 @@ type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
   const message=error instanceof Error?error.message:String(error);
   const tenant=tenantErrorStatus(error);
-  const status=tenant!==500?tenant:/NOT_FOUND/.test(message)?404:/CONFLICT/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
+  const status=tenant!==500?tenant:/NOT_FOUND/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
   return reply.code(status).send({error:message});
 }
 function route(app:FastifyInstance,method:Method,url:string,handler:(req:FastifyRequest,reply:FastifyReply,companyId:string)=>Promise<unknown>){
@@ -18,13 +18,18 @@ export async function registerBeautyRoutes(app:FastifyInstance){
   route(app,'GET','/internal/verticals/beauty/services',async(_r,reply,id)=>reply.send({data:await beautyService.services(id)}));
   route(app,'POST','/internal/verticals/beauty/services',async(r,reply,id)=>reply.send({data:await beautyService.saveService(id,(r.body??{}) as any)}));
   route(app,'PUT','/internal/verticals/beauty/services/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveService(cid,(r.body??{}) as any,(r.params as any).id)}));
+
   route(app,'GET','/internal/verticals/beauty/professionals',async(_r,reply,id)=>reply.send({data:await beautyService.professionals(id)}));
   route(app,'POST','/internal/verticals/beauty/professionals',async(r,reply,id)=>reply.send({data:await beautyService.saveProfessional(id,(r.body??{}) as any)}));
   route(app,'PUT','/internal/verticals/beauty/professionals/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveProfessional(cid,(r.body??{}) as any,(r.params as any).id)}));
+
+  route(app,'GET','/internal/verticals/beauty/customers',async(r,reply,id)=>{const q=r.query as any;return reply.send({data:await beautyService.customers(id,Number(q.limit)||200)});});
+  route(app,'GET','/internal/verticals/beauty/availability',async(r,reply,id)=>{const q=r.query as any;return reply.send({data:await beautyService.availableSlots(id,{serviceId:String(q.service_id||''),date:String(q.date||''),professionalId:q.professional_id?String(q.professional_id):undefined,limit:Number(q.limit)||30})});});
+
   route(app,'GET','/internal/verticals/beauty/appointments',async(r,reply,id)=>{const q=r.query as any;return reply.send({data:await beautyService.appointments(id,q.from,q.to)});});
   route(app,'POST','/internal/verticals/beauty/appointments',async(r,reply,id)=>reply.send({data:await beautyService.createAppointment(id,(r.body??{}) as any)}));
   route(app,'PATCH','/internal/verticals/beauty/appointments/:id',async(r,reply,cid)=>reply.send({data:await beautyService.updateAppointment(cid,(r.params as any).id,(r.body??{}) as any)}));
+
   route(app,'GET','/internal/verticals/beauty/settings',async(_r,reply,id)=>reply.send({data:await beautyService.settings(id)}));
   route(app,'PUT','/internal/verticals/beauty/settings',async(r,reply,id)=>reply.send({data:await beautyService.saveSettings(id,(r.body??{}) as any)}));
 }
-
