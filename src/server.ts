@@ -15,6 +15,7 @@ import { registerBuiltInPlatformModules } from './composition.js';
 import { evolution } from './whatsapp/evolution.client.js';
 import { normalizeEvolutionPresence } from './whatsapp/normalize.js';
 import { registerCorsGuard } from './security/cors.js';
+import { safeStoredMediaMime } from './security/media.js';
 
 const app = Fastify({
   logger: { level: env.logLevel },
@@ -75,7 +76,11 @@ app.get('/media/:token', async (request, reply) => {
   if (!/^[0-9a-f-]{36}$/i.test(token)) return reply.code(404).send({ error: 'not_found' });
   const media = await getMediaByToken(token);
   if (!media) return reply.code(404).send({ error: 'not_found' });
-  reply.header('content-type', media.mimeType);
+  const mime = safeStoredMediaMime(media.mimeType);
+  if (!mime) return reply.code(415).send({ error: 'unsupported_media_type' });
+  reply.header('content-type', mime);
+  reply.header('x-content-type-options', 'nosniff');
+  reply.header('content-disposition', 'inline');
   reply.header('cache-control', 'private, max-age=3600');
   return reply.send(media.data);
 });
