@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
+import { enforceIpLimit, enforceRateLimit } from '../security/rate-limit.js';
 import { authService } from './auth.service.js';
 import { finalizeBeautyRegistration } from './beauty-registration.js';
 
@@ -25,14 +26,14 @@ function sessionToken(request: FastifyRequest): string {
 function authError(reply: FastifyReply, error: unknown) {
   const code = error instanceof Error ? error.message : String(error);
 
+  if (code === 'RATE_LIMITED' || code === 'LOGIN_RATE_LIMITED') {
+    return reply.code(429).send({
+      error: 'Muitas tentativas. Tente novamente em alguns minutos.',
+      code: 'RATE_LIMITED'
+    });
+  }
   if (code === 'INVALID_CREDENTIALS') {
     return reply.code(401).send({ error: 'E-mail ou senha inválidos.', code });
-  }
-  if (code === 'LOGIN_RATE_LIMITED') {
-    return reply.code(429).send({
-      error: 'Muitas tentativas de login. Tente novamente em alguns minutos.',
-      code
-    });
   }
   if (code === 'EMAIL_ALREADY_REGISTERED') {
     return reply.code(409).send({ error: 'Já existe uma conta com este e-mail.', code });
@@ -70,16 +71,22 @@ function authError(reply: FastifyReply, error: unknown) {
 }
 
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/internal/auth/register', async (request, reply) => {
+  app.post('/internal/auth/register', { bodyLimit: 32 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
       const body = (request.body ?? {}) as any;
+      const email = String(body.email ?? '').trim().toLowerCase();
+      const phone = String(body.phone ?? '').replace(/\D/g, '');
+      await enforceIpLimit(request, reply, 'auth:register:ip', 8, 60 * 60);
+      await enforceRateLimit({ scope: 'auth:register:email', limit: 3, windowSeconds: 60 * 60, identity: email }, reply);
+      if (phone) await enforceRateLimit({ scope: 'auth:register:phone', limit: 3, windowSeconds: 60 * 60, identity: phone }, reply);
+
       const verticalId = String(body.vertical_id ?? body.verticalId ?? '').trim().toLowerCase();
       const result = await authService.register({
         name: String(body.name ?? ''),
         companyName: String(body.company_name ?? body.companyName ?? ''),
-        email: String(body.email ?? ''),
-        phone: String(body.phone ?? ''),
+        email,
+        phone,
         password: String(body.password ?? ''),
         verticalId
       });
@@ -98,14 +105,14 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post('/internal/auth/login', async (request, reply) => {
+  app.post('/internal/auth/login', { bodyLimit: 16 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
       const body = (request.body ?? {}) as any;
-      const result = await authService.login(
-        String(body.email ?? ''),
-        String(body.password ?? '')
-      );
+      const email = String(body.email ?? '').trim().toLowerCase();
+      await enforceIpLimit(request, reply, 'auth:login:ip', 30, 15 * 60);
+      await enforceRateLimit({ scope: 'auth:login:email', limit: 12, windowSeconds: 15 * 60, identity: email }, reply);
+      const result = await authService.login(email, String(body.password ?? ''));
       return reply.send({
         ok: true,
         session_token: result.sessionToken,
@@ -116,14 +123,14 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post('/internal/auth/session', async (request, reply) => {
+  app.post('/internal/auth/session', { bodyLimit: 8 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     const user = await authService.session(sessionToken(request));
     if (!user) return reply.code(401).send({ error: 'SESSION_EXPIRED' });
     return reply.send({ ok: true, user });
   });
 
-  app.post('/internal/auth/logout', async (request, reply) => {
+  app.post('/internal/auth/logout', { bodyLimit: 8 * 1024 }, async (request, reply) => {
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     await authService.logout(sessionToken(request));
     return reply.send({ ok: true });
