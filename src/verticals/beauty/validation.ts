@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const uuid = z.string().uuid();
+export const uuidSchema = z.string().uuid();
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => !Number.isNaN(Date.parse(`${value}T12:00:00Z`)), 'invalid date');
 const dateTime = z.string().min(16).max(40).refine(value => !Number.isNaN(Date.parse(value)), 'invalid datetime');
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/);
@@ -29,13 +29,13 @@ export const professionalInputSchema = z.object({
   specialty: z.string().trim().max(160).optional().default(''),
   phone: z.string().trim().max(32).optional().default('').refine(value => !value || phone.safeParse(value).success, 'invalid phone'),
   active: z.boolean().optional().default(true),
-  service_ids: z.array(uuid).max(100).optional().default([]),
+  service_ids: z.array(uuidSchema).max(100).optional().default([]),
   availability: z.array(availabilityRowSchema).max(14).optional().default([])
 }).strip();
 
 export const appointmentCreateSchema = z.object({
-  service_id: uuid,
-  professional_id: uuid,
+  service_id: uuidSchema,
+  professional_id: uuidSchema,
   starts_at: dateTime,
   customer_name: z.string().trim().min(1).max(160),
   customer_phone: phone,
@@ -54,8 +54,8 @@ export const publicAppointmentSchema = appointmentCreateSchema.pick({
 });
 
 export const appointmentUpdateSchema = z.object({
-  service_id: uuid.optional(),
-  professional_id: uuid.optional(),
+  service_id: uuidSchema.optional(),
+  professional_id: uuidSchema.optional(),
   starts_at: dateTime.optional(),
   notes: z.string().trim().max(1000).optional(),
   status: z.enum(['scheduled','confirmed','completed','canceled','no_show']).optional()
@@ -70,8 +70,8 @@ export const settingsInputSchema = z.object({
 }).strip();
 
 export const availabilityQuerySchema = z.object({
-  service_id: uuid,
-  professional_id: uuid.optional(),
+  service_id: uuidSchema,
+  professional_id: uuidSchema.optional(),
   date: dateOnly,
   limit: z.coerce.number().int().min(1).max(100).optional()
 }).strip();
@@ -80,6 +80,10 @@ export const appointmentsQuerySchema = z.object({
   from: dateTime.optional(),
   to: dateTime.optional()
 }).strip().refine(value => !value.from || !value.to || Date.parse(value.from) <= Date.parse(value.to), 'invalid range');
+
+export const customersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional().default(200)
+}).strip();
 
 export function parseBeautyInput<T>(schema: z.ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
