@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
 import { env } from './config/env.js';
 import { checkDb } from './infrastructure/db.js';
@@ -20,11 +21,36 @@ import { safeStoredMediaMime } from './security/media.js';
 import { claimWebhookReplayKey, evolutionReplayId } from './security/webhook-replay.js';
 
 const app = Fastify({
-  logger: { level: env.logLevel },
+  logger: {
+    level: env.logLevel,
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        'req.headers["x-arles-key"]',
+        'req.headers["x-arles-session"]',
+        'req.headers["asaas-access-token"]',
+        'res.headers["set-cookie"]',
+        '*.password',
+        '*.cpf_cnpj',
+        '*.session_token',
+        '*.access_token'
+      ],
+      censor: '[REDACTED]'
+    }
+  },
+  requestIdHeader: 'x-request-id',
+  genReqId: request => {
+    const supplied = String(request.headers['x-request-id'] ?? '').trim();
+    return /^[A-Za-z0-9._:-]{8,128}$/.test(supplied) ? supplied : randomUUID();
+  },
   bodyLimit: 2 * 1024 * 1024
 });
 
 registerCorsGuard(app);
+app.addHook('onSend', async (request, reply) => {
+  reply.header('x-request-id', request.id);
+});
 
 function evolutionInstanceName(payload: any): string {
   const body = payload?.body ?? payload ?? {};
