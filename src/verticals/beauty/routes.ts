@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { db } from '../../infrastructure/db.js';
-import { redis } from '../../infrastructure/redis.js';
+import { enforceIpLimit, enforceRateLimit } from '../../security/rate-limit.js';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { beautyPublicBookingService } from './public-booking.service.js';
 import { beautyService } from './service.js';
@@ -10,8 +10,8 @@ type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
   const message=error instanceof Error?error.message:String(error);
   const tenant=tenantErrorStatus(error);
-  const status=tenant!==500?tenant:/PUBLIC_RATE_LIMITED/.test(message)?429:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND|BOOKING_LINK/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
-  return reply.code(status).send({error:message});
+  const status=tenant!==500?tenant:message==='RATE_LIMITED'?429:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND|BOOKING_LINK/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
+  return reply.code(status).send({error:message==='RATE_LIMITED'?'RATE_LIMITED':message});
 }
 async function assertPaidBeauty(companyId:string){
   const result=await db.query<{subscription_status:string;access_active:boolean;vertical:string}>(`select
@@ -21,24 +21,21 @@ async function assertPaidBeauty(companyId:string){
   if(!company||company.vertical!=='beauty')throw new Error('BEAUTY_COMPANY_NOT_FOUND');
   if(!company.access_active||String(company.subscription_status).toLowerCase()!=='active')throw new Error('BEAUTY_SUBSCRIPTION_REQUIRED');
 }
-async function publicLimit(req:FastifyRequest,scope:string,limit:number){
-  const minute=Math.floor(Date.now()/60000);
-  const ip=String(req.ip||req.headers['x-forwarded-for']||'unknown').slice(0,120);
-  const key=`beauty:public:${scope}:${ip}:${minute}`;
-  const count=await redis.incr(key);
-  if(count===1)await redis.expire(key,70);
-  if(count>limit)throw new Error('PUBLIC_RATE_LIMITED');
+async function tenantLimit(reply:FastifyReply,companyId:string,method:Method,url:string){
+  const expensive=/whatsapp\/connect/.test(url);
+  const write=method!=='GET';
+  const limit=expensive?6:write?90:360;
+  const windowSeconds=expensive?60*60:60;
+  await enforceRateLimit({scope:`beauty:tenant:${method}:${url}`,limit,windowSeconds,identity:companyId},reply);
 }
 function route(app:FastifyInstance,method:Method,url:string,handler:(req:FastifyRequest,reply:FastifyReply,companyId:string)=>Promise<unknown>){
-  app.route({method,url,handler:async(req,reply)=>{try{const tenant=await resolveTenantContext(req);await assertPaidBeauty(tenant.companyId);return await handler(req,reply,tenant.companyId);}catch(error){return fail(reply,error);}}});
+  app.route({method,url,bodyLimit:method==='GET'?undefined:128*1024,handler:async(req,reply)=>{try{const tenant=await resolveTenantContext(req);await assertPaidBeauty(tenant.companyId);await tenantLimit(reply,tenant.companyId,method,url);return await handler(req,reply,tenant.companyId);}catch(error){return fail(reply,error);}}});
 }
 
 export async function registerBeautyRoutes(app:FastifyInstance){
-  // Public booking link. No tenant id comes from the browser: the public slug is
-  // resolved server-side and only active Beauty subscriptions are exposed.
-  app.get('/public/beauty/:slug',async(req,reply)=>{try{await publicLimit(req,'info',120);return reply.send({data:await beautyPublicBookingService.info((req.params as any).slug)});}catch(error){return fail(reply,error);}});
-  app.get('/public/beauty/:slug/availability',async(req,reply)=>{try{await publicLimit(req,'availability',120);const q=req.query as any;return reply.send({data:await beautyPublicBookingService.availability((req.params as any).slug,{serviceId:String(q.service_id||''),date:String(q.date||'')})});}catch(error){return fail(reply,error);}});
-  app.post('/public/beauty/:slug/appointments',async(req,reply)=>{try{await publicLimit(req,'book',20);return reply.send({data:await beautyPublicBookingService.book((req.params as any).slug,(req.body??{}) as any)});}catch(error){return fail(reply,error);}});
+  app.get('/public/beauty/:slug',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:info',120,60);return reply.send({data:await beautyPublicBookingService.info((req.params as any).slug)});}catch(error){return fail(reply,error);}});
+  app.get('/public/beauty/:slug/availability',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:availability',120,60);const q=req.query as any;return reply.send({data:await beautyPublicBookingService.availability((req.params as any).slug,{serviceId:String(q.service_id||''),date:String(q.date||'')})});}catch(error){return fail(reply,error);}});
+  app.post('/public/beauty/:slug/appointments',{bodyLimit:32*1024},async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:book',20,60);return reply.send({data:await beautyPublicBookingService.book((req.params as any).slug,(req.body??{}) as any)});}catch(error){return fail(reply,error);}});
 
   route(app,'GET','/internal/verticals/beauty/overview',async(_r,reply,id)=>reply.send({data:await beautyService.overview(id)}));
   route(app,'GET','/internal/verticals/beauty/services',async(_r,reply,id)=>reply.send({data:await beautyService.services(id)}));
