@@ -8,7 +8,8 @@ ALTER TABLE companies
   ADD COLUMN IF NOT EXISTS asaas_pix_authorization_id text,
   ADD COLUMN IF NOT EXISTS asaas_subscription_id text,
   ADD COLUMN IF NOT EXISTS asaas_authorization_status text,
-  ADD COLUMN IF NOT EXISTS monthly_price_cents integer;
+  ADD COLUMN IF NOT EXISTS monthly_price_cents integer,
+  ADD COLUMN IF NOT EXISTS acquisition jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_companies_evolution_cluster
   ON companies(evolution_cluster)
@@ -21,6 +22,9 @@ CREATE INDEX IF NOT EXISTS idx_companies_asaas_customer
 CREATE INDEX IF NOT EXISTS idx_companies_asaas_authorization
   ON companies(asaas_pix_authorization_id)
   WHERE asaas_pix_authorization_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_companies_acquisition_gin
+  ON companies USING gin(acquisition);
 
 ALTER TABLE whatsapp_connections
   ADD COLUMN IF NOT EXISTS cluster_key text,
@@ -73,6 +77,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_evolution_instance_unique
 -- Explicit status for accounts that registered but have not activated billing yet.
 UPDATE companies
 SET billing_provider = 'asaas',
-    monthly_price_cents = 4990
-WHERE coalesce(active_vertical_id, vertical) = 'beauty'
-  AND billing_provider IS NULL;
+    monthly_price_cents = 4990,
+    subscription_status = CASE WHEN subscription_status = 'trial' THEN 'pending' ELSE subscription_status END,
+    access_active = CASE WHEN subscription_status = 'trial' THEN false ELSE access_active END
+WHERE coalesce(active_vertical_id, vertical) = 'beauty';
