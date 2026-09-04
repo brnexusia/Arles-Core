@@ -1,4 +1,5 @@
 import { db } from '../../infrastructure/db.js';
+import { reserveBookingQuota } from './quota.js';
 import { beautyService } from './service.js';
 
 function clean(value: unknown): string { return String(value ?? '').trim(); }
@@ -57,15 +58,21 @@ export class BeautyPublicBookingService {
 
   async book(slug: string, body: Record<string, unknown>) {
     const company = await this.company(slug);
-    return beautyService.createAppointment(company.id, {
-      service_id: body.service_id,
-      professional_id: body.professional_id,
-      starts_at: body.starts_at,
-      customer_name: body.customer_name,
-      customer_phone: body.customer_phone,
-      notes: body.notes,
-      source: 'public_booking_link'
-    });
+    const release = await reserveBookingQuota(company.id);
+    try {
+      return await beautyService.createAppointment(company.id, {
+        service_id: body.service_id,
+        professional_id: body.professional_id,
+        starts_at: body.starts_at,
+        customer_name: body.customer_name,
+        customer_phone: body.customer_phone,
+        notes: body.notes,
+        source: 'public_booking_link'
+      });
+    } catch (error) {
+      await release();
+      throw error;
+    }
   }
 }
 
