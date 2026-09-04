@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { db } from '../../infrastructure/db.js';
 import { enforceIpLimit, enforceRateLimit } from '../../security/rate-limit.js';
 import { recordAuditEvent } from '../../security/audit.js';
+import { assertBeautyFeature } from '../../security/kill-switches.js';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { beautyPublicBookingService } from './public-booking.service.js';
 import { assertProfessionalCapacity, assertServiceCapacity, reserveBookingQuota } from './quota.js';
@@ -25,10 +26,11 @@ type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
   const message=error instanceof Error?error.message:String(error);
   const tenant=tenantErrorStatus(error);
-  const status=tenant!==500?tenant:message==='RATE_LIMITED'||/QUOTA_REACHED/.test(message)?429:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND|BOOKING_LINK/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
+  const status=tenant!==500?tenant:/^BEAUTY_(DISABLED|PUBLIC_BOOKING_DISABLED|WHATSAPP_DISABLED)$/.test(message)?503:message==='RATE_LIMITED'||/QUOTA_REACHED/.test(message)?429:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND|BOOKING_LINK/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
   return reply.code(status).send({error:message==='RATE_LIMITED'?'RATE_LIMITED':message});
 }
 async function assertPaidBeauty(companyId:string){
+  assertBeautyFeature('global');
   const result=await db.query<{subscription_status:string;access_active:boolean;vertical:string}>(`select
     subscription_status,access_active,coalesce(active_vertical_id,vertical) vertical
     from companies where id=$1 limit 1`,[companyId]);
@@ -69,11 +71,12 @@ function route(app:FastifyInstance,method:Method,url:string,handler:(req:Fastify
   }});
 }
 function routeId(req:FastifyRequest){return parseBeautyInput(uuidSchema,String((req.params as any).id||''));}
+function assertPublicBooking(){assertBeautyFeature('global');assertBeautyFeature('public_booking');}
 
 export async function registerBeautyRoutes(app:FastifyInstance){
-  app.get('/public/beauty/:slug',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:info',120,60);return reply.send({data:await beautyPublicBookingService.info(String((req.params as any).slug||''))});}catch(error){return fail(reply,error);}});
-  app.get('/public/beauty/:slug/availability',async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:availability',120,60);const q=parseBeautyInput(availabilityQuerySchema,req.query??{});return reply.send({data:await beautyPublicBookingService.availability(String((req.params as any).slug||''),{serviceId:q.service_id,date:q.date})});}catch(error){return fail(reply,error);}});
-  app.post('/public/beauty/:slug/appointments',{bodyLimit:32*1024},async(req,reply)=>{try{await enforceIpLimit(req,reply,'beauty:public:book',20,60);const body=parseBeautyInput(publicAppointmentSchema,req.body??{});return reply.send({data:await beautyPublicBookingService.book(String((req.params as any).slug||''),body)});}catch(error){return fail(reply,error);}});
+  app.get('/public/beauty/:slug',async(req,reply)=>{try{assertPublicBooking();await enforceIpLimit(req,reply,'beauty:public:info',120,60);return reply.send({data:await beautyPublicBookingService.info(String((req.params as any).slug||''))});}catch(error){return fail(reply,error);}});
+  app.get('/public/beauty/:slug/availability',async(req,reply)=>{try{assertPublicBooking();await enforceIpLimit(req,reply,'beauty:public:availability',120,60);const q=parseBeautyInput(availabilityQuerySchema,req.query??{});return reply.send({data:await beautyPublicBookingService.availability(String((req.params as any).slug||''),{serviceId:q.service_id,date:q.date})});}catch(error){return fail(reply,error);}});
+  app.post('/public/beauty/:slug/appointments',{bodyLimit:32*1024},async(req,reply)=>{try{assertPublicBooking();await enforceIpLimit(req,reply,'beauty:public:book',20,60);const body=parseBeautyInput(publicAppointmentSchema,req.body??{});return reply.send({data:await beautyPublicBookingService.book(String((req.params as any).slug||''),body)});}catch(error){return fail(reply,error);}});
 
   route(app,'GET','/internal/verticals/beauty/overview',async(_r,reply,id)=>reply.send({data:await beautyService.overview(id)}));
   route(app,'GET','/internal/verticals/beauty/services',async(_r,reply,id)=>reply.send({data:await beautyService.services(id)}));
@@ -99,7 +102,7 @@ export async function registerBeautyRoutes(app:FastifyInstance){
   route(app,'PUT','/internal/verticals/beauty/settings',async(r,reply,id)=>reply.send({data:await beautyService.saveSettings(id,parseBeautyInput(settingsInputSchema,r.body??{}))}));
 
   route(app,'GET','/internal/verticals/beauty/whatsapp/status',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.status(id)}));
-  route(app,'POST','/internal/verticals/beauty/whatsapp/connect',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.connect(id)}));
-  route(app,'POST','/internal/verticals/beauty/whatsapp/disconnect',async(_r,reply,id)=>reply.send({data:await beautyWhatsAppService.disconnect(id)}));
+  route(app,'POST','/internal/verticals/beauty/whatsapp/connect',async(_r,reply,id)=>{assertBeautyFeature('whatsapp');return reply.send({data:await beautyWhatsAppService.connect(id)});});
+  route(app,'POST','/internal/verticals/beauty/whatsapp/disconnect',async(_r,reply,id)=>{assertBeautyFeature('whatsapp');return reply.send({data:await beautyWhatsAppService.disconnect(id)});});
   route(app,'GET','/internal/verticals/beauty/whatsapp/clusters',async(_r,reply,_id)=>reply.send({data:await beautyWhatsAppService.clusterHealth()}));
 }
