@@ -3,6 +3,7 @@ import { isInternalRequest } from '../platform/security/internal-auth.js';
 import { enforceIpLimit, enforceRateLimit } from '../security/rate-limit.js';
 import { authService } from './auth.service.js';
 import { finalizeBeautyRegistration } from './beauty-registration.js';
+import { passwordResetService } from './password-reset.service.js';
 import { persistedSessionUserId, trimUserSessions } from './session-policy.js';
 
 function sessionToken(request: FastifyRequest): string {
@@ -38,6 +39,8 @@ function authError(reply: FastifyReply, error: unknown) {
   if (code === 'PASSWORD_TOO_SHORT') return reply.code(400).send({ error: 'A senha precisa ter pelo menos 6 caracteres.', code });
   if (code === 'FIELDS_REQUIRED') return reply.code(400).send({ error: 'Preencha todos os campos obrigatórios.', code });
   if (code === 'VERTICAL_REQUIRED' || code === 'VERTICAL_NOT_FOUND') return reply.code(400).send({ error: 'Vertical inválida ou indisponível.', code });
+  if (code === 'PASSWORD_RESET_INVALID') return reply.code(400).send({ error: 'Este link é inválido ou expirou.', code });
+  if (code === 'PASSWORD_RESET_PASSWORD_WEAK') return reply.code(400).send({ error: 'Use uma senha com pelo menos 10 caracteres.', code });
 
   console.error('[Auth]', error);
   return reply.code(500).send({ error: 'AUTH_INTERNAL_ERROR', code });
@@ -85,6 +88,35 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       const result = await authService.login(email, String(body.password ?? ''));
       await trimUserSessions(result.user.id, result.sessionToken);
       return reply.send({ ok: true, session_token: result.sessionToken, user: result.user });
+    } catch (error) {
+      return authError(reply, error);
+    }
+  });
+
+  app.post('/internal/auth/password-reset/request', { bodyLimit: 8 * 1024 }, async (request, reply) => {
+    if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
+    const body = (request.body ?? {}) as any;
+    const email = String(body.email ?? '').trim().toLowerCase();
+    try {
+      await enforceIpLimit(request, reply, 'auth:password-reset:ip', 8, 60 * 60);
+      await enforceRateLimit({ scope: 'auth:password-reset:email', limit: 3, windowSeconds: 60 * 60, identity: email }, reply);
+      await passwordResetService.request(email);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : String(error);
+      if (code === 'RATE_LIMITED') return authError(reply, error);
+      request.log.error({ err: error }, 'Falha interna no pedido de redefinição de senha');
+    }
+    // Always neutral to prevent account enumeration and provider probing.
+    return reply.code(202).send({ ok: true });
+  });
+
+  app.post('/internal/auth/password-reset/confirm', { bodyLimit: 8 * 1024 }, async (request, reply) => {
+    if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
+    try {
+      await enforceIpLimit(request, reply, 'auth:password-reset:confirm:ip', 10, 60 * 60);
+      const body = (request.body ?? {}) as any;
+      await passwordResetService.confirm(String(body.token ?? ''), String(body.password ?? ''));
+      return reply.send({ ok: true });
     } catch (error) {
       return authError(reply, error);
     }
