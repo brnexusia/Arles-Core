@@ -4,6 +4,7 @@ import { enforceIpLimit, enforceRateLimit } from '../../security/rate-limit.js';
 import { recordAuditEvent } from '../../security/audit.js';
 import { resolveTenantContext, tenantErrorStatus } from '../../platform/security/tenant-context.js';
 import { beautyPublicBookingService } from './public-booking.service.js';
+import { assertProfessionalCapacity, assertServiceCapacity, reserveBookingQuota } from './quota.js';
 import { beautyService } from './service.js';
 import { beautyWhatsAppService } from './whatsapp.service.js';
 import {
@@ -24,7 +25,7 @@ type Method='GET'|'POST'|'PUT'|'PATCH';
 function fail(reply:FastifyReply,error:unknown){
   const message=error instanceof Error?error.message:String(error);
   const tenant=tenantErrorStatus(error);
-  const status=tenant!==500?tenant:message==='RATE_LIMITED'?429:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND|BOOKING_LINK/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
+  const status=tenant!==500?tenant:message==='RATE_LIMITED'||/QUOTA_REACHED/.test(message)?429:/BEAUTY_SUBSCRIPTION_REQUIRED/.test(message)?402:/NOT_FOUND|BOOKING_LINK/.test(message)?404:/CONFLICT|NOT_AVAILABLE|NOTICE|CAPACITY/.test(message)?409:/REQUIRED|INVALID/.test(message)?400:500;
   return reply.code(status).send({error:message==='RATE_LIMITED'?'RATE_LIMITED':message});
 }
 async function assertPaidBeauty(companyId:string){
@@ -76,18 +77,22 @@ export async function registerBeautyRoutes(app:FastifyInstance){
 
   route(app,'GET','/internal/verticals/beauty/overview',async(_r,reply,id)=>reply.send({data:await beautyService.overview(id)}));
   route(app,'GET','/internal/verticals/beauty/services',async(_r,reply,id)=>reply.send({data:await beautyService.services(id)}));
-  route(app,'POST','/internal/verticals/beauty/services',async(r,reply,id)=>reply.send({data:await beautyService.saveService(id,parseBeautyInput(serviceInputSchema,r.body??{}))}));
+  route(app,'POST','/internal/verticals/beauty/services',async(r,reply,id)=>{await assertServiceCapacity(id);return reply.send({data:await beautyService.saveService(id,parseBeautyInput(serviceInputSchema,r.body??{}))});});
   route(app,'PUT','/internal/verticals/beauty/services/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveService(cid,parseBeautyInput(serviceInputSchema,r.body??{}),routeId(r))}));
 
   route(app,'GET','/internal/verticals/beauty/professionals',async(_r,reply,id)=>reply.send({data:await beautyService.professionals(id)}));
-  route(app,'POST','/internal/verticals/beauty/professionals',async(r,reply,id)=>reply.send({data:await beautyService.saveProfessional(id,parseBeautyInput(professionalInputSchema,r.body??{}))}));
+  route(app,'POST','/internal/verticals/beauty/professionals',async(r,reply,id)=>{await assertProfessionalCapacity(id);return reply.send({data:await beautyService.saveProfessional(id,parseBeautyInput(professionalInputSchema,r.body??{}))});});
   route(app,'PUT','/internal/verticals/beauty/professionals/:id',async(r,reply,cid)=>reply.send({data:await beautyService.saveProfessional(cid,parseBeautyInput(professionalInputSchema,r.body??{}),routeId(r))}));
 
   route(app,'GET','/internal/verticals/beauty/customers',async(r,reply,id)=>{const q=parseBeautyInput(customersQuerySchema,r.query??{});return reply.send({data:await beautyService.customers(id,q.limit)});});
   route(app,'GET','/internal/verticals/beauty/availability',async(r,reply,id)=>{const q=parseBeautyInput(availabilityQuerySchema,r.query??{});return reply.send({data:await beautyService.availableSlots(id,{serviceId:q.service_id,date:q.date,professionalId:q.professional_id,limit:q.limit})});});
 
   route(app,'GET','/internal/verticals/beauty/appointments',async(r,reply,id)=>{const q=parseBeautyInput(appointmentsQuerySchema,r.query??{});return reply.send({data:await beautyService.appointments(id,q.from,q.to)});});
-  route(app,'POST','/internal/verticals/beauty/appointments',async(r,reply,id)=>reply.send({data:await beautyService.createAppointment(id,parseBeautyInput(appointmentCreateSchema,r.body??{}))}));
+  route(app,'POST','/internal/verticals/beauty/appointments',async(r,reply,id)=>{
+    const release=await reserveBookingQuota(id);
+    try{return reply.send({data:await beautyService.createAppointment(id,parseBeautyInput(appointmentCreateSchema,r.body??{}))});}
+    catch(error){await release();throw error;}
+  });
   route(app,'PATCH','/internal/verticals/beauty/appointments/:id',async(r,reply,cid)=>reply.send({data:await beautyService.updateAppointment(cid,routeId(r),parseBeautyInput(appointmentUpdateSchema,r.body??{}))}));
 
   route(app,'GET','/internal/verticals/beauty/settings',async(_r,reply,id)=>reply.send({data:await beautyService.settings(id)}));
