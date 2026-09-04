@@ -1,8 +1,13 @@
+import { createHash } from 'node:crypto';
 import { db } from '../../infrastructure/db.js';
+import { withIdempotency } from '../../security/idempotency.js';
 import { reserveBookingQuota } from './quota.js';
 import { beautyService } from './service.js';
 
 function clean(value: unknown): string { return String(value ?? '').trim(); }
+function fallbackKey(slug:string,body:Record<string,unknown>):string{
+  return createHash('sha256').update(JSON.stringify({slug,service_id:body.service_id,professional_id:body.professional_id,starts_at:body.starts_at,customer_phone:clean(body.customer_phone).replace(/\D/g,'')})).digest('hex');
+}
 
 export class BeautyPublicBookingService {
   private async company(slugInput: string) {
@@ -56,23 +61,26 @@ export class BeautyPublicBookingService {
     }));
   }
 
-  async book(slug: string, body: Record<string, unknown>) {
+  async book(slug: string, body: Record<string, unknown>, idempotencyKey?: string) {
     const company = await this.company(slug);
-    const release = await reserveBookingQuota(company.id);
-    try {
-      return await beautyService.createAppointment(company.id, {
-        service_id: body.service_id,
-        professional_id: body.professional_id,
-        starts_at: body.starts_at,
-        customer_name: body.customer_name,
-        customer_phone: body.customer_phone,
-        notes: body.notes,
-        source: 'public_booking_link'
-      });
-    } catch (error) {
-      await release();
-      throw error;
-    }
+    const key=clean(idempotencyKey)||fallbackKey(slug,body);
+    return withIdempotency(`beauty:public-book:${company.id}`,key,async()=>{
+      const release = await reserveBookingQuota(company.id);
+      try {
+        return await beautyService.createAppointment(company.id, {
+          service_id: body.service_id,
+          professional_id: body.professional_id,
+          starts_at: body.starts_at,
+          customer_name: body.customer_name,
+          customer_phone: body.customer_phone,
+          notes: body.notes,
+          source: 'public_booking_link'
+        });
+      } catch (error) {
+        await release();
+        throw error;
+      }
+    });
   }
 }
 
