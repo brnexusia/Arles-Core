@@ -22,7 +22,7 @@ export class PlatformService {
 
   async company(companyId: string) {
     const result = await db.query(
-      `select id::text,name,vertical,store_info_completed,whatsapp_completed,
+      `select id::text,name,slug,vertical,store_info_completed,whatsapp_completed,
               onboarding_completed,subscription_status,trial_started_at,
               trial_ends_at,instagram,logo_url
        from companies where id=$1 limit 1`,

@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { assertPublicHttpUrl } from '../security/safe-url.js';
 
 function numberFromJid(jidOrPhone: string): string {
   return jidOrPhone.replace(/\D/g, '');
@@ -31,16 +32,38 @@ export interface EvolutionMedia {
   mimeType: string;
 }
 
+export interface EvolutionClientConfig {
+  baseUrl: string;
+  apiKey: string;
+  sendTextPath?: string;
+  sendMediaPath?: string;
+  mediaBase64Path?: string;
+}
+
 export class EvolutionClient {
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
+  private readonly sendTextPath: string;
+  private readonly sendMediaPath: string;
+  private readonly mediaBase64Path: string;
+
+  constructor(config?: Partial<EvolutionClientConfig>) {
+    this.baseUrl = (config?.baseUrl || env.evolutionBaseUrl).replace(/\/+$/, '');
+    this.apiKey = config?.apiKey || env.evolutionApiKey;
+    this.sendTextPath = config?.sendTextPath || env.evolutionSendTextPath;
+    this.sendMediaPath = config?.sendMediaPath || env.evolutionSendMediaPath;
+    this.mediaBase64Path = config?.mediaBase64Path || env.evolutionMediaBase64Path;
+  }
+
   private headers(): Record<string, string> {
     return {
       'content-type': 'application/json',
-      apikey: env.evolutionApiKey
+      apikey: this.apiKey
     };
   }
 
   async requestJson(path: string, options: RequestInit = {}): Promise<any> {
-    const response = await fetch(`${env.evolutionBaseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${path}`, {
       ...options,
       headers: { ...this.headers(), ...(options.headers || {}) }
     });
@@ -71,6 +94,10 @@ export class EvolutionClient {
 
   async connectionState(instanceName: string): Promise<any> {
     return this.requestJson(`/instance/connectionState/${encodeURIComponent(instanceName)}`, { method: 'GET' });
+  }
+
+  async fetchInstances(): Promise<any> {
+    return this.requestJson('/instance/fetchInstances', { method: 'GET' });
   }
 
   async createInstance(instanceName: string, webhookUrl = ''): Promise<any> {
@@ -111,7 +138,7 @@ export class EvolutionClient {
   }
 
   async sendText(input: { instanceName: string; to: string; text: string }): Promise<void> {
-    const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendTextPath, input.instanceName);
+    const endpoint = this.baseUrl + pathFor(this.sendTextPath, input.instanceName);
     const body: { number: string; text: string; delay?: number } = {
       number: numberFromJid(input.to),
       text: input.text
@@ -139,7 +166,8 @@ export class EvolutionClient {
     caption?: string;
     fileName?: string;
   }): Promise<void> {
-    const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendMediaPath, input.instanceName);
+    const endpoint = this.baseUrl + pathFor(this.sendMediaPath, input.instanceName);
+    const safeMediaUrl = await assertPublicHttpUrl(input.mediaUrl);
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: this.headers(),
@@ -147,7 +175,7 @@ export class EvolutionClient {
         number: numberFromJid(input.to),
         mediatype: 'image',
         mimetype: 'image/jpeg',
-        media: input.mediaUrl,
+        media: safeMediaUrl,
         caption: input.caption ?? '',
         fileName: input.fileName || 'image.jpg'
       })
@@ -162,7 +190,7 @@ export class EvolutionClient {
     instanceName: string;
     messageId: string;
   }): Promise<EvolutionMedia> {
-    const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionMediaBase64Path, input.instanceName);
+    const endpoint = this.baseUrl + pathFor(this.mediaBase64Path, input.instanceName);
 
     const attempts: unknown[] = [
       { message: { key: { id: input.messageId } }, convertToMp4: false },
