@@ -9,6 +9,10 @@ services:
     volumes:
       - arles_postgres:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U arles -d arles"]
       interval: 5s
@@ -18,9 +22,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--protected-mode", "yes"]
     volumes:
       - arles_redis:/data
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,13 +43,31 @@ services:
     environment:
       DATABASE_URL: postgres://arles:${POSTGRES_PASSWORD}@postgres:5432/arles
       REDIS_URL: redis://redis:6379
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
+    networks:
+      - edge
+      - data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.5
+
+networks:
+  edge:
+  data:
+    internal: true
 
 volumes:
   arles_postgres:
