@@ -1,5 +1,6 @@
 import type { VerticalContext, VerticalResult } from '../vertical.js';
 import { reserveBeautyAiBudget, recordBeautyAiFailure, recordBeautyAiSuccess } from '../../security/ai-budget.js';
+import { beautyFeatureEnabled } from '../../security/kill-switches.js';
 import { beautyService } from './service.js';
 import { beautyAiService } from './ai.service.js';
 
@@ -8,25 +9,28 @@ const brl=(n:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'
 
 export class BeautyHandler {
   async handle(context:VerticalContext):Promise<VerticalResult|null>{
-    let release: (()=>Promise<void>) | null = null;
-    try {
-      release = await reserveBeautyAiBudget(context.company.id, context.message.phone);
-      const aiResult = await beautyAiService.handle(context);
-      if (aiResult) {
-        await recordBeautyAiSuccess(context.company.id);
-        return aiResult;
+    // Global emergency stop is silent on WhatsApp: no outbound is generated.
+    if (!beautyFeatureEnabled('global')) return null;
+
+    if (beautyFeatureEnabled('ai')) {
+      let release: (()=>Promise<void>) | null = null;
+      try {
+        release = await reserveBeautyAiBudget(context.company.id, context.message.phone);
+        const aiResult = await beautyAiService.handle(context);
+        if (aiResult) {
+          await recordBeautyAiSuccess(context.company.id);
+          return aiResult;
+        }
+        await recordBeautyAiFailure(context.company.id);
+      } catch (error) {
+        const code = error instanceof Error ? error.message : String(error);
+        if (!/^(RATE_LIMITED|BEAUTY_AI_BUSY|BEAUTY_AI_CIRCUIT_OPEN)$/.test(code)) throw error;
+      } finally {
+        if (release) await release();
       }
-      await recordBeautyAiFailure(context.company.id);
-    } catch (error) {
-      const code = error instanceof Error ? error.message : String(error);
-      if (!/^(RATE_LIMITED|BEAUTY_AI_BUSY|BEAUTY_AI_CIRCUIT_OPEN)$/.test(code)) throw error;
-      // Fail closed for cost, fail open for customer experience: when the AI budget
-      // is unavailable, the grounded deterministic fallback below can still answer
-      // services/prices without generating an OpenAI request.
-    } finally {
-      if (release) await release();
     }
 
+    // When only AI is disabled/budget-limited, retain a grounded no-OpenAI fallback.
     const {company,combinedText}=context;
     const text=norm(combinedText);
     const services=await beautyService.services(company.id);
