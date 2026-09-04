@@ -3,6 +3,7 @@ import { isInternalRequest } from '../platform/security/internal-auth.js';
 import { enforceIpLimit, enforceRateLimit } from '../security/rate-limit.js';
 import { authService } from './auth.service.js';
 import { finalizeBeautyRegistration } from './beauty-registration.js';
+import { persistedSessionUserId, trimUserSessions } from './session-policy.js';
 
 function sessionToken(request: FastifyRequest): string {
   const body = (request.body ?? {}) as Record<string, unknown>;
@@ -67,6 +68,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         await finalizeBeautyRegistration(result.user.companyId, body.acquisition ?? {});
       }
 
+      await trimUserSessions(result.user.id, result.sessionToken);
       return reply.send({ ok: true, session_token: result.sessionToken, user: result.user });
     } catch (error) {
       return authError(reply, error);
@@ -81,6 +83,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       await enforceIpLimit(request, reply, 'auth:login:ip', 30, 15 * 60);
       await enforceRateLimit({ scope: 'auth:login:email', limit: 12, windowSeconds: 15 * 60, identity: email }, reply);
       const result = await authService.login(email, String(body.password ?? ''));
+      await trimUserSessions(result.user.id, result.sessionToken);
       return reply.send({ ok: true, session_token: result.sessionToken, user: result.user });
     } catch (error) {
       return authError(reply, error);
@@ -89,8 +92,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/internal/auth/session', { bodyLimit: 8 * 1024 }, async (request, reply) => {
     if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
-    const user = await authService.session(sessionToken(request));
-    if (!user) return reply.code(401).send({ error: 'SESSION_EXPIRED' });
+    const token = sessionToken(request);
+    const persistedUserId = await persistedSessionUserId(token);
+    if (!persistedUserId) return reply.code(401).send({ error: 'SESSION_EXPIRED' });
+    const user = await authService.session(token);
+    if (!user || user.id !== persistedUserId) return reply.code(401).send({ error: 'SESSION_EXPIRED' });
     return reply.send({ ok: true, user });
   });
 
