@@ -5,6 +5,7 @@ import { asaasWebhookSecrets, matchesAnySecret } from '../security/secrets.js';
 import { trackBeautyAsaasWebhook } from '../tracking/meta.service.js';
 import { billingService } from './billing.service.js';
 import { beautyAsaasService } from './beauty-asaas.service.js';
+import { validatedCpfCnpj, withBeautyActivationGuard } from './beauty-billing-abuse.js';
 
 function asaasAuthorized(request: FastifyRequest): boolean {
   return matchesAnySecret(request.headers['asaas-access-token'], asaasWebhookSecrets());
@@ -18,7 +19,17 @@ function companyIdFrom(request: FastifyRequest): string {
 
 function failure(reply: FastifyReply, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  const status = message === 'RATE_LIMITED' ? 429 : /NOT_FOUND/.test(message) ? 404 : /INVALID|REQUIRED|ONLY/.test(message) ? 400 : /NOT_CONFIGURED/.test(message) ? 503 : 500;
+  const status = message === 'RATE_LIMITED' || message === 'ASAAS_ACTIVATION_COOLDOWN'
+    ? 429
+    : message === 'ASAAS_ACTIVATION_IN_PROGRESS'
+      ? 409
+      : /NOT_FOUND/.test(message)
+        ? 404
+        : /INVALID|REQUIRED|ONLY/.test(message)
+          ? 400
+          : /NOT_CONFIGURED/.test(message)
+            ? 503
+            : 500;
   return reply.code(status).send({ error: message === 'RATE_LIMITED' ? 'RATE_LIMITED' : message });
 }
 
@@ -71,7 +82,11 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
       const body = (request.body ?? {}) as any;
       const companyId = companyIdFrom(request);
       await billingLimit(reply, companyId, 'activate', 5, 60 * 60);
-      return reply.send({ data: await beautyAsaasService.startActivation(companyId, { cpf_cnpj: body.cpf_cnpj }) });
+      const document = validatedCpfCnpj(body.cpf_cnpj);
+      const data = await withBeautyActivationGuard(companyId, () =>
+        beautyAsaasService.startActivation(companyId, { cpf_cnpj: document })
+      );
+      return reply.send({ data });
     } catch (error) { return failure(reply, error); }
   });
 
