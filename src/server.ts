@@ -7,6 +7,7 @@ import { arlesEngine } from './core/engine.js';
 import { getMediaByToken } from './media/media.repository.js';
 import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
 import { startPlatformJobWorker, stopPlatformJobWorker } from './platform/jobs/job.worker.js';
+import { startPrivacyRetentionWorker, stopPrivacyRetentionWorker } from './privacy/retention.js';
 import { registerAuthRoutes } from './auth/auth.routes.js';
 import { registerBillingRoutes } from './billing/billing.routes.js';
 import { registerAdminRoutes } from './admin/admin.routes.js';
@@ -157,10 +158,12 @@ await registerBuiltInVerticals(app);
 
 startFollowupWorker();
 startPlatformJobWorker();
+startPrivacyRetentionWorker();
 
 const shutdown = async () => {
   stopFollowupWorker();
   stopPlatformJobWorker();
+  stopPrivacyRetentionWorker();
   await app.close().catch(() => undefined);
   await redis.quit().catch(() => undefined);
   process.exit(0);
