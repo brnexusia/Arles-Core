@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isInternalRequest } from '../platform/security/internal-auth.js';
+import { assertBeautyFeature } from '../security/kill-switches.js';
 import { enforceRateLimit } from '../security/rate-limit.js';
 import { asaasWebhookSecrets, matchesAnySecret } from '../security/secrets.js';
 import { trackBeautyAsaasWebhook } from '../tracking/meta.service.js';
@@ -23,13 +24,15 @@ function failure(reply: FastifyReply, error: unknown) {
     ? 429
     : message === 'ASAAS_ACTIVATION_IN_PROGRESS'
       ? 409
-      : /NOT_FOUND/.test(message)
-        ? 404
-        : /INVALID|REQUIRED|ONLY/.test(message)
-          ? 400
-          : /NOT_CONFIGURED/.test(message)
-            ? 503
-            : 500;
+      : message === 'BEAUTY_NEW_BILLING_DISABLED' || message === 'BEAUTY_DISABLED'
+        ? 503
+        : /NOT_FOUND/.test(message)
+          ? 404
+          : /INVALID|REQUIRED|ONLY/.test(message)
+            ? 400
+            : /NOT_CONFIGURED/.test(message)
+              ? 503
+              : 500;
   return reply.code(status).send({ error: message === 'RATE_LIMITED' ? 'RATE_LIMITED' : message });
 }
 
@@ -67,6 +70,8 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
     catch (error) { return failure(reply, error); }
   });
 
+  // Existing subscribers can still read/refresh/cancel billing while an emergency
+  // stop blocks the rest of Beauty. Only NEW activations are kill-switched.
   app.get('/internal/billing/beauty', async (request, reply) => {
     if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
@@ -79,6 +84,7 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
   app.post('/internal/billing/beauty/activate', { bodyLimit: 16 * 1024 }, async (request, reply) => {
     if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
+      assertBeautyFeature('billing');
       const body = (request.body ?? {}) as any;
       const companyId = companyIdFrom(request);
       await billingLimit(reply, companyId, 'activate', 5, 60 * 60);
@@ -108,6 +114,8 @@ export async function registerBillingRoutes(app: FastifyInstance): Promise<void>
     } catch (error) { return failure(reply, error); }
   });
 
+  // This endpoint intentionally ignores kill switches. Provider state must always
+  // be ingested so confirmations, cancellations and overdue events are not lost.
   app.post('/webhooks/asaas', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     if (!asaasAuthorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     try {
