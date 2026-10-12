@@ -19,7 +19,16 @@ export async function logIncoming(input: {
       body,
       raw_payload
     )
-    values ($1, $2, $3, 'in', $4, $5, $6::jsonb)
+    values (
+      $1, $2, $3, 'in', $4, $5,
+      case
+        when exists(
+          select 1 from companies c
+          where c.id=$1 and coalesce(c.active_vertical_id,c.vertical)='beauty'
+        ) then null
+        else $6::jsonb
+      end
+    )
     on conflict do nothing
     `,
     [

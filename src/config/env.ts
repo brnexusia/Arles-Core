@@ -29,6 +29,10 @@ export const env = {
   openaiTranscribeModel:
     process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || 'gpt-4o-mini-transcribe',
 
+  // Beauty is intentionally pinned to the low-cost model. A stale global
+  // OPENAI_MODEL cannot silently move this vertical to a more expensive model.
+  beautyOpenaiModel: 'gpt-5-nano',
+
   evolutionBaseUrl: required('EVOLUTION_BASE_URL').replace(/\/+$/, ''),
   evolutionApiKey: required('EVOLUTION_API_KEY'),
   evolutionSendTextPath:
@@ -37,6 +41,19 @@ export const env = {
     process.env.EVOLUTION_SEND_MEDIA_PATH?.trim() || '/message/sendMedia/{instance}',
   evolutionMediaBase64Path:
     process.env.EVOLUTION_MEDIA_BASE64_PATH?.trim() || '/chat/getBase64FromMediaMessage/{instance}',
+
+  // Optional server-only JSON array used only by Beauty, e.g.
+  // [{"key":"evolution-01","baseUrl":"https://...","apiKey":"...","maxInstances":20}]
+  // If empty, Beauty keeps using the current Evolution singleton, so existing
+  // deployments remain backwards compatible until shards are configured.
+  beautyEvolutionClustersJson: process.env.BEAUTY_EVOLUTION_CLUSTERS?.trim() ?? '',
+
+  // Asaas Pix Automático. Optional at process boot so current Arles products are
+  // never taken down by a Beauty credential that has not been provisioned yet.
+  asaasApiBaseUrl: (process.env.ASAAS_API_BASE_URL?.trim() || 'https://api.asaas.com/v3').replace(/\/+$/, ''),
+  asaasApiKey: process.env.ASAAS_API_KEY?.trim() ?? '',
+  asaasWebhookToken: process.env.ASAAS_WEBHOOK_TOKEN?.trim() ?? '',
+  beautyMonthlyPriceCents: numberEnv('BEAUTY_MONTHLY_PRICE_CENTS', 4990),
 
   // Arles Cash usa um único WhatsApp administrado pela Arles.
   // Cada remetente cria/usa a própria conta Cash automaticamente.

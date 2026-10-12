@@ -7,6 +7,7 @@ const COMPANY_SELECT = `
   slug,
   coalesce(active_vertical_id, vertical) as vertical,
   evolution_instance,
+  evolution_cluster,
   subscription_status,
   access_active,
   trial_ends_at,
@@ -44,6 +45,7 @@ export async function getCashCompanyByOwnerPhone(
        c.slug,
        coalesce(c.active_vertical_id,c.vertical) as vertical,
        c.evolution_instance,
+       c.evolution_cluster,
        c.subscription_status,
        c.access_active,
        c.trial_ends_at,
@@ -81,7 +83,7 @@ export async function getOrCreateCashCompanyByOwnerPhone(phone: string): Promise
     const found = await client.query<Company>(
       `select
          c.id,c.name,c.slug,coalesce(c.active_vertical_id,c.vertical) as vertical,
-         c.evolution_instance,c.subscription_status,c.access_active,c.trial_ends_at,c.timezone
+         c.evolution_instance,c.evolution_cluster,c.subscription_status,c.access_active,c.trial_ends_at,c.timezone
        from cash_settings cs
        join companies c on c.id=cs.company_id
        where coalesce(c.active_vertical_id,c.vertical)='cash'
@@ -138,8 +140,6 @@ export async function getOrCreateCashCompanyByOwnerPhone(phone: string): Promise
       );
     }
 
-    // O índice único de phone_normalized é parcial; o predicado precisa ser
-    // repetido no ON CONFLICT para o PostgreSQL conseguir inferir o índice.
     await client.query(
       `insert into trial_entitlements(company_id,phone_normalized,trial_started_at,trial_ends_at)
        values($1,$2,$3,$4)
@@ -168,6 +168,11 @@ export function companyCanUseEngine(company: Company): boolean {
   if (!company.access_active) return false;
 
   const status = String(company.subscription_status).toLowerCase();
+
+  // Beauty's commercial model is payment-first. Registration may still reuse the
+  // shared auth service's legacy trial fields, but WhatsApp/AI only runs after
+  // Asaas confirms an active subscription.
+  if (company.vertical === 'beauty') return status === 'active';
 
   if (status === 'active') return true;
 

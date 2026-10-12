@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
 import { env } from './config/env.js';
 import { checkDb } from './infrastructure/db.js';
@@ -6,6 +7,7 @@ import { arlesEngine } from './core/engine.js';
 import { getMediaByToken } from './media/media.repository.js';
 import { startFollowupWorker, stopFollowupWorker } from './workers/followup.worker.js';
 import { startPlatformJobWorker, stopPlatformJobWorker } from './platform/jobs/job.worker.js';
+import { startPrivacyRetentionWorker, stopPrivacyRetentionWorker } from './privacy/retention.js';
 import { registerAuthRoutes } from './auth/auth.routes.js';
 import { registerBillingRoutes } from './billing/billing.routes.js';
 import { registerAdminRoutes } from './admin/admin.routes.js';
@@ -14,18 +16,42 @@ import { registerBuiltInVerticals } from './verticals/index.js';
 import { registerBuiltInPlatformModules } from './composition.js';
 import { evolution } from './whatsapp/evolution.client.js';
 import { normalizeEvolutionPresence } from './whatsapp/normalize.js';
+import { isInternalRequest } from './platform/security/internal-auth.js';
+import { registerCorsGuard } from './security/cors.js';
+import { safeStoredMediaMime } from './security/media.js';
+import { claimWebhookReplayKey, evolutionReplayId } from './security/webhook-replay.js';
 
 const app = Fastify({
-  logger: { level: env.logLevel },
-  bodyLimit: 32 * 1024 * 1024
+  logger: {
+    level: env.logLevel,
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        'req.headers["x-arles-key"]',
+        'req.headers["x-arles-session"]',
+        'req.headers["asaas-access-token"]',
+        'res.headers["set-cookie"]',
+        '*.password',
+        '*.cpf_cnpj',
+        '*.session_token',
+        '*.access_token'
+      ],
+      censor: '[REDACTED]'
+    }
+  },
+  requestIdHeader: 'x-request-id',
+  genReqId: request => {
+    const supplied = String(request.headers['x-request-id'] ?? '').trim();
+    return /^[A-Za-z0-9._:-]{8,128}$/.test(supplied) ? supplied : randomUUID();
+  },
+  bodyLimit: 2 * 1024 * 1024
 });
 
-function authorized(request: { headers: Record<string, unknown> }): boolean {
-  if (!env.internalApiKey) return false;
-  const direct = String(request.headers['x-arles-key'] ?? '').trim();
-  const auth = String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
-  return direct === env.internalApiKey || auth === env.internalApiKey;
-}
+registerCorsGuard(app);
+app.addHook('onSend', async (request, reply) => {
+  reply.header('x-request-id', request.id);
+});
 
 function evolutionInstanceName(payload: any): string {
   const body = payload?.body ?? payload ?? {};
@@ -34,11 +60,7 @@ function evolutionInstanceName(payload: any): string {
 
 function inferredPublicBaseUrl(request: { headers: Record<string, unknown> }): string {
   const proto = String(request.headers['x-forwarded-proto'] ?? 'https').split(',')[0]?.trim() || 'https';
-  const host = String(
-    request.headers['x-forwarded-host'] ??
-    request.headers.host ??
-    ''
-  ).split(',')[0]?.trim() || '';
+  const host = String(request.headers['x-forwarded-host'] ?? request.headers.host ?? '').split(',')[0]?.trim() || '';
   return host ? `${proto}://${host}`.replace(/\/+$/, '') : '';
 }
 
@@ -51,10 +73,8 @@ async function ensureCashPresenceWebhook(
 ): Promise<void> {
   if (cashPresenceWebhookReady || cashPresenceWebhookAttempting || !env.cashEvolutionInstance) return;
   if (evolutionInstanceName(payload) !== env.cashEvolutionInstance) return;
-
   const baseUrl = env.publicBaseUrl || inferredPublicBaseUrl(request);
   if (!baseUrl) return;
-
   cashPresenceWebhookAttempting = true;
   try {
     await evolution.setWebhook(env.cashEvolutionInstance, `${baseUrl}/webhooks/evolution`);
@@ -78,38 +98,39 @@ app.get('/media/:token', async (request, reply) => {
   if (!/^[0-9a-f-]{36}$/i.test(token)) return reply.code(404).send({ error: 'not_found' });
   const media = await getMediaByToken(token);
   if (!media) return reply.code(404).send({ error: 'not_found' });
-  reply.header('content-type', media.mimeType);
+  const mime = safeStoredMediaMime(media.mimeType);
+  if (!mime) return reply.code(415).send({ error: 'unsupported_media_type' });
+  reply.header('content-type', mime);
+  reply.header('x-content-type-options', 'nosniff');
+  reply.header('content-disposition', 'inline');
   reply.header('cache-control', 'private, max-age=3600');
   return reply.send(media.data);
 });
 
-app.post('/webhooks/evolution', async (request, reply) => {
+app.post('/webhooks/evolution', { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
   const payload = request.body;
-  reply.code(202).send({ accepted: true });
+  const replayId = evolutionReplayId(payload);
+  if (replayId) {
+    const claimed = await claimWebhookReplayKey('evolution', replayId);
+    if (!claimed) return reply.code(202).send({ accepted: true, duplicate: true });
+  }
 
+  reply.code(202).send({ accepted: true });
   const presence = normalizeEvolutionPresence(payload);
-  if (
-    presence &&
-    env.cashEvolutionInstance &&
-    presence.instanceName === env.cashEvolutionInstance
-  ) {
+  if (presence && env.cashEvolutionInstance && presence.instanceName === env.cashEvolutionInstance) {
     void setCashTypingPresence(presence.phone, presence.presence).catch(error => {
       request.log.error({ err: error }, 'Falha salvando presença de digitação do Cash');
     });
     return;
   }
-
-  // Reconfigura a instância central uma única vez por processo para garantir que
-  // PRESENCE_UPDATE esteja habilitado mesmo em instâncias Cash criadas antes desta versão.
   void ensureCashPresenceWebhook(request as any, payload);
-
   void arlesEngine.handleEvolution(payload).catch(error => {
     request.log.error({ err: error }, 'Falha processando webhook Evolution');
   });
 });
 
-app.post('/internal/conversations/pause', async (request, reply) => {
-  if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
+app.post('/internal/conversations/pause', { bodyLimit: 16 * 1024 }, async (request, reply) => {
+  if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
   const body = (request.body ?? {}) as any;
   const companyId = String(body.company_id ?? '').trim();
   const phone = String(body.phone ?? '').replace(/\D/g, '');
@@ -118,8 +139,8 @@ app.post('/internal/conversations/pause', async (request, reply) => {
   return reply.send({ ok: true });
 });
 
-app.post('/internal/conversations/resume', async (request, reply) => {
-  if (!authorized(request as any)) return reply.code(401).send({ error: 'unauthorized' });
+app.post('/internal/conversations/resume', { bodyLimit: 16 * 1024 }, async (request, reply) => {
+  if (!isInternalRequest(request)) return reply.code(401).send({ error: 'unauthorized' });
   const body = (request.body ?? {}) as any;
   const companyId = String(body.company_id ?? '').trim();
   const phone = String(body.phone ?? '').replace(/\D/g, '');
@@ -128,8 +149,6 @@ app.post('/internal/conversations/resume', async (request, reply) => {
   return reply.send({ ok: true });
 });
 
-// Bootstrap explícito: mantém o caminho de inicialização que já era estável no Delivery,
-// e adiciona o registry global sem trocar o roteador conversacional.
 registerBuiltInPlatformModules();
 await registerAuthRoutes(app);
 await registerBillingRoutes(app);
@@ -139,10 +158,12 @@ await registerBuiltInVerticals(app);
 
 startFollowupWorker();
 startPlatformJobWorker();
+startPrivacyRetentionWorker();
 
 const shutdown = async () => {
   stopFollowupWorker();
   stopPlatformJobWorker();
+  stopPrivacyRetentionWorker();
   await app.close().catch(() => undefined);
   await redis.quit().catch(() => undefined);
   process.exit(0);
@@ -153,8 +174,6 @@ process.once('SIGINT', () => void shutdown());
 
 await app.listen({ host: '0.0.0.0', port: env.port });
 
-// Se PUBLIC_BASE_URL estiver configurada, já atualiza o webhook no boot. Caso não esteja,
-// a primeira mensagem recebida pela instância Cash usa o host da própria requisição.
 if (env.cashEvolutionInstance && env.publicBaseUrl) {
   void evolution
     .setWebhook(env.cashEvolutionInstance, `${env.publicBaseUrl}/webhooks/evolution`)

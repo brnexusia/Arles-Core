@@ -12,6 +12,7 @@ export interface Company {
   slug: string;
   vertical: Vertical;
   evolution_instance: string;
+  evolution_cluster?: string | null;
   subscription_status: string;
   access_active: boolean;
   trial_ends_at: Date | null;
