@@ -309,24 +309,12 @@ export class AuthService {
         [companyId, JSON.stringify({ email, phone, display_name: companyName })]
       );
 
-      if (verticalId !== 'cash') {
-        await client.query(
-          `insert into whatsapp_connections(company_id,instance_name,status)
-           values($1,$2,'disconnected')
-           on conflict(company_id) do nothing`,
-          [companyId, deterministicInstance(companyId)]
-        );
-      }
-
-      if (verticalId === 'cash') {
-        await client.query(
-          `insert into cash_settings(company_id,owner_phone)
-           values($1,$2)
-           on conflict(company_id) do update set
-             owner_phone=excluded.owner_phone,updated_at=now()`,
-          [companyId, phone]
-        );
-      }
+      await client.query(
+        `insert into whatsapp_connections(company_id,instance_name,status)
+         values($1,$2,'disconnected')
+         on conflict(company_id) do nothing`,
+        [companyId, deterministicInstance(companyId)]
+      );
 
       await client.query('commit');
     } catch (error) {
