@@ -46,6 +46,7 @@ export interface VerticalModule extends VerticalHandler {
   registerRoutes?(app: FastifyInstance): Promise<void> | void;
   handlePendingInteraction?(context: VerticalContext): Promise<VerticalResult | undefined>;
   handleImage?(context: VerticalContext, media: VerticalMedia): Promise<VerticalResult | undefined>;
+  handleGroup?(payload: unknown): Promise<void>;
   jobs?: Record<string, (context: ModuleJobContext) => Promise<void>>;
   onboardingSteps?: ModuleOnboardingStep[];
   ui?: ModuleUiMetadata;
