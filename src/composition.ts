@@ -5,8 +5,6 @@ import { registerAdminRoutes } from './admin/admin.routes.js';
 import { registerPlatformRoutes } from './platform/platform.routes.js';
 import { moduleRegistry } from './platform/modules/registry.js';
 import { deliveryModule } from './verticals/delivery/module.js';
-import { beautyModule } from './verticals/beauty/module.js';
-import { cashModule } from './verticals/cash/module.js';
 import { registerBuiltInVerticals } from './verticals/index.js';
 import type { VerticalModule as LegacyVerticalModule } from './verticals/vertical.js';
 import type { VerticalModule as PlatformVerticalModule } from './platform/modules/contract.js';
@@ -31,7 +29,8 @@ function platformAdapter(module: LegacyVerticalModule): PlatformVerticalModule {
   };
 }
 
-const builtInPlatformModules = [deliveryModule, beautyModule, cashModule];
+// Production only loads the Delivery module. Other source code stays archived, not executed.
+const builtInPlatformModules = [deliveryModule];
 
 export function registerBuiltInPlatformModules(): void {
   for (const vertical of builtInPlatformModules) {
