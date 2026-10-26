@@ -201,7 +201,7 @@ async function commands(companyId: string, group: GroupIncoming): Promise<string
     const status = ({
       preparando:'Em preparo', preparo:'Em preparo', pronto:'Pronto', saiu:'Saiu para entrega',
       entregue:'Finalizados', cancelado:'Cancelados'
-    } as Record<string,string>)[norm(match[2])];
+    } as Record<string,string>)[norm(match[2])] ?? 'Novos';
     const result = await deliveryPostSaleService.updateAndNotify({
       companyId, orderId: order.id, status
     });
