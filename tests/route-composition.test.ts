@@ -22,6 +22,8 @@ describe('route composition', () => {
     expect(app.hasRoute({ method: 'GET', url: '/internal/verticals/delivery/orders' })).toBe(true);
     expect(app.hasRoute({ method: 'GET', url: '/internal/verticals/beauty/appointments' })).toBe(false);
     expect(app.hasRoute({ method: 'GET', url: '/internal/verticals/cash/transactions' })).toBe(false);
+    expect(app.hasRoute({ method: 'GET', url: '/internal/admin/cash/overview' })).toBe(false);
+    expect(app.hasRoute({ method: 'PATCH', url: '/internal/admin/cash/users/:companyId' })).toBe(false);
 
     await app.close();
   });
