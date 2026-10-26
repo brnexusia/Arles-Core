@@ -1,211 +1,157 @@
+import { randomBytes } from 'node:crypto';
 import { env } from '../config/env.js';
+import { db } from '../infrastructure/db.js';
 
-function numberFromJid(jidOrPhone: string): string {
-  return jidOrPhone.replace(/\D/g, '');
-}
-
-function pathFor(template: string, instance: string): string {
-  return template.replace('{instance}', encodeURIComponent(instance));
-}
-
-async function errorBody(response: Response): Promise<string> {
-  return (await response.text().catch(() => '')).slice(0, 800);
-}
-
-export const EVOLUTION_WEBHOOK_EVENTS = [
-  'MESSAGES_UPSERT',
-  'MESSAGES_EDITED',
-  'MESSAGES_UPDATE',
-  'PRESENCE_UPDATE',
-  'CONNECTION_UPDATE',
-  'QRCODE_UPDATED'
-] as const;
+// Evolution Go identifies each tenant by its own API token, not the global key.
+// Tokens never leave the Core or enter browser-side configuration.
+export const EVOLUTION_WEBHOOK_EVENTS = ['messages.upsert', 'connection.update'] as const;
+export interface EvolutionMedia { base64: string; mimeType: string }
 
 export function cashTypingDelayMs(text: string): number {
-  const length = String(text ?? '').trim().length;
-  return Math.min(1800, Math.max(800, Math.round(length * 10)));
+  return Math.min(1800, Math.max(800, Math.round(String(text || '').length * 10)));
 }
 
-export interface EvolutionMedia {
-  base64: string;
-  mimeType: string;
+function recipient(to: string): string {
+  return to.endsWith('@g.us') ? to : to.replace(/\D/g, '');
 }
 
 export class EvolutionClient {
-  private headers(): Record<string, string> {
-    return {
-      'content-type': 'application/json',
-      apikey: env.evolutionApiKey
-    };
+  private async token(instanceName: string): Promise<string> {
+    const result = await db.query<{ evolution_token: string | null }>(
+      'select evolution_token from whatsapp_connections where instance_name = $1 limit 1',
+      [instanceName]
+    );
+    const token = result.rows[0]?.evolution_token;
+    if (!token) throw new Error('EVOLUTION_GO_INSTANCE_TOKEN_MISSING: configure a chave da instância em WhatsApp.');
+    return token;
   }
 
-  async requestJson(path: string, options: RequestInit = {}): Promise<any> {
+  async requestJson(path: string, options: RequestInit = {}, instanceName?: string): Promise<any> {
+    const token = instanceName ? await this.token(instanceName) : env.evolutionApiKey;
     const response = await fetch(`${env.evolutionBaseUrl}${path}`, {
       ...options,
-      headers: { ...this.headers(), ...(options.headers || {}) }
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: token,
+        ...(options.headers || {})
+      }
     });
-    const text = await response.text().catch(() => '');
-    let data: any = null;
-    if (text) {
-      try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    }
+    const raw = await response.text();
+    let data: any;
+    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
     if (!response.ok) {
-      const error: any = new Error(data?.message || data?.error || text || `Evolution ${response.status}`);
+      const error = new Error(String(data?.error || data?.message || raw || `Evolution Go HTTP ${response.status}`)) as Error & { status?: number };
       error.status = response.status;
-      error.data = data;
       throw error;
     }
     return data;
   }
 
   extractQr(data: any): string | null {
-    const candidates = [
-      data?.qrcode?.base64,
-      data?.qrCode?.base64,
-      data?.base64,
-      typeof data?.qrcode === 'string' ? data.qrcode : null,
-      typeof data?.qrCode === 'string' ? data.qrCode : null
-    ];
-    return candidates.find(value => typeof value === 'string' && value.length > 20) || null;
+    const value = data?.data?.base64 ?? data?.data?.qrcode?.base64 ??
+      data?.data?.qrCode ?? data?.data?.qrcode ??
+      data?.base64 ?? data?.qrcode?.base64 ?? data?.qrCode ?? data?.qrcode;
+    return typeof value === 'string' && value.length > 20 ? value : null;
   }
 
   async connectionState(instanceName: string): Promise<any> {
-    return this.requestJson(`/instance/connectionState/${encodeURIComponent(instanceName)}`, { method: 'GET' });
+    const result = await this.requestJson('/instance/status', { method: 'GET' }, instanceName);
+    const info = result?.data ?? result ?? {};
+    const raw = String(info?.state ?? info?.status ?? info?.connectionStatus ?? '').toLowerCase();
+    const state = ['connected', 'open', 'online'].includes(raw) || info.connected === true
+      ? 'open' : ['connecting', 'pairing'].includes(raw) ? 'connecting' : 'close';
+    return { ...result, instance: { state, owner: info?.jid ?? info?.phone ?? info?.owner ?? null } };
   }
 
   async createInstance(instanceName: string, webhookUrl = ''): Promise<any> {
-    const body: any = { instanceName, qrcode: true, integration: 'WHATSAPP-BAILEYS' };
-    if (webhookUrl) {
-      body.webhook = {
-        enabled: true,
-        url: webhookUrl,
-        byEvents: false,
-        base64: false,
-        events: [...EVOLUTION_WEBHOOK_EVENTS]
-      };
-    }
-    return this.requestJson('/instance/create', { method: 'POST', body: JSON.stringify(body) });
+    const token = randomBytes(32).toString('hex');
+    const result = await this.requestJson('/instance/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: instanceName,
+        token,
+        ...(webhookUrl ? { webhook: webhookUrl, webhookEvents: [...EVOLUTION_WEBHOOK_EVENTS] } : {})
+      })
+    });
+    await db.query(
+      'update whatsapp_connections set evolution_token = $2, updated_at = now() where instance_name = $1',
+      [instanceName, token]
+    );
+    return result;
   }
 
   async setWebhook(instanceName: string, webhookUrl: string): Promise<any> {
-    return this.requestJson(`/webhook/set/${encodeURIComponent(instanceName)}`, {
+    // Go has no Evolution v2 /webhook/set/:instance endpoint.
+    // /instance/connect updates its webhook subscription using the per-instance key.
+    return this.requestJson('/instance/connect', {
       method: 'POST',
-      body: JSON.stringify({
-        webhook: {
-          enabled: true,
-          url: webhookUrl,
-          byEvents: false,
-          base64: false,
-          events: [...EVOLUTION_WEBHOOK_EVENTS]
-        }
-      })
-    });
+      body: JSON.stringify({ webhookUrl, subscribe: [...EVOLUTION_WEBHOOK_EVENTS] })
+    }, instanceName);
   }
 
   async connectInstance(instanceName: string): Promise<any> {
-    return this.requestJson(`/instance/connect/${encodeURIComponent(instanceName)}`, { method: 'GET' });
+    const result = await this.requestJson('/instance/connect', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(env.publicBaseUrl ? {
+          webhookUrl: `${env.publicBaseUrl}/webhooks/evolution`,
+          subscribe: [...EVOLUTION_WEBHOOK_EVENTS]
+        } : {})
+      })
+    }, instanceName);
+    const qr = await this.requestJson('/instance/qr', { method: 'GET' }, instanceName).catch(() => ({}));
+    return { ...result, qrcode: this.extractQr(qr) || this.extractQr(result) };
   }
 
   async logoutInstance(instanceName: string): Promise<any> {
-    return this.requestJson(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: 'DELETE' });
+    return this.requestJson('/instance/logout', { method: 'DELETE' }, instanceName);
   }
 
   async sendText(input: { instanceName: string; to: string; text: string }): Promise<void> {
-    const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendTextPath, input.instanceName);
-    const body: { number: string; text: string; delay?: number } = {
-      number: numberFromJid(input.to),
-      text: input.text
-    };
-
-    if (env.cashEvolutionInstance && input.instanceName === env.cashEvolutionInstance) {
-      body.delay = cashTypingDelayMs(input.text);
-    }
-
-    const response = await fetch(endpoint, {
+    const to = recipient(input.to);
+    await this.requestJson('/send/text', {
       method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Evolution sendText falhou (${response.status}): ${await errorBody(response)}`);
-    }
+      body: JSON.stringify({ number: to, text: input.text, formatJid: !to.endsWith('@g.us') })
+    }, input.instanceName);
   }
 
-  async sendImage(input: {
-    instanceName: string;
-    to: string;
-    mediaUrl: string;
-    caption?: string;
-    fileName?: string;
-  }): Promise<void> {
-    const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionSendMediaPath, input.instanceName);
-    const response = await fetch(endpoint, {
+  async sendImage(input: { instanceName: string; to: string; mediaUrl: string; caption?: string; fileName?: string }): Promise<void> {
+    const to = recipient(input.to);
+    await this.requestJson('/send/media', {
       method: 'POST',
-      headers: this.headers(),
       body: JSON.stringify({
-        number: numberFromJid(input.to),
-        mediatype: 'image',
-        mimetype: 'image/jpeg',
-        media: input.mediaUrl,
-        caption: input.caption ?? '',
-        fileName: input.fileName || 'image.jpg'
+        number: to, url: input.mediaUrl, type: 'image',
+        caption: input.caption ?? '', filename: input.fileName ?? 'cardapio.jpg',
+        formatJid: !to.endsWith('@g.us')
       })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Evolution sendImage falhou (${response.status}): ${await errorBody(response)}`);
-    }
+    }, input.instanceName);
   }
 
-  async getMediaBase64(input: {
-    instanceName: string;
-    messageId: string;
-  }): Promise<EvolutionMedia> {
-    const endpoint = env.evolutionBaseUrl + pathFor(env.evolutionMediaBase64Path, input.instanceName);
-
-    const attempts: unknown[] = [
-      { message: { key: { id: input.messageId } }, convertToMp4: false },
-      { messageId: input.messageId },
-      { id: input.messageId }
-    ];
-
-    let lastError = '';
-
-    for (const body of attempts) {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify(body)
-      });
-
-      if (!response.ok) {
-        lastError = `${response.status}: ${await errorBody(response)}`;
-        continue;
-      }
-
-      const json = await response.json() as any;
-      const data = json?.data ?? json ?? {};
-      const base64 = String(
-        data?.base64 ??
-        data?.media?.base64 ??
-        json?.base64 ??
-        ''
-      ).replace(/^data:[^;]+;base64,/i, '').trim();
-
-      const mimeType = String(
-        data?.mimetype ??
-        data?.mimeType ??
-        data?.contentType ??
-        data?.media?.mimetype ??
-        'application/octet-stream'
-      ).trim();
-
-      if (base64) return { base64, mimeType };
-      lastError = 'Resposta da Evolution sem base64.';
+  async getMediaBase64(input: { instanceName: string; messageId: string; raw?: unknown }): Promise<EvolutionMedia> {
+    const raw = input.raw as any;
+    const data = raw?.data ?? raw?.body?.data ?? {};
+    const media = data?.media ?? data?.message ?? {};
+    const embedded = media?.base64 ?? data?.base64;
+    if (typeof embedded === 'string' && embedded.length > 100) {
+      return {
+        base64: embedded.replace(/^data:[^;]+;base64,/i, ''),
+        mimeType: media?.mimetype || data?.mimetype || 'application/octet-stream'
+      };
     }
 
-    throw new Error(`Evolution getMediaBase64 falhou: ${lastError}`);
+    const result = await this.requestJson('/message/downloadmedia', {
+      method: 'POST',
+      body: JSON.stringify({ messageId: input.messageId, message: data })
+    }, input.instanceName);
+    const payload = result?.data ?? result ?? {};
+    const base64 = payload?.base64 ?? payload?.media?.base64;
+    if (typeof base64 !== 'string' || !base64) {
+      throw new Error('Evolution Go não retornou conteúdo da mídia. Verifique o payload de download desta versão.');
+    }
+    return {
+      base64: base64.replace(/^data:[^;]+;base64,/i, ''),
+      mimeType: payload?.mimetype ?? payload?.mimeType ?? 'application/octet-stream'
+    };
   }
 }
 
