@@ -1,3 +1,4 @@
+import { createGroupPairCode, groupConfiguration } from './group-operations.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env.js';
 import { panelService } from './panel.service.js';
@@ -282,4 +283,15 @@ export async function registerDeliveryPanelRoutes(app: FastifyInstance): Promise
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     return reply.send(await panelService.whatsappDisconnect(companyIdFrom(request)));
   });
+  routes.get('/internal/panel/operations/group', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    return reply.send({ data: await groupConfiguration(companyIdFrom(request)) });
+  });
+
+  routes.post('/internal/panel/operations/group/pair', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    const code = await createGroupPairCode(companyIdFrom(request));
+    return reply.send({ code, expires_in_seconds: 600 });
+  });
+
 }
