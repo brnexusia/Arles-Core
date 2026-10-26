@@ -129,6 +129,7 @@ export function normalizeEvolutionPresence(payload: any): NormalizedEvolutionPre
   const data = body?.data ?? {};
   const instanceName = String(
     body?.instance_name ??
+    body?.instanceName ??
     body?.instance ??
     data?.instance ??
     data?.instanceName ??
@@ -180,6 +181,7 @@ export function normalizeEvolutionEditedMessage(payload: any): NormalizedMessage
 
   const instanceName = String(
     body?.instance_name ??
+    body?.instanceName ??
     body?.instance ??
     data?.instance ??
     ''
@@ -215,6 +217,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
 
   const instanceName = String(
     body?.instance_name ??
+    body?.instanceName ??
     body?.instance ??
     data?.instance ??
     ''
