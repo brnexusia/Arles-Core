@@ -368,9 +368,9 @@ export class AuthService {
       [row.id]
     );
 
-    const sessionToken = await this.createSession(row.id);
     const user = await this.userView(row.id);
-    if (!user) throw new Error('AUTH_USER_NOT_FOUND');
+    if (!user) throw new Error('VERTICAL_DISABLED');
+    const sessionToken = await this.createSession(row.id);
     return { sessionToken, user };
   }
 
