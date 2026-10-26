@@ -652,6 +652,11 @@ export class PanelService {
         assets.push(asset.rows[0]);
         fallbackPage += 1;
       }
+      // The currently saved visual pages now match the latest product state.
+      await client.query(
+        'update delivery_operations set menu_dirty=false,updated_at=now() where company_id=$1',
+        [companyId]
+      );
       await client.query('commit');
       return assets;
     } catch (error) {
