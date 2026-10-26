@@ -1,3 +1,4 @@
+import { isShopManuallyClosed, notifyDeliveryGroup } from './group-operations.js';
 import { deliveryIntentService } from './ai/intent.service.js';
 import { deliveryConversationService } from './ai/conversation.service.js';
 import { getRecentConfirmedOrder, markRecentConfirmedOrder } from './state.js';
@@ -306,6 +307,10 @@ export class DeliveryHandler implements VerticalHandler {
 
     if (store.ai_enabled === false) return null;
 
+    if (await isShopManuallyClosed(company.id)) {
+      return textResult('Estamos fechados temporariamente. Assim que reabrirmos, vamos adorar receber seu pedido! 😊');
+    }
+
     let draft = session.draft ?? emptyDraft();
     const hadDraft = Boolean(session.draft?.items?.length);
     const editingOrder = session.state === 'editing_order';
@@ -573,6 +578,11 @@ export class DeliveryHandler implements VerticalHandler {
         order.id,
         deliveryConfig.recentConfirmedTtlSeconds
       );
+      // The customer confirmation must not be lost if the internal group is offline.
+      await notifyDeliveryGroup(
+        company.id,
+        `🔔 *NOVO PEDIDO #${order.id.slice(0,6)}*\\n${order.clientName}\\n${draft.items.map(i => `${i.quantity}x ${i.name} - ${brl(i.unit_price * i.quantity)}`).join('\\n')}\\n${draft.delivery_type === 'pickup' ? 'Retirada' : 'Entrega: ' + draft.delivery_address}\\n*Total: ${brl(order.total)}*\\nPagamento: ${draft.payment_method}\\n\\nResponda “#${order.id.slice(0,6)} preparando” para atualizar.`
+      ).catch(error => console.error('[Delivery] alerta do grupo não enviado', error));
 
       const firstName = order.clientName.trim().split(/\s+/)[0];
       let response = firstName && firstName.toLowerCase() !== 'cliente'
