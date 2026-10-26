@@ -214,7 +214,7 @@ export class AuthService {
     if (!validEmail(email)) throw new Error('EMAIL_INVALID');
     if (password.length < 6) throw new Error('PASSWORD_TOO_SHORT');
     if (phone.length < 10 || phone.length > 15) throw new Error('PHONE_INVALID');
-    if (!/^[a-z][a-z0-9_-]{1,31}$/.test(verticalId)) throw new Error('VERTICAL_REQUIRED');
+    if (verticalId !== 'delivery') throw new Error('VERTICAL_DISABLED');
 
     const vertical = await db.query(
       `select 1 from vertical_definitions where id = $1 and enabled = true limit 1`,
