@@ -60,7 +60,7 @@ function authError(reply: FastifyReply, error: unknown) {
   if (code === 'FIELDS_REQUIRED') {
     return reply.code(400).send({ error: 'Preencha todos os campos obrigatórios.', code });
   }
-  if (code === 'VERTICAL_REQUIRED' || code === 'VERTICAL_NOT_FOUND') {
+  if (code === 'VERTICAL_REQUIRED' || code === 'VERTICAL_NOT_FOUND' || code === 'VERTICAL_DISABLED') {
     return reply.code(400).send({ error: 'Vertical inválida ou indisponível.', code });
   }
 
