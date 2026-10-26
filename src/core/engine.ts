@@ -1,12 +1,9 @@
 import {
   companyCanUseEngine,
-  getCashCompanyByOwnerPhone,
-  getCompanyByInstance,
-  getOrCreateCashCompanyByOwnerPhone
+  getCompanyByInstance
 } from './company.repository.js';
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
-  bufferCashTextMessage,
   bufferTextMessage,
   consumeSystemSending,
   isConversationPaused,
@@ -28,7 +25,7 @@ import type { OutgoingAction, VerticalModule, VerticalResult } from '../vertical
 import { mediaAiService } from '../media/media-ai.service.js';
 import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
-import { handleCashEditedMessage } from '../verticals/cash/edited-message.js';
+import { handleDeliveryGroupMessage } from '../verticals/delivery/group-operations.js';
 
 export class ArlesEngine {
   private isCashSharedInstance(instanceName: string): boolean {
@@ -173,6 +170,14 @@ export class ArlesEngine {
   async handleEvolution(payload: unknown): Promise<void> {
     // Edição tem formato diferente entre versões da Evolution. Tentamos normalizá-la
     // antes da mensagem comum; update de status/ACK sem texto editado retorna null.
+    // Admin group is handled separately; customer chats stay private.
+    const incomingGroup = (payload as any)?.data?.key?.remoteJid ??
+      (payload as any)?.body?.data?.key?.remoteJid ??
+      (payload as any)?.data?.Info?.Chat ?? '';
+    if (String(incomingGroup).endsWith('@g.us')) {
+      await handleDeliveryGroupMessage(payload);
+      return;
+    }
     const edited = normalizeEvolutionEditedMessage(payload);
     const message = edited ?? normalizeEvolutionMessage(payload);
     const phoneTail = message.phone ? message.phone.slice(-4) : '----';
@@ -207,7 +212,7 @@ export class ArlesEngine {
       return;
     }
 
-    if (message.fromMe && resolved.cashShared && company.vertical === 'cash') return;
+    if (company.vertical !== 'delivery') return;
 
     if (message.fromMe) {
       const wasSystem = await consumeSystemSending(company.id, message.phone);
@@ -233,24 +238,7 @@ export class ArlesEngine {
       return;
     }
 
-    // Edição de mensagem é exclusiva do Cash neste momento. Delivery e demais
-    // verticais continuam com o fluxo anterior, sem qualquer mudança de comportamento.
-    if (message.isEdit) {
-      if (company.vertical !== 'cash') return;
-      const result = await handleCashEditedMessage({ company, message });
-      if (!result) return;
-
-      await logIncoming({
-        companyId: company.id,
-        phone: message.phone,
-        messageId: dedupeId,
-        messageType: 'text',
-        body: `[Mensagem editada] ${message.text}`,
-        rawPayload: payload
-      });
-      await this.applyResult(company, message, result);
-      return;
-    }
+    if (message.isEdit) return;
 
     await logIncoming({
       companyId: company.id,
@@ -289,29 +277,10 @@ export class ArlesEngine {
       return;
     }
 
-    if (company.vertical === 'cash' && module.handlePendingInteraction) {
-      const immediate = await module.handlePendingInteraction({ company, message, combinedText: messageText });
-      if (immediate) {
-        await this.applyResult(company, message, immediate);
-        return;
-      }
-    }
-
-    const combinedText = company.vertical === 'cash'
-      ? await bufferCashTextMessage({
-          companyId: company.id,
-          phone: message.phone,
-          messageId: message.messageId,
-          text: messageText,
-          silenceMs: env.cashMessageSilenceMs
-        })
-      : await bufferTextMessage({
-          companyId: company.id,
-          phone: message.phone,
-          messageId: message.messageId,
-          text: messageText,
-          waitMs: env.messageBufferMs
-        });
+    const combinedText = await bufferTextMessage({
+      companyId: company.id, phone: message.phone, messageId: message.messageId,
+      text: messageText, waitMs: env.messageBufferMs
+    });
 
     if (!combinedText) {
       console.info(`[Arles] Buffer aguardando/consumido por outra mensagem: company=${company.id} phone=*${phoneTail}`);
