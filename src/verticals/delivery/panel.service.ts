@@ -1,6 +1,6 @@
 import { db } from '../../infrastructure/db.js';
 import { env } from '../../config/env.js';
-import { evolution } from '../../whatsapp/evolution.client.js';
+import { evolution, evolutionWebhookUrl } from '../../whatsapp/evolution.client.js';
 import { deliveryPostSaleService } from './post-sale.service.js';
 import { updatePaymentStatus } from './repository.js';
 import { randomUUID } from 'node:crypto';
@@ -707,7 +707,7 @@ export class PanelService {
       [companyId]
     );
     const instanceName = company.rows[0]?.evolution_instance || deterministicInstance(companyId);
-    const webhookUrl = env.publicBaseUrl ? `${env.publicBaseUrl}/webhooks/evolution` : '';
+    const webhookUrl = evolutionWebhookUrl();
 
     let exists = true;
     let state: any = null;
