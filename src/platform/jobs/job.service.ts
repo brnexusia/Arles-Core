@@ -58,7 +58,9 @@ export class PlatformJobService {
       `with due as (
          select id
          from platform_jobs
-         where status in ('pending','retry') and run_at <= now()
+         where module_key='delivery'
+           and company_id in (select id from companies where vertical='delivery')
+           and status in ('pending','retry') and run_at <= now()
          order by run_at, created_at
          for update skip locked
          limit $1
