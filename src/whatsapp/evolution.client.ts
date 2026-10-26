@@ -130,7 +130,7 @@ export class EvolutionClient {
   async getMediaBase64(input: { instanceName: string; messageId: string; raw?: unknown }): Promise<EvolutionMedia> {
     const raw = input.raw as any;
     const data = raw?.data ?? raw?.body?.data ?? {};
-    const media = data?.media ?? data?.message ?? {};
+    const media = data?.Message ?? data?.message ?? data?.media ?? {};
     const embedded = media?.base64 ?? data?.base64;
     if (typeof embedded === 'string' && embedded.length > 100) {
       return {
@@ -141,7 +141,7 @@ export class EvolutionClient {
 
     const result = await this.requestJson('/message/downloadmedia', {
       method: 'POST',
-      body: JSON.stringify({ messageId: input.messageId, message: data })
+      body: JSON.stringify({ message: media })
     }, input.instanceName);
     const payload = result?.data ?? result ?? {};
     const base64 = payload?.base64 ?? payload?.media?.base64;
