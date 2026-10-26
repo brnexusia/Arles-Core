@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
 import { env } from './config/env.js';
 import { checkDb } from './infrastructure/db.js';
@@ -42,6 +43,15 @@ app.get('/media/:token', async (request, reply) => {
 });
 
 app.post('/webhooks/evolution', async (request, reply) => {
+  if (!env.evolutionWebhookSecret) {
+    return reply.code(503).send({ error: 'webhook_not_configured' });
+  }
+  const supplied = String((request.query as { token?: string })?.token ?? '');
+  const expected = Buffer.from(env.evolutionWebhookSecret);
+  const received = Buffer.from(supplied);
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    return reply.code(401).send({ error: 'unauthorized' });
+  }
   const payload = request.body;
   reply.code(202).send({ accepted: true });
 
