@@ -145,6 +145,7 @@ export class AuthService {
       role: 'admin' | 'user';
       company_id: string | null;
       company_name: string | null;
+      company_vertical: string | null;
       verticals: string[] | null;
       capabilities: string[] | null;
     }>(
@@ -155,6 +156,7 @@ export class AuthService {
          u.role,
          u.company_id::text,
          c.name as company_name,
+         c.vertical as company_vertical,
          coalesce((
            select array_agg(cv.vertical_id order by cv.vertical_id)
            from company_verticals cv
@@ -176,6 +178,8 @@ export class AuthService {
 
     const row = result.rows[0];
     if (!row) return null;
+    // Keep legacy users and records untouched, but do not issue sessions for disabled products.
+    if (row.role !== 'admin' && row.company_vertical !== 'delivery') return null;
 
     const verticals = row.verticals ?? [];
     const capabilities = row.capabilities ?? [];
