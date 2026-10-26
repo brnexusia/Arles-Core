@@ -1,6 +1,6 @@
 import { db } from '../infrastructure/db.js';
 import { moduleRegistry } from './modules/registry.js';
-import { panelService } from '../verticals/delivery/panel.service.js';
+import { whatsappChannel } from '../whatsapp/channel.service.js';
 
 function clean(value: unknown): string {
   return String(value ?? '').trim();
@@ -182,17 +182,17 @@ export class PlatformService {
 
   async channelStatus(companyId: string) {
     await this.assertDelivery(companyId);
-    return panelService.whatsappStatus(companyId);
+    return whatsappChannel.status(companyId);
   }
 
   async connectChannel(companyId: string) {
     await this.assertDelivery(companyId);
-    return panelService.whatsappConnect(companyId);
+    return whatsappChannel.connect(companyId);
   }
 
   async disconnectChannel(companyId: string) {
     await this.assertDelivery(companyId);
-    return panelService.whatsappDisconnect(companyId);
+    return whatsappChannel.disconnect(companyId);
   }
 
 }
