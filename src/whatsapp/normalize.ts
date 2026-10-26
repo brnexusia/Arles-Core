@@ -1,5 +1,15 @@
 import type { NormalizedMessage } from '../core/types.js';
 
+function jid(value: any): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const user = value.User ?? value.user;
+    const server = value.Server ?? value.server;
+    return user && server ? `${user}@${server}` : '';
+  }
+  return '';
+}
+
 function digits(value: string): string {
   return value.replace(/\D/g, '');
 }
@@ -53,12 +63,14 @@ function firstData(body: any): any {
 
 function resolveAddress(body: any, data: any) {
   const key = data?.key ?? data?.update?.key ?? body?.key ?? {};
-  const rawJid = String(
+  const rawJid = jid(
     body?.phone ??
     key?.remoteJid ??
     data?.remoteJid ??
     data?.sender ??
     body?.sender ??
+    data?.Info?.Chat ??
+    data?.info?.chat ??
     ''
   ).trim();
 
@@ -119,6 +131,7 @@ export function normalizeEvolutionPresence(payload: any): NormalizedEvolutionPre
     body?.instance_name ??
     body?.instance ??
     data?.instance ??
+    data?.instanceName ??
     ''
   ).trim();
 
@@ -156,7 +169,7 @@ export function normalizeEvolutionPresence(payload: any): NormalizedEvolutionPre
  */
 export function normalizeEvolutionEditedMessage(payload: any): NormalizedMessage | null {
   const body = payload?.body ?? payload ?? {};
-  const event = normalizedEvent(body?.event);
+  const event = normalizedEvent(body?.event ?? body?.type);
   const data = firstData(body);
   const edited = editedPayload(data);
   const editedText = messageText(edited ?? {});
@@ -180,8 +193,8 @@ export function normalizeEvolutionEditedMessage(payload: any): NormalizedMessage
     remoteJid: rawJid,
     replyJid,
     phone,
-    pushName: String(data?.pushName ?? body?.pushName ?? ''),
-    fromMe: body?.from_me === true || key?.fromMe === true,
+    pushName: String(data?.pushName ?? data?.Info?.PushName ?? body?.pushName ?? ''),
+    fromMe: body?.from_me === true || key?.fromMe === true || data?.Info?.IsFromMe === true,
     isGroup: rawJid.endsWith('@g.us'),
     isBroadcast: rawJid.includes('@broadcast') || rawJid.includes('status@broadcast'),
     event,
@@ -197,7 +210,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   const body = payload?.body ?? payload ?? {};
   const data = firstData(body);
   const { key, rawJid, replyJid, phone } = resolveAddress(body, data);
-  const message = data?.message ?? body?.message ?? {};
+  const message = data?.message ?? data?.Message ?? body?.message ?? {};
   const event = normalizedEvent(body?.event);
 
   const instanceName = String(
@@ -226,7 +239,7 @@ export function normalizeEvolutionMessage(payload: any): NormalizedMessage {
   if (message?.audioMessage) type = 'audio';
 
   return {
-    messageId: String(body?.message_id ?? key?.id ?? data?.id ?? ''),
+    messageId: String(body?.message_id ?? key?.id ?? data?.Info?.ID ?? data?.info?.id ?? data?.id ?? ''),
     instanceName,
     remoteJid: rawJid,
     replyJid,
