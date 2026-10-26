@@ -1,3 +1,4 @@
+import { notifyDeliveryGroup } from './group-operations.js';
 import { clearAwaitingReview, getAwaitingReview } from './state.js';
 import type { VerticalContext, VerticalMedia, VerticalResult } from '../vertical.js';
 import { parseRating } from './helpers.js';
@@ -62,6 +63,10 @@ export async function handleDeliveryImage(
     mimeType: media.mimeType.startsWith('image/') ? media.mimeType : 'image/jpeg',
     bytes: Buffer.from(media.base64, 'base64')
   });
+
+  await notifyDeliveryGroup(company.id,
+    `💳 Comprovante Pix recebido para o pedido #${pendingPix.id.slice(0,6)}. Confira e aprove com “pix #${pendingPix.id.slice(0,6)} aprovar”.`
+  ).catch(error => console.error('[Delivery] aviso Pix no grupo falhou', error));
 
   return {
     actions: [{
