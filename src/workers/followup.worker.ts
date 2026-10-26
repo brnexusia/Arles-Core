@@ -1,3 +1,4 @@
+import { db } from '../infrastructure/db.js';
 import { env } from '../config/env.js';
 import { logOutgoing } from '../core/message.repository.js';
 import {
@@ -21,6 +22,14 @@ async function tick(): Promise<void> {
     const jobs = await popDueFollowups();
 
     for (const job of jobs) {
+      const allowed = await db.query(
+        `select 1 from companies
+         where id=$1 and vertical='delivery' and evolution_instance=$2 limit 1`,
+        [job.companyId, job.instanceName]
+      );
+      // Never deliver stale follow-ups from disabled verticals or other instances.
+      if (!allowed.rowCount) continue;
+
       const [lastInbound, alreadySent, paused] = await Promise.all([
         getLastInbound(job.companyId, job.phone),
         followupAlreadySent(job.companyId, job.phone),
