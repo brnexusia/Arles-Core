@@ -5,6 +5,13 @@ import { db } from '../infrastructure/db.js';
 // Evolution Go identifies each tenant by its own API token, not the global key.
 // Tokens never leave the Core or enter browser-side configuration.
 export const EVOLUTION_WEBHOOK_EVENTS = ['messages.upsert', 'connection.update'] as const;
+
+export function evolutionWebhookUrl(): string {
+  if (!env.publicBaseUrl || !env.evolutionWebhookSecret) {
+    throw new Error('EVOLUTION_WEBHOOK_SECRET e PUBLIC_BASE_URL são obrigatórios para conectar o WhatsApp.');
+  }
+  return `${env.publicBaseUrl}/webhooks/evolution?token=${encodeURIComponent(env.evolutionWebhookSecret)}`;
+}
 export interface EvolutionMedia { base64: string; mimeType: string }
 
 export function cashTypingDelayMs(text: string): number {
@@ -63,14 +70,13 @@ export class EvolutionClient {
     return { ...result, instance: { state, owner: info?.jid ?? info?.phone ?? info?.owner ?? null } };
   }
 
-  async createInstance(instanceName: string, webhookUrl = ''): Promise<any> {
+  async createInstance(instanceName: string, _webhookUrl = ''): Promise<any> {
     const token = randomBytes(32).toString('hex');
     const result = await this.requestJson('/instance/create', {
       method: 'POST',
       body: JSON.stringify({
         name: instanceName,
-        token,
-        ...(webhookUrl ? { webhook: webhookUrl, webhookEvents: [...EVOLUTION_WEBHOOK_EVENTS] } : {})
+        token
       })
     });
     await db.query(
@@ -93,10 +99,8 @@ export class EvolutionClient {
     const result = await this.requestJson('/instance/connect', {
       method: 'POST',
       body: JSON.stringify({
-        ...(env.publicBaseUrl ? {
-          webhookUrl: `${env.publicBaseUrl}/webhooks/evolution`,
-          subscribe: [...EVOLUTION_WEBHOOK_EVENTS]
-        } : {})
+        webhookUrl: evolutionWebhookUrl(),
+        subscribe: [...EVOLUTION_WEBHOOK_EVENTS]
       })
     }, instanceName);
     const qr = await this.requestJson('/instance/qr', { method: 'GET' }, instanceName).catch(() => ({}));
