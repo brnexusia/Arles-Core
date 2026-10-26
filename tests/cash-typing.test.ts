@@ -24,9 +24,10 @@ describe('cash typing effect', () => {
     expect(long).toBe(1800);
   });
 
-  it('assina PRESENCE_UPDATE no webhook da Evolution', () => {
-    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('PRESENCE_UPDATE');
-    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('MESSAGES_UPSERT');
+  it('assina somente eventos de atendimento disponíveis na Evolution Go', () => {
+    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('messages.upsert');
+    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('connection.update');
+    expect(EVOLUTION_WEBHOOK_EVENTS).not.toContain('PRESENCE_UPDATE');
   });
 
   it('normaliza presença composing e paused do usuário', () => {

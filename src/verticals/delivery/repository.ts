@@ -71,6 +71,12 @@ export async function getActiveProducts(companyId: string): Promise<DeliveryProd
 }
 
 export async function getMenuAssets(companyId: string): Promise<MenuAsset[]> {
+  // After stock/price changes, never send an out-of-date visual menu.
+  const op = await db.query<{ menu_dirty: boolean }>(
+    'select menu_dirty from delivery_operations where company_id=$1', [companyId]
+  );
+  if (op.rows[0]?.menu_dirty) return [];
+
   const result = await db.query<MenuAsset>(
     `select id::text, page_number, asset_url
      from delivery_menu_assets

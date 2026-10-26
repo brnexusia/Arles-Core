@@ -31,6 +31,7 @@ export const env = {
 
   evolutionBaseUrl: required('EVOLUTION_BASE_URL').replace(/\/+$/, ''),
   evolutionApiKey: required('EVOLUTION_API_KEY'),
+  evolutionWebhookSecret: process.env.EVOLUTION_WEBHOOK_SECRET?.trim() ?? '',
   evolutionSendTextPath:
     process.env.EVOLUTION_SEND_TEXT_PATH?.trim() || '/message/sendText/{instance}',
   evolutionSendMediaPath:

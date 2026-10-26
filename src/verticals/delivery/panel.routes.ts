@@ -1,3 +1,6 @@
+import { evolution, evolutionWebhookUrl } from '../../whatsapp/evolution.client.js';
+import { db } from '../../infrastructure/db.js';
+import { createGroupPairCode, groupConfiguration } from './group-operations.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env.js';
 import { panelService } from './panel.service.js';
@@ -282,4 +285,67 @@ export async function registerDeliveryPanelRoutes(app: FastifyInstance): Promise
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     return reply.send(await panelService.whatsappDisconnect(companyIdFrom(request)));
   });
+  routes.get('/internal/panel/operations/group', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    return reply.send({ data: await groupConfiguration(companyIdFrom(request)) });
+  });
+
+  routes.post('/internal/panel/operations/group/pair', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    const code = await createGroupPairCode(companyIdFrom(request));
+    return reply.send({ code, expires_in_seconds: 600 });
+  });
+
+  routes.post('/internal/panel/whatsapp/token', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const token = String(body.token ?? '').trim();
+    const requestedName = String(body.instanceName ?? '').trim();
+    if (token.length < 20 || token.length > 256) return reply.code(400).send({ error: 'token inválido' });
+    if (requestedName && !/^[a-zA-Z0-9_-]{3,100}$/.test(requestedName)) {
+      return reply.code(400).send({ error: 'nome de instância inválido' });
+    }
+    const companyId = companyIdFrom(request);
+    const existing = await db.query<{ evolution_instance: string }>(
+      `select evolution_instance from companies where id=$1 and vertical='delivery'`, [companyId]
+    );
+    if (!existing.rowCount) return reply.code(404).send({ error: 'empresa não encontrada' });
+    const instanceName = requestedName || existing.rows[0]!.evolution_instance;
+
+    const client = await db.connect();
+    try {
+      await client.query('begin');
+      await client.query(
+        `update companies set evolution_instance=$2,updated_at=now()
+         where id=$1 and vertical='delivery'`, [companyId, instanceName]
+      );
+      const result = await client.query(
+        `update whatsapp_connections set evolution_token=$2,instance_name=$3,updated_at=now()
+         where company_id=$1 returning company_id`, [companyId, token, instanceName]
+      );
+      if (!result.rowCount) throw new Error('Instância ainda não cadastrada para a empresa.');
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback');
+      return fail(reply, error);
+    } finally {
+      client.release();
+    }
+
+    let webhookConfigured = false;
+    try {
+      await evolution.setWebhook(instanceName, evolutionWebhookUrl());
+      webhookConfigured = true;
+    } catch (error) {
+      request.log.warn({ err: error }, 'Instância salva, mas webhook Evolution Go não configurado');
+    }
+    return reply.send({
+      ok: true,
+      instanceName,
+      webhookConfigured,
+      warning: webhookConfigured ? null : 'Token salvo. Conecte novamente o WhatsApp para registrar o webhook.'
+    });
+
+  });
+
 }

@@ -3,6 +3,7 @@ import { deliveryHandler } from './handler.js';
 import { registerDeliveryEventRoutes } from './event.routes.js';
 import { handleDeliveryImage, handleDeliveryPendingInteraction } from './interactions.js';
 import { registerDeliveryPanelRoutes } from './panel.routes.js';
+import { handleDeliveryGroupMessage } from './group-operations.js';
 
 export const deliveryModule: VerticalModule = {
   id: 'delivery',
@@ -19,6 +20,7 @@ export const deliveryModule: VerticalModule = {
   handle: context => deliveryHandler.handle(context),
   handlePendingInteraction: handleDeliveryPendingInteraction,
   handleImage: handleDeliveryImage,
+  handleGroup: handleDeliveryGroupMessage,
   async registerRoutes(app) {
     await registerDeliveryPanelRoutes(app);
     await registerDeliveryEventRoutes(app);

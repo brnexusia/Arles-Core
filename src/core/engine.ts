@@ -1,12 +1,9 @@
 import {
   companyCanUseEngine,
-  getCashCompanyByOwnerPhone,
-  getCompanyByInstance,
-  getOrCreateCashCompanyByOwnerPhone
+  getCompanyByInstance
 } from './company.repository.js';
 import { logIncoming, logOutgoing } from './message.repository.js';
 import {
-  bufferCashTextMessage,
   bufferTextMessage,
   consumeSystemSending,
   isConversationPaused,
@@ -28,48 +25,15 @@ import type { OutgoingAction, VerticalModule, VerticalResult } from '../vertical
 import { mediaAiService } from '../media/media-ai.service.js';
 import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
-import { handleCashEditedMessage } from '../verticals/cash/edited-message.js';
 
 export class ArlesEngine {
-  private isCashSharedInstance(instanceName: string): boolean {
-    return Boolean(env.cashEvolutionInstance && instanceName === env.cashEvolutionInstance);
-  }
-
   private outboundInstance(company: Company, message?: NormalizedMessage): string {
-    if (company.vertical === 'cash' && env.cashEvolutionInstance) return env.cashEvolutionInstance;
     return message?.instanceName || company.evolution_instance;
   }
 
-  private async resolveCompany(message: NormalizedMessage): Promise<{
-    company: Company | null;
-    cashShared: boolean;
-    route: 'instance' | 'cash-shared' | 'none';
-  }> {
-    const instanceCompany = await getCompanyByInstance(message.instanceName);
-    if (instanceCompany && instanceCompany.vertical !== 'cash') {
-      return { company: instanceCompany, cashShared: false, route: 'instance' };
-    }
-
-    const cashShared = this.isCashSharedInstance(message.instanceName);
-    if (cashShared) {
-      if (message.fromMe) {
-        const existingCash = await getCashCompanyByOwnerPhone(message.phone);
-        return {
-          company: existingCash,
-          cashShared: true,
-          route: existingCash ? 'cash-shared' : 'none'
-        };
-      }
-
-      const cashAccount = await getOrCreateCashCompanyByOwnerPhone(message.phone);
-      return { company: cashAccount.company, cashShared: true, route: 'cash-shared' };
-    }
-
-    return {
-      company: instanceCompany,
-      cashShared: false,
-      route: instanceCompany ? 'instance' : 'none'
-    };
+  private async resolveCompany(message: NormalizedMessage) {
+    const company = await getCompanyByInstance(message.instanceName);
+    return { company, route: company ? 'instance' : 'none' };
   }
 
   private async sendActions(company: Company, message: NormalizedMessage, actions: OutgoingAction[]): Promise<void> {
@@ -123,7 +87,8 @@ export class ArlesEngine {
     try {
       const media = await evolution.getMediaBase64({
         instanceName: this.outboundInstance(company, message),
-        messageId: message.messageId
+        messageId: message.messageId,
+        raw: message.raw
       });
       const analysis = await mediaAiService.analyzeImage(media.base64, media.mimeType);
 
@@ -149,7 +114,7 @@ export class ArlesEngine {
     try {
       const media = await evolution.getMediaBase64({
         instanceName: this.outboundInstance(company, message),
-        messageId: message.messageId
+        messageId: message.messageId, raw: message.raw
       });
       const text = await mediaAiService.transcribeAudio(media.base64, media.mimeType || 'audio/ogg');
       if (!text) {
@@ -173,6 +138,18 @@ export class ArlesEngine {
   async handleEvolution(payload: unknown): Promise<void> {
     // Edição tem formato diferente entre versões da Evolution. Tentamos normalizá-la
     // antes da mensagem comum; update de status/ACK sem texto editado retorna null.
+    // Admin group is handled separately; customer chats stay private.
+    const incomingGroup = (payload as any)?.data?.key?.remoteJid ??
+      (payload as any)?.body?.data?.key?.remoteJid ??
+      (payload as any)?.data?.Info?.Chat ?? '';
+    const groupJid = typeof incomingGroup === 'object' && incomingGroup
+      ? `${incomingGroup.User ?? incomingGroup.user}@${incomingGroup.Server ?? incomingGroup.server}`
+      : String(incomingGroup);
+    if (groupJid.endsWith('@g.us')) {
+      const handler = getVerticalModule('delivery')?.handleGroup;
+      if (handler) await handler(payload);
+      return;
+    }
     const edited = normalizeEvolutionEditedMessage(payload);
     const message = edited ?? normalizeEvolutionMessage(payload);
     const phoneTail = message.phone ? message.phone.slice(-4) : '----';
@@ -207,7 +184,7 @@ export class ArlesEngine {
       return;
     }
 
-    if (message.fromMe && resolved.cashShared && company.vertical === 'cash') return;
+    if (company.vertical !== 'delivery') return;
 
     if (message.fromMe) {
       const wasSystem = await consumeSystemSending(company.id, message.phone);
@@ -218,7 +195,7 @@ export class ArlesEngine {
       return;
     }
 
-    if (!companyCanUseEngine(company) && company.vertical !== 'cash') {
+    if (!companyCanUseEngine(company)) {
       console.warn(
         `[Arles] Engine bloqueado para company=${company.id} vertical=${company.vertical} access_active=${company.access_active} subscription_status=${company.subscription_status}`
       );
@@ -233,24 +210,7 @@ export class ArlesEngine {
       return;
     }
 
-    // Edição de mensagem é exclusiva do Cash neste momento. Delivery e demais
-    // verticais continuam com o fluxo anterior, sem qualquer mudança de comportamento.
-    if (message.isEdit) {
-      if (company.vertical !== 'cash') return;
-      const result = await handleCashEditedMessage({ company, message });
-      if (!result) return;
-
-      await logIncoming({
-        companyId: company.id,
-        phone: message.phone,
-        messageId: dedupeId,
-        messageType: 'text',
-        body: `[Mensagem editada] ${message.text}`,
-        rawPayload: payload
-      });
-      await this.applyResult(company, message, result);
-      return;
-    }
+    if (message.isEdit) return;
 
     await logIncoming({
       companyId: company.id,
@@ -289,29 +249,10 @@ export class ArlesEngine {
       return;
     }
 
-    if (company.vertical === 'cash' && module.handlePendingInteraction) {
-      const immediate = await module.handlePendingInteraction({ company, message, combinedText: messageText });
-      if (immediate) {
-        await this.applyResult(company, message, immediate);
-        return;
-      }
-    }
-
-    const combinedText = company.vertical === 'cash'
-      ? await bufferCashTextMessage({
-          companyId: company.id,
-          phone: message.phone,
-          messageId: message.messageId,
-          text: messageText,
-          silenceMs: env.cashMessageSilenceMs
-        })
-      : await bufferTextMessage({
-          companyId: company.id,
-          phone: message.phone,
-          messageId: message.messageId,
-          text: messageText,
-          waitMs: env.messageBufferMs
-        });
+    const combinedText = await bufferTextMessage({
+      companyId: company.id, phone: message.phone, messageId: message.messageId,
+      text: messageText, waitMs: env.messageBufferMs
+    });
 
     if (!combinedText) {
       console.info(`[Arles] Buffer aguardando/consumido por outra mensagem: company=${company.id} phone=*${phoneTail}`);

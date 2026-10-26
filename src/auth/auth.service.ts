@@ -145,6 +145,7 @@ export class AuthService {
       role: 'admin' | 'user';
       company_id: string | null;
       company_name: string | null;
+      company_vertical: string | null;
       verticals: string[] | null;
       capabilities: string[] | null;
     }>(
@@ -155,6 +156,7 @@ export class AuthService {
          u.role,
          u.company_id::text,
          c.name as company_name,
+         c.vertical as company_vertical,
          coalesce((
            select array_agg(cv.vertical_id order by cv.vertical_id)
            from company_verticals cv
@@ -176,6 +178,8 @@ export class AuthService {
 
     const row = result.rows[0];
     if (!row) return null;
+    // Keep legacy users and records untouched, but do not issue sessions for disabled products.
+    if (row.role !== 'admin' && row.company_vertical !== 'delivery') return null;
 
     const verticals = row.verticals ?? [];
     const capabilities = row.capabilities ?? [];
@@ -214,7 +218,7 @@ export class AuthService {
     if (!validEmail(email)) throw new Error('EMAIL_INVALID');
     if (password.length < 6) throw new Error('PASSWORD_TOO_SHORT');
     if (phone.length < 10 || phone.length > 15) throw new Error('PHONE_INVALID');
-    if (!/^[a-z][a-z0-9_-]{1,31}$/.test(verticalId)) throw new Error('VERTICAL_REQUIRED');
+    if (verticalId !== 'delivery') throw new Error('VERTICAL_DISABLED');
 
     const vertical = await db.query(
       `select 1 from vertical_definitions where id = $1 and enabled = true limit 1`,
@@ -309,24 +313,12 @@ export class AuthService {
         [companyId, JSON.stringify({ email, phone, display_name: companyName })]
       );
 
-      if (verticalId !== 'cash') {
-        await client.query(
-          `insert into whatsapp_connections(company_id,instance_name,status)
-           values($1,$2,'disconnected')
-           on conflict(company_id) do nothing`,
-          [companyId, deterministicInstance(companyId)]
-        );
-      }
-
-      if (verticalId === 'cash') {
-        await client.query(
-          `insert into cash_settings(company_id,owner_phone)
-           values($1,$2)
-           on conflict(company_id) do update set
-             owner_phone=excluded.owner_phone,updated_at=now()`,
-          [companyId, phone]
-        );
-      }
+      await client.query(
+        `insert into whatsapp_connections(company_id,instance_name,status)
+         values($1,$2,'disconnected')
+         on conflict(company_id) do nothing`,
+        [companyId, deterministicInstance(companyId)]
+      );
 
       await client.query('commit');
     } catch (error) {
@@ -376,9 +368,9 @@ export class AuthService {
       [row.id]
     );
 
-    const sessionToken = await this.createSession(row.id);
     const user = await this.userView(row.id);
-    if (!user) throw new Error('AUTH_USER_NOT_FOUND');
+    if (!user) throw new Error('VERTICAL_DISABLED');
+    const sessionToken = await this.createSession(row.id);
     return { sessionToken, user };
   }
 

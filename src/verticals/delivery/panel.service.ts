@@ -1,6 +1,6 @@
 import { db } from '../../infrastructure/db.js';
 import { env } from '../../config/env.js';
-import { evolution } from '../../whatsapp/evolution.client.js';
+import { whatsappChannel } from '../../whatsapp/channel.service.js';
 import { deliveryPostSaleService } from './post-sale.service.js';
 import { updatePaymentStatus } from './repository.js';
 import { randomUUID } from 'node:crypto';
@@ -652,6 +652,11 @@ export class PanelService {
         assets.push(asset.rows[0]);
         fallbackPage += 1;
       }
+      // The currently saved visual pages now match the latest product state.
+      await client.query(
+        'update delivery_operations set menu_dirty=false,updated_at=now() where company_id=$1',
+        [companyId]
+      );
       await client.query('commit');
       return assets;
     } catch (error) {
@@ -663,104 +668,17 @@ export class PanelService {
   }
 
   async whatsappStatus(companyId: string) {
-    const company = await db.query<{ evolution_instance: string }>(
-      `select evolution_instance from companies where id = $1 limit 1`,
-      [companyId]
-    );
-    const instanceName = company.rows[0]?.evolution_instance;
-    if (!instanceName) return { status: 'disconnected', phoneNumber: null };
-
-    const cached = await db.query(`select * from whatsapp_connections where company_id = $1 limit 1`, [companyId]);
-    try {
-      if (env.publicBaseUrl) {
-        await evolution.setWebhook(instanceName, `${env.publicBaseUrl}/webhooks/evolution`).catch(() => undefined);
-      }
-      const state = await evolution.connectionState(instanceName);
-      const rawState = state?.instance?.state;
-      const status = rawState === 'open' ? 'connected' : rawState === 'connecting' ? 'connecting' : 'disconnected';
-      const phoneNumber = state?.instance?.owner || cached.rows[0]?.phone_number || null;
-      await db.query(
-        `insert into whatsapp_connections (company_id, instance_name, phone_number, status, connected_at, updated_at)
-         values ($1,$2,$3,$4,case when $4='connected' then now() else null end,now())
-         on conflict (company_id) do update set
-           phone_number = coalesce(excluded.phone_number, whatsapp_connections.phone_number),
-           status = excluded.status,
-           connected_at = case when excluded.status='connected' then coalesce(whatsapp_connections.connected_at, now()) else whatsapp_connections.connected_at end,
-           updated_at = now()`,
-        [companyId, instanceName, phoneNumber, status]
-      );
-      if (status === 'connected') {
-        await db.query(`update companies set whatsapp_completed = true, updated_at = now() where id = $1`, [companyId]);
-      }
-      return { status, phoneNumber };
-    } catch (error: any) {
-      if (error?.status === 404) return { status: 'disconnected', phoneNumber: null };
-      return { status: cached.rows[0]?.status || 'disconnected', phoneNumber: cached.rows[0]?.phone_number || null, degraded: true };
-    }
+    return whatsappChannel.status(companyId);
   }
 
   async whatsappConnect(companyId: string) {
-    const company = await db.query<{ evolution_instance: string }>(
-      `select evolution_instance from companies where id = $1 limit 1`,
-      [companyId]
-    );
-    const instanceName = company.rows[0]?.evolution_instance || deterministicInstance(companyId);
-    const webhookUrl = env.publicBaseUrl ? `${env.publicBaseUrl}/webhooks/evolution` : '';
-
-    let exists = true;
-    let state: any = null;
-    try {
-      state = await evolution.connectionState(instanceName);
-    } catch (error: any) {
-      if (error?.status === 404) exists = false;
-      else throw error;
-    }
-
-    if (state?.instance?.state === 'open') {
-      const phoneNumber = state?.instance?.owner || null;
-      await db.query(`update companies set whatsapp_completed = true, updated_at = now() where id = $1`, [companyId]);
-      await db.query(
-        `insert into whatsapp_connections (company_id, instance_name, phone_number, status, connected_at, updated_at)
-         values ($1,$2,$3,'connected',now(),now())
-         on conflict (company_id) do update set phone_number=excluded.phone_number,status='connected',connected_at=coalesce(whatsapp_connections.connected_at,now()),updated_at=now()`,
-        [companyId, instanceName, phoneNumber]
-      );
-      return { success: true, status: 'connected', phoneNumber };
-    }
-
-    let qrCodeBase64: string | null = null;
-    if (!exists) {
-      const created = await evolution.createInstance(instanceName, webhookUrl);
-      qrCodeBase64 = evolution.extractQr(created);
-    }
-
-    if (webhookUrl) await evolution.setWebhook(instanceName, webhookUrl).catch(() => undefined);
-    if (!qrCodeBase64) qrCodeBase64 = evolution.extractQr(await evolution.connectInstance(instanceName));
-
-    await db.query(
-      `insert into whatsapp_connections (company_id, instance_name, status, updated_at)
-       values ($1,$2,'connecting',now())
-       on conflict (company_id) do update set instance_name=excluded.instance_name,status='connecting',updated_at=now()`,
-      [companyId, instanceName]
-    );
-    await db.query(`update companies set evolution_instance = $2, updated_at = now() where id = $1`, [companyId, instanceName]);
-    return { success: true, status: 'connecting', qrCodeBase64 };
+    return whatsappChannel.connect(companyId);
   }
 
   async whatsappDisconnect(companyId: string) {
-    const company = await db.query<{ evolution_instance: string }>(
-      `select evolution_instance from companies where id = $1 limit 1`,
-      [companyId]
-    );
-    const instanceName = company.rows[0]?.evolution_instance;
-    if (instanceName) await evolution.logoutInstance(instanceName).catch(() => undefined);
-    await db.query(
-      `update whatsapp_connections set status='disconnected', phone_number=null, updated_at=now() where company_id=$1`,
-      [companyId]
-    );
-    await db.query(`update companies set whatsapp_completed=false, updated_at=now() where id=$1`, [companyId]);
-    return { success: true, status: 'disconnected' };
+    return whatsappChannel.disconnect(companyId);
   }
+
 }
 
 export const panelService = new PanelService();

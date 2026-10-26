@@ -94,7 +94,7 @@ export class AdminService {
       db.query<SummaryRow>(`
         select
           count(*)::text as companies,
-          (select count(*) from auth_users where role = 'user')::text as users,
+          (select count(*) from auth_users u join companies c on c.id=u.company_id where u.role = 'user' and c.vertical='delivery')::text as users,
           count(*) filter (where subscription_status = 'active')::text as active_subscriptions,
           count(*) filter (
             where subscription_status = 'trial'
@@ -111,10 +111,11 @@ export class AdminService {
             where subscription_status = 'active'
           ), 0)::text as monthly_revenue_cents,
           (select coalesce(sum(amount_paid_cents), 0)
-           from billing_payments
-           where paid_at >= now() - interval '30 days')::text as revenue_received_30d_cents,
+           from billing_payments b join companies dc on dc.id=b.company_id
+           where b.paid_at >= now() - interval '30 days' and dc.vertical='delivery')::text as revenue_received_30d_cents,
           coalesce(sum(monthly_contacts_used), 0)::text as contacts_used
         from companies
+        where vertical='delivery'
       `),
       db.query<CompanyRow>(`
         select
@@ -135,11 +136,12 @@ export class AdminService {
           c.monthly_contacts_used,
           c.trial_ends_at,
           c.subscription_current_period_end,
-          case when coalesce(c.active_vertical_id,c.vertical)='cash' then 'managed' else wc.status end as whatsapp_status,
+          wc.status as whatsapp_status,
           c.created_at
         from companies c
         left join auth_users u on u.company_id = c.id and u.role = 'user'
         left join whatsapp_connections wc on wc.company_id = c.id
+        where c.vertical='delivery'
         order by c.created_at desc
       `)
     ]);
