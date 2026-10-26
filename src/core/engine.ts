@@ -28,45 +28,13 @@ import type { Company, NormalizedMessage } from './types.js';
 import { handleDeliveryGroupMessage } from '../verticals/delivery/group-operations.js';
 
 export class ArlesEngine {
-  private isCashSharedInstance(instanceName: string): boolean {
-    return Boolean(env.cashEvolutionInstance && instanceName === env.cashEvolutionInstance);
-  }
-
   private outboundInstance(company: Company, message?: NormalizedMessage): string {
-    if (company.vertical === 'cash' && env.cashEvolutionInstance) return env.cashEvolutionInstance;
     return message?.instanceName || company.evolution_instance;
   }
 
-  private async resolveCompany(message: NormalizedMessage): Promise<{
-    company: Company | null;
-    cashShared: boolean;
-    route: 'instance' | 'cash-shared' | 'none';
-  }> {
-    const instanceCompany = await getCompanyByInstance(message.instanceName);
-    if (instanceCompany && instanceCompany.vertical !== 'cash') {
-      return { company: instanceCompany, cashShared: false, route: 'instance' };
-    }
-
-    const cashShared = this.isCashSharedInstance(message.instanceName);
-    if (cashShared) {
-      if (message.fromMe) {
-        const existingCash = await getCashCompanyByOwnerPhone(message.phone);
-        return {
-          company: existingCash,
-          cashShared: true,
-          route: existingCash ? 'cash-shared' : 'none'
-        };
-      }
-
-      const cashAccount = await getOrCreateCashCompanyByOwnerPhone(message.phone);
-      return { company: cashAccount.company, cashShared: true, route: 'cash-shared' };
-    }
-
-    return {
-      company: instanceCompany,
-      cashShared: false,
-      route: instanceCompany ? 'instance' : 'none'
-    };
+  private async resolveCompany(message: NormalizedMessage) {
+    const company = await getCompanyByInstance(message.instanceName);
+    return { company, route: company ? 'instance' : 'none' };
   }
 
   private async sendActions(company: Company, message: NormalizedMessage, actions: OutgoingAction[]): Promise<void> {
@@ -120,7 +88,8 @@ export class ArlesEngine {
     try {
       const media = await evolution.getMediaBase64({
         instanceName: this.outboundInstance(company, message),
-        messageId: message.messageId
+        messageId: message.messageId,
+        raw: message.raw
       });
       const analysis = await mediaAiService.analyzeImage(media.base64, media.mimeType);
 
@@ -223,7 +192,7 @@ export class ArlesEngine {
       return;
     }
 
-    if (!companyCanUseEngine(company) && company.vertical !== 'cash') {
+    if (!companyCanUseEngine(company)) {
       console.warn(
         `[Arles] Engine bloqueado para company=${company.id} vertical=${company.vertical} access_active=${company.access_active} subscription_status=${company.subscription_status}`
       );
