@@ -115,7 +115,7 @@ export class ArlesEngine {
     try {
       const media = await evolution.getMediaBase64({
         instanceName: this.outboundInstance(company, message),
-        messageId: message.messageId
+        messageId: message.messageId, raw: message.raw
       });
       const text = await mediaAiService.transcribeAudio(media.base64, media.mimeType || 'audio/ogg');
       if (!text) {
@@ -143,7 +143,10 @@ export class ArlesEngine {
     const incomingGroup = (payload as any)?.data?.key?.remoteJid ??
       (payload as any)?.body?.data?.key?.remoteJid ??
       (payload as any)?.data?.Info?.Chat ?? '';
-    if (String(incomingGroup).endsWith('@g.us')) {
+    const groupJid = typeof incomingGroup === 'object' && incomingGroup
+      ? `${incomingGroup.User ?? incomingGroup.user}@${incomingGroup.Server ?? incomingGroup.server}`
+      : String(incomingGroup);
+    if (groupJid.endsWith('@g.us')) {
       await handleDeliveryGroupMessage(payload);
       return;
     }
