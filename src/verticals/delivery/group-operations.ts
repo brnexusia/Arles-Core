@@ -61,7 +61,10 @@ export function parseGroupIncoming(payload: any): GroupIncoming | null {
   const data = Array.isArray(body.data) ? body.data[0] : body.data ?? {};
   const info = data?.Info ?? data?.info ?? {};
   const key = data?.key ?? info?.key ?? {};
-  const jid = String(key?.remoteJid ?? data?.remoteJid ?? info?.Chat ?? info?.chat ?? '');
+  const jidData = key?.remoteJid ?? data?.remoteJid ?? info?.Chat ?? info?.chat ?? '';
+  const jid = typeof jidData === 'object' && jidData
+    ? `${jidData.User ?? jidData.user}@${jidData.Server ?? jidData.server}`
+    : String(jidData);
   if (!/^\d+@g\.us$/.test(jid)) return null;
   const actor = String(key?.participant ?? data?.participant ?? info?.Sender ?? info?.sender ?? '');
   const message = data?.message ?? data?.Message ?? {};
@@ -69,7 +72,7 @@ export function parseGroupIncoming(payload: any): GroupIncoming | null {
     message?.conversation ?? message?.extendedTextMessage?.text ??
     message?.imageMessage?.caption ?? data?.text ?? ''
   ).trim();
-  const instance = String(body?.instance_name ?? body?.instance ?? body?.instanceName ?? data?.instance ?? '');
+  const instance = String(body?.instance_name ?? body?.instance ?? body?.instanceName ?? data?.instance ?? data?.instanceName ?? '');
   const id = String(key?.id ?? info?.ID ?? data?.id ?? '');
   const event = String(body?.event ?? '').toLowerCase().replace(/[_.]/g, '');
   if (event && !['messagesupsert','messageupsert'].includes(event)) return null;
