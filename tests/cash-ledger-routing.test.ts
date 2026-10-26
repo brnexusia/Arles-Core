@@ -152,9 +152,10 @@ describe('cash pocket routes', () => {
 });
 
 describe('cash edited WhatsApp messages', () => {
-  it('assina os dois eventos de edição/update da Evolution', () => {
-    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('MESSAGES_EDITED');
-    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('MESSAGES_UPDATE');
+  it('desativa a assinatura legada de edição na Evolution Go Delivery-only', () => {
+    expect(EVOLUTION_WEBHOOK_EVENTS).toContain('messages.upsert');
+    expect(EVOLUTION_WEBHOOK_EVENTS).not.toContain('MESSAGES_EDITED');
+    expect(EVOLUTION_WEBHOOK_EVENTS).not.toContain('MESSAGES_UPDATE');
   });
 
   it('normaliza editedMessage dentro de MESSAGES_UPDATE e mantém o id original', () => {
