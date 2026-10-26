@@ -581,7 +581,7 @@ export class DeliveryHandler implements VerticalHandler {
       // The customer confirmation must not be lost if the internal group is offline.
       await notifyDeliveryGroup(
         company.id,
-        `🔔 *NOVO PEDIDO #${order.id.slice(0,6)}*\\n${order.clientName}\\n${draft.items.map(i => `${i.quantity}x ${i.name} - ${brl(i.unit_price * i.quantity)}`).join('\\n')}\\n${draft.delivery_type === 'pickup' ? 'Retirada' : 'Entrega: ' + draft.delivery_address}\\n*Total: ${brl(order.total)}*\\nPagamento: ${draft.payment_method}\\n\\nResponda “#${order.id.slice(0,6)} preparando” para atualizar.`
+        `🔔 *NOVO PEDIDO #${order.id.slice(0,6)}*\n${order.clientName}\n${draft.items.map(i => `${i.quantity}x ${i.name} - ${brl(i.unit_price * i.quantity)}`).join('\n')}\n${draft.delivery_type === 'pickup' ? 'Retirada' : 'Entrega: ' + draft.delivery_address}\n*Total: ${brl(order.total)}*\nPagamento: ${draft.payment_method}\n\nResponda “#${order.id.slice(0,6)} preparando” para atualizar.`
       ).catch(error => console.error('[Delivery] alerta do grupo não enviado', error));
 
       const firstName = order.clientName.trim().split(/\s+/)[0];
