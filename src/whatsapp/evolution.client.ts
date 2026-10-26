@@ -48,7 +48,7 @@ export class EvolutionClient {
   }
 
   extractQr(data: any): string | null {
-    const value = data?.data?.base64 ?? data?.data?.qrcode?.base64 ??
+    const value = data?.data?.code ?? data?.data?.base64 ?? data?.data?.qrcode?.base64 ??
       data?.data?.qrCode ?? data?.data?.qrcode ??
       data?.base64 ?? data?.qrcode?.base64 ?? data?.qrCode ?? data?.qrcode;
     return typeof value === 'string' && value.length > 20 ? value : null;
