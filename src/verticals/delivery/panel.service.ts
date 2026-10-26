@@ -672,9 +672,6 @@ export class PanelService {
 
     const cached = await db.query(`select * from whatsapp_connections where company_id = $1 limit 1`, [companyId]);
     try {
-      if (env.publicBaseUrl) {
-        await evolution.setWebhook(instanceName, `${env.publicBaseUrl}/webhooks/evolution`).catch(() => undefined);
-      }
       const state = await evolution.connectionState(instanceName);
       const rawState = state?.instance?.state;
       const status = rawState === 'open' ? 'connected' : rawState === 'connecting' ? 'connecting' : 'disconnected';
@@ -712,7 +709,7 @@ export class PanelService {
     try {
       state = await evolution.connectionState(instanceName);
     } catch (error: any) {
-      if (error?.status === 404) exists = false;
+      if (error?.status === 404 || String(error?.message || '').includes('EVOLUTION_GO_INSTANCE_TOKEN_MISSING')) exists = false;
       else throw error;
     }
 
@@ -734,7 +731,6 @@ export class PanelService {
       qrCodeBase64 = evolution.extractQr(created);
     }
 
-    if (webhookUrl) await evolution.setWebhook(instanceName, webhookUrl).catch(() => undefined);
     if (!qrCodeBase64) qrCodeBase64 = evolution.extractQr(await evolution.connectInstance(instanceName));
 
     await db.query(
