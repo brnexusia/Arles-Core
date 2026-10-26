@@ -25,7 +25,6 @@ import type { OutgoingAction, VerticalModule, VerticalResult } from '../vertical
 import { mediaAiService } from '../media/media-ai.service.js';
 import { env } from '../config/env.js';
 import type { Company, NormalizedMessage } from './types.js';
-import { handleDeliveryGroupMessage } from '../verticals/delivery/group-operations.js';
 
 export class ArlesEngine {
   private outboundInstance(company: Company, message?: NormalizedMessage): string {
@@ -147,7 +146,8 @@ export class ArlesEngine {
       ? `${incomingGroup.User ?? incomingGroup.user}@${incomingGroup.Server ?? incomingGroup.server}`
       : String(incomingGroup);
     if (groupJid.endsWith('@g.us')) {
-      await handleDeliveryGroupMessage(payload);
+      const handler = getVerticalModule('delivery')?.handleGroup;
+      if (handler) await handler(payload);
       return;
     }
     const edited = normalizeEvolutionEditedMessage(payload);
