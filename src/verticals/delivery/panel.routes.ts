@@ -1,3 +1,4 @@
+import { db } from '../../infrastructure/db.js';
 import { createGroupPairCode, groupConfiguration } from './group-operations.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env.js';
@@ -292,6 +293,18 @@ export async function registerDeliveryPanelRoutes(app: FastifyInstance): Promise
     if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
     const code = await createGroupPairCode(companyIdFrom(request));
     return reply.send({ code, expires_in_seconds: 600 });
+  });
+
+  routes.post('/internal/panel/whatsapp/token', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: 'unauthorized' });
+    const token = String((request.body as any)?.token ?? '').trim();
+    if (token.length < 20 || token.length > 256) return reply.code(400).send({ error: 'token inválido' });
+    const companyId = companyIdFrom(request);
+    const result = await db.query(
+      `update whatsapp_connections set evolution_token=$2,updated_at=now()
+       where company_id=$1 returning company_id`, [companyId, token]
+    );
+    return reply.send({ ok: Boolean(result.rowCount) });
   });
 
 }
