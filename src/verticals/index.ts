@@ -1,10 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { deliveryModule } from './delivery/module.js';
-import { beautyModule } from './beauty/module.js';
-import { cashModule } from './cash/module.js';
 import { getVerticalModule, registerVertical } from './router.js';
 
-const builtInModules = [deliveryModule, beautyModule, cashModule];
+// Explicit Delivery-only runtime. No Beauty/Cash handlers or routes are registered.
+const builtInModules = [deliveryModule];
 
 export async function registerBuiltInVerticals(app?: FastifyInstance): Promise<void> {
   for (const module of builtInModules) {
